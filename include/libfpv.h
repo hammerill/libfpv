@@ -1401,6 +1401,10 @@ FPV_API void fpv_overlay_set_toggle_key(int key);
  * ui_scale the OS content scale in those coordinates (1.0 on a Retina Mac,
  * 1.5 at Windows 150%), not the framebuffer/window pixel ratio. */
 FPV_API void fpv_overlay_set_display(float width, float height, float ui_scale);
+/* Embedded: the overlay fills the whole display area with no title bar,
+ * border or close button, for a host that shows it inside its own panel
+ * (for example ReShade's add-on settings). Off by default: a movable window. */
+FPV_API void fpv_overlay_set_embedded(int embedded);
 FPV_API void fpv_overlay_mouse_move(float x, float y);
 FPV_API void fpv_overlay_mouse_button(int button, int down);   /* 0 left, 1 right, 2 middle */
 FPV_API void fpv_overlay_mouse_wheel(float dx, float dy);

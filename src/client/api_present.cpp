@@ -309,6 +309,10 @@ FPV_API void fpv_overlay_set_display(float w, float h, float scale) {
     std::lock_guard<std::recursive_mutex> lock(lib().mutex);
     overlay().setDisplay(w, h, scale);
 }
+FPV_API void fpv_overlay_set_embedded(int embedded) {
+    std::lock_guard<std::recursive_mutex> lock(lib().mutex);
+    overlay().setEmbedded(embedded != 0);
+}
 FPV_API void fpv_overlay_mouse_move(float x, float y) {
     std::lock_guard<std::recursive_mutex> lock(lib().mutex);
     overlay().mouseMove(x, y);
