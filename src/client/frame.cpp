@@ -492,12 +492,12 @@ extern "C" FPV_API fpv_result fpv_drone_tick(fpv_drone *d, float frameDt, fpv_fr
     heading.y = 0;
     if (length2(heading) < 1e-4f) heading = rotate(rot, {0, 1, 0}) * -1.0f, heading.y = 0;
     heading = normalize(heading, {0, 0, 1});
-    Vec3 desired = pos - heading * 1.3f + Vec3{0, 0.45f, 0};
+    Vec3 desired = pos - heading * L.settings.chaseDistance + Vec3{0, L.settings.chaseHeight, 0};
     if (!L.chaseValid) {
         L.chasePos = desired;
         L.chaseValid = true;
     }
-    float k = L.settings.chaseSmoothing ? 1.0f - std::exp(-frameDt * 6.0f) : 1.0f;
+    float k = L.settings.chaseSmoothing ? 1.0f - std::exp(-frameDt * std::max(0.5f, L.settings.chaseFollow)) : 1.0f;
     L.chasePos = lerp(L.chasePos, desired, k);
     Vec3 chase = L.chasePos;
     {
