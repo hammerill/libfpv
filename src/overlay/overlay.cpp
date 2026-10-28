@@ -485,6 +485,12 @@ void Overlay::wizardUi(const std::vector<RawDevice> &devs) {
 void Overlay::tabRadio() {
     Lib &L = lib();
     std::vector<RawDevice> devs = L.input.devicesSnapshot();
+#if defined(LIBFPV_KAMIKAZE)
+    // a finished (saved) bomb switch setup only waits for "Finish": it doesn't hold this tab
+    if (m_wizard.active() && m_wizard.bombSwitchesOnly() && m_wizard.step() == RadioWizard::Step::Done &&
+        m_wizardSaved)
+        m_wizard.cancel();
+#endif
     if (m_wizard.active()) {
 #if defined(LIBFPV_KAMIKAZE)
         if (m_wizard.bombSwitchesOnly()) {
@@ -671,6 +677,11 @@ void Overlay::tabKamikaze() {
     ImGui::TextWrapped("Bomb arm (AUX7) and explode (AUX8) on your radio. This only sets up these two switches; the "
                        "rest of the radio setup (Radio tab) stays as it is.");
     std::vector<RawDevice> devs = L.input.devicesSnapshot();
+    // a finished (saved) radio setup only waits for "Finish" (closing the
+    // overlay keeps it): it doesn't hold the bomb switch setup
+    if (m_wizard.active() && !m_wizard.bombSwitchesOnly() && m_wizard.step() == RadioWizard::Step::Done &&
+        m_wizardSaved)
+        m_wizard.cancel();
     if (m_wizard.active()) {
         if (m_wizard.bombSwitchesOnly()) {
             wizardUi(devs);
