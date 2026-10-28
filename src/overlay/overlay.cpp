@@ -208,10 +208,10 @@ void Overlay::setOpen(bool open) {
     if (open == m_open) return;
     m_open = open;
     if (open) m_bf.invalidate();
-    if (!open && m_wizard.active() && m_wizard.step() != RadioWizard::Step::Done) {
-        m_wizard.cancel();
-        lib().input.setWizardActive(false);
-    }
+    // A setup in progress survives a close (a game's panel may close the
+    // overlay for a moment): flight input is free while closed, held again
+    // when it opens.
+    if (m_wizard.active() && m_wizard.step() != RadioWizard::Step::Done) lib().input.setWizardActive(open);
 }
 
 void Overlay::setDisplay(float w, float h, float scale) {
