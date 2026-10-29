@@ -71,7 +71,7 @@ bool BfSettingsCache::run(const std::string &script, std::string *output) {
 
 bool BfSettingsCache::set(const std::string &name, const std::string &value, bool save) {
     std::string script = "set " + name + " = " + value + "\n";
-    if (save) script += "save\n";
+    if (save) script += "save noreboot\n";  // goes live without a reboot (bfb_cli_run)
     std::string out;
     if (!run(script, &out)) return false;
     m_values[name] = value;
