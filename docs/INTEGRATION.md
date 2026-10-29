@@ -323,6 +323,18 @@ engine quirks), not for how to use libfpv.
   in the module that is never unloaded. Otherwise libfpv calls into unmapped
   code after a reload. A libfpv build that adds exports needs a game
   restart.
+- **Use the shared data folder by default.** Pass the folder from
+  `fpv_shared_data_dir()` as `cfg.data_dir`, not a folder inside the game
+  or the mod. Then the pilot's radio mappings, Betaflight tune and
+  settings follow them from game to game, and reinstalling the game
+  doesn't wipe them. Fall back to the mod's own folder only when the call
+  fails (no home folder). If an earlier version of your mod used its own
+  folder, copy it into the shared one the first time, but only while the
+  shared folder doesn't exist yet: if it does, another game already set it
+  up and the pilot's setup there wins. Keep the mod's own files (test
+  triggers, screenshots) in the mod's folder. Ship the same libfpv version
+  as the other games, because each one upgrades the shared EEPROM to its
+  own Betaflight. reVC-mac-fpv's `src/fpvapi.cpp` shows the whole thing.
 - **Don't write to stdout.** Pass `cfg.log` and send libfpv's log to the
   mod's log file. One log file with both the mod's and libfpv's lines
   is the easiest to debug.

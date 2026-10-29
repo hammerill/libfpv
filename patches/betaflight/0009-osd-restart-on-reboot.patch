@@ -1,0 +1,32 @@
+diff --git a/src/main/osd/osd.c b/src/main/osd/osd.c
+--- a/src/main/osd/osd.c
++++ b/src/main/osd/osd.c
+@@ -522,10 +522,16 @@
+ 
+     osdIsReady = true;
+ }
++
++static void osdRestartStateMachine(void);
+ 
+ void osdInit(displayPort_t *osdDisplayPortToUse, osdDisplayPortDevice_e displayPortDeviceType)
+ {
+     osdDisplayPortDeviceType = displayPortDeviceType;
++    // An in-process reboot (SITL) keeps the statics, and with a monotonic
++    // clock nothing else restarts the OSD: without this, the elements and the
++    // background layer stayed those of the configuration before the reboot.
++    osdRestartStateMachine();
+ 
+     if (!osdDisplayPortToUse) {
+         return;
+@@ -1351,6 +1357,11 @@
+ 
+ osdState_e osdState = OSD_STATE_INIT;
+ 
++static void osdRestartStateMachine(void)
++{
++    osdState = OSD_STATE_INIT;
++}
++
+ #define OSD_UPDATE_INTERVAL_US (1000000 / osdConfig()->framerate_hz)
+ 
+ // Called periodically by the scheduler
