@@ -14,6 +14,10 @@
 
 *(yet another with [gtasa-fpv](https://github.com/hammerill/gtasa-fpv))*
 
+<p><a href="https://github.com/hammerill/reVC-mac-fpv"><img src="https://raw.githubusercontent.com/hammerill/reVC-mac-fpv/main/revc-mac-fpv.gif" alt="reVC FPV" width=512></a></p>
+
+*([reVC-mac-fpv](https://github.com/hammerill/reVC-mac-fpv))*
+
 A drop-in FPV quadcopter for any game. libfpv runs real Betaflight firmware
 (through [SimITL](https://github.com/AJ92/SimITL)) on its own 1 kHz
 simulation thread, reads the player's radio or gamepad, and gives the game
