@@ -602,6 +602,74 @@ Still open:
 * Validation against a logged flight. NeuroBEM's raw Betaflight logs with
   motion-capture positions are the reference to fit next.
 
+### D42. Windmilling props past zero thrust (patch `0027`)
+
+A pilot reported that the Freestyler lost control after 2 to 3 s above
+about 130 km/h. Lowering the throttle did not slow it, and it yawed and
+drifted until it slowed down. D25 clamped thrust at zero once the axial
+inflow passed the zero-thrust speed `v0`. A lower throttle lowers `v0`, so
+at speed every prop gave exactly zero thrust. Betaflight then had no
+pitch or roll authority, and the props did not brake the quad.
+
+A real prop past `v0` windmills: the blades see negative angles of attack,
+thrust goes negative, and the airflow drives the rotor. Isolated-propeller
+tests at negative thrust (Goyal, Sinnige et al., TU Delft, 2021 and 2024)
+show both effects. The patch models them as follows:
+
+* Past `v0`, thrust is `−CW·½ρv²A·(1 − (v0/v)²)`, with `A` the prop disc.
+  It is zero at `v0` and largest for a stopped prop. `CW` = 0.3 lies
+  between a stalled stopped 3-blade prop (solidity 0.15 × flat plate 1.2,
+  about 0.18) and a freely windmilling disc (4a(1 − a) ≈ 0.36 for an axial
+  induction a ≈ 0.1, momentum theory).
+* Prop torque keeps 25 % of its static value at `v0` and falls to zero at
+  1.2 `v0` (measured shaft power crosses zero a little past zero thrust).
+  Past that, the airflow drives the rotor against the ESC's braking.
+* The no-load rpm clamp in the motor step applies only when the prop loads
+  the motor. Before, a windmilling rotor stuck at the no-load rpm.
+* A prop with negative thrust adds no propwash noise.
+* Ducts are unchanged: their lip thrust is gone at half `v0`.
+
+The thrust stays monotonic in rpm, so differential rpm keeps its sign at
+any speed. Real props stall deep past `v0` and lose some of that authority.
+A measured CT(J) table past zero thrust would replace this model.
+
+`high_speed_throttle_cut` flies the Freestyler in ACRO with air mode and
+cuts the throttle twice. The first cut is level and nose down at about
+120 km/h. The second is in a power dive, at about 134 km/h after 4 s of
+full throttle. In each case it then flicks full roll and full yaw for
+0.25 s:
+
+| | Without the patch | With the patch |
+|---|---|---|
+| Level, speed 1 s after the cut | 120 → 82 km/h (1.09 g) | 120 → 65 km/h (1.54 g) |
+| Level, uncommanded rates | 44 °/s | 7 °/s |
+| Dive, speed 1 s after the cut | 134 → 110 km/h (0.69 g) | 134 → 83 km/h (1.43 g) |
+| Dive, uncommanded rates | 191 °/s | 22 °/s |
+| Roll and yaw flick (both cases) | 549–611 °/s | 568–609 °/s |
+
+Measured with Betaflight 2025.12 (this repository's submodule) and the
+SimITL series of libfpv 1.1.5 (patches up to `0026`). Without the patch,
+the test fails the two checks that the cut slows the quad, and in the dive
+also the check on uncommanded rates. The checks ask for 1.4 g level and
+1.2 g in the dive.
+
+The first version of this test, on libfpv 1.0, cut at 130 and 140 km/h
+and asked for 1.6 g level (it measured 1.93 g with the patch, 1.42 g
+without). On libfpv 1.1.5 the Freestyler tops out near 125 km/h level
+(`flight_realism`). With the 0.3 ms ESC latency of D43 it reaches
+144 km/h again, so the cap comes from the 2 ms ESC latency now that
+Betaflight's RPM filter runs (SimITL `0021`, D38, D43). The cut is at
+120 km/h, so the test passes with either latency. The prop drag that
+brakes the quad grows with the square of the speed: 1.93 g at 136 km/h is
+about 1.5 g at 120 km/h, so the level check is now 1.4 g.
+
+On libfpv 1.0's physics, in ACRO with air mode, the old model kept roll
+and yaw at 130 km/h: the inflow (about 37 m/s) was just under the
+zero-thrust speed at full rpm (about 41 m/s), so the motor that air mode
+speeds up still pushed. The loss of control showed in the dive and in
+ANGLE mode, where the old model wobbled at up to 146 °/s after the cut and
+then tumbled.
+
 ### D27. Battery draw and whoop punch (patch `0013`)
 
 A pilot flew the Air65 II hard for 2:30 and still read 3.8 V at hover; the

@@ -915,6 +915,123 @@ void testFlightRealism() {
     }
 }
 
+// Throttle cut at high speed on the 5 inch, in ACRO with air mode: level at
+// about 130 km/h, nose down, and in a power dive (thrust axis pointing down)
+// at about 140 km/h. The axial inflow through the props is then past their
+// zero-thrust speed: the props must windmill (negative thrust brakes the
+// quad) and differential rpm must still turn it, as on a real quad.
+void testHighSpeedThrottleCut() {
+    Host h(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1));
+    loadWorld(makeLevel(h, 300, 0));
+    {
+        // the CLI edits the active quad's EEPROM: make it the Freestyler's,
+        // from the defaults (an earlier test may have flown it with its tune)
+        Session s;
+        float p[3] = {0, 0, 0};
+        s.spawn(p);
+        s.run(0.05f);
+        s.destroy();
+    }
+    char *o = nullptr;
+    fpv_cli_exec("defaults\nset angle_limit = 80\nsave", &o);
+    fpv_free(o);
+    // a body axis as a host vector: v' = v + 2w (q x v) + 2 q x (q x v)
+    auto axis = [&](const fpv_frame &f, const float a[3], float out[3]) {
+        const float *q = f.rotation, w = f.rotation[3];
+        float t[3] = {2 * (q[1] * a[2] - q[2] * a[1]), 2 * (q[2] * a[0] - q[0] * a[2]), 2 * (q[0] * a[1] - q[1] * a[0])};
+        float c[3] = {q[1] * t[2] - q[2] * t[1], q[2] * t[0] - q[0] * t[2], q[0] * t[1] - q[1] * t[0]};
+        for (int i = 0; i < 3; i++) out[i] = a[i] + w * t[i] + c[i];
+    };
+    auto rate = [&](const fpv_frame &f, const float a[3]) {  // rad/s about a body axis
+        float b[3];
+        axis(f, a, b);
+        return h.dir(f.angular_velocity, b);
+    };
+    auto bodyRate = [&](const fpv_frame &f) {  // deg/s, largest axis
+        return std::max({std::fabs(rate(f, h.R)), std::fabs(rate(f, h.U)), std::fabs(rate(f, h.F))}) * 57.3f;
+    };
+    auto hspeed = [&](const fpv_frame &f) {
+        return std::sqrt(h.fwd(f.velocity) * h.fwd(f.velocity) + h.right(f.velocity) * h.right(f.velocity)) * 3.6f;
+    };
+    auto speed = [&](const fpv_frame &f) { return std::sqrt(hspeed(f) * hspeed(f) + h.up(f.velocity) * h.up(f.velocity) * 12.96f); };
+    auto bodyUpY = [&](const fpv_frame &f) {
+        float u[3];
+        axis(f, h.U, u);
+        return h.dir(u, h.U);
+    };
+
+    for (bool dive : {false, true}) {
+        const char *name = dive ? "power dive" : "level";
+        Session s;
+        float p[3];
+        h.pos(0, dive ? 400 : 120, -250, p);
+        s.spawn(p);
+        s.rc.ch[5] = 1;  // ANGLE
+        s.rc.ch[8] = 1;  // AIR MODE
+        s.arm();
+        // full forward and full throttle up to 115 km/h, then ACRO (centred
+        // sticks hold the attitude, so the nose stays down), held 2.5 s. The
+        // 5-inch tops out near 125 km/h level (libfpv 1.1.5's physics).
+        s.rc.ch[1] = 1.0f;
+        s.rc.ch[2] = 1.0f;
+        float tCut = -1;
+        for (float t = 0; t < 8.0f && (tCut < 0 || t - tCut < 2.5f); t += 0.01f) {
+            if (tCut < 0 && hspeed(s.f) > 115) {
+                tCut = t;
+                s.rc.ch[5] = -1;
+                s.rc.ch[1] = 0.0f;
+            }
+            if (tCut >= 0) s.rc.ch[2] = hspeed(s.f) > 120 ? 0.3f : 1.0f;
+            s.run(0.01f);
+        }
+        CHECK(tCut >= 0, "%s: reached 115 km/h (top %.0f)", name, hspeed(s.f));
+        if (dive) {
+            // pitch on over until the thrust axis points down, full throttle
+            // down to 140 km/h or for 4 s
+            s.rc.ch[2] = 1.0f;
+            s.rc.ch[1] = 0.5f;
+            for (float t = 0; t < 2.0f && bodyUpY(s.f) > -0.9f; t += 0.01f) s.run(0.01f);
+            s.rc.ch[1] = 0.0f;
+            for (float t = 0; t < 4.0f && speed(s.f) < 140; t += 0.01f) s.run(0.01f);
+        }
+        const float v0 = speed(s.f);
+        s.rc.ch[2] = -1.0f;
+        float drift = 0;  // uncommanded body rate
+        s.run(1.0f, [&](float t) {
+            if (t > 0.25f) drift = std::max(drift, bodyRate(s.f));  // past the blip of the chop itself
+        });
+        const float v1 = speed(s.f);
+        const float decel = (v0 - v1) / 3.6f / 9.81f;
+        // a full stick for 0.25 s, then centred for 0.3 s: mean rate in the
+        // commanded direction, and the largest body rate 0.1 s after that
+        auto flick = [&](int ch, const float *axisVec, float sign, float &mean, float &after) {
+            mean = 0;
+            s.rc.ch[ch] = 1.0f;
+            s.run(0.25f, [&](float) { mean += sign * rate(s.f, axisVec) * 57.3f / 25; });
+            s.rc.ch[ch] = 0.0f;
+            s.run(0.3f);
+            after = 0;
+            s.run(0.1f, [&](float) { after = std::max(after, bodyRate(s.f)); });
+        };
+        // positive about forward is a right roll, positive about up a left yaw
+        float roll, rollAfter, yaw, yawAfter;
+        flick(0, h.F, 1, roll, rollAfter);
+        flick(3, h.U, -1, yaw, yawAfter);
+        std::printf("    %s: throttle cut at %.0f km/h, %.0f km/h 1 s later (%.2f g), uncommanded rates up to %.0f deg/s | "
+                    "roll %.0f deg/s, then %.0f deg/s | yaw %.0f deg/s, then %.0f deg/s\n",
+                    name, v0, v1, decel, drift, roll, rollAfter, yaw, yawAfter);
+        CHECK(s.armed(), "%s: still armed", name);
+        CHECK(v0 > (dive ? 125 : 110), "%s: %.0f km/h at the cut", name, v0);
+        // without the windmilling props about 1.1 g level and 0.7 g in the dive (D42)
+        CHECK(decel > (dive ? 1.2f : 1.4f), "%s: the cut slows the quad, %.2f g", name, decel);
+        CHECK(drift < 60, "%s: no large uncommanded rates, %.0f deg/s", name, drift);
+        CHECK(roll > 200 && rollAfter < 60, "%s: roll follows the stick, %.0f deg/s, then %.0f deg/s", name, roll, rollAfter);
+        CHECK(yaw > 150 && yawAfter < 60, "%s: yaw follows the stick, %.0f deg/s, then %.0f deg/s", name, yaw, yawAfter);
+        s.destroy();
+    }
+    fpv_cli_exec("set angle_limit = 60\nsave", &o);
+    fpv_free(o);
+}
 
 // The Air65 II against blackbox logs of the real quad flown indoors (an
 // Air65 II on its own tune, docs/DECISIONS.md D38): rpm and motor command at
@@ -4187,6 +4304,7 @@ int main(int argc, char **argv) {
         {"keyboard_hover", testKeyboardHover},
         {"punch_out", testPunchOut},
         {"flight_realism", testFlightRealism},
+        {"high_speed_throttle_cut", testHighSpeedThrottleCut},
         {"idle_attitude", testIdleAttitude},
         {"battery_endurance", testBatteryEndurance},
         {"air65_blackbox", testAir65Blackbox},
