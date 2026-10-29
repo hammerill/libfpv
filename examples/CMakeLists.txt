@@ -42,3 +42,16 @@ if(TARGET SDL3::SDL3-static)
       ${CMAKE_CURRENT_SOURCE_DIR}/standalone/web/shell.html ${PROJECT_SOURCE_DIR}/src/web/libfpv_web.js)
   endif()
 endif()
+
+# Windows loads a DLL from the exe's folder first: copy the fresh libfpv.dll
+# beside the examples on every build, so a stale copy there never shadows it
+# (and a clean build folder runs at all).
+get_target_property(_fpv_type fpv TYPE)
+if(WIN32 AND _fpv_type STREQUAL "SHARED_LIBRARY")
+  foreach(_example fpv_minimal fpv_standalone)
+    if(TARGET ${_example})
+      add_custom_command(TARGET ${_example} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:fpv> $<TARGET_FILE_DIR:${_example}>)
+    endif()
+  endforeach()
+endif()
