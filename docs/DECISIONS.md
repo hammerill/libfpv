@@ -794,6 +794,36 @@ and the damage to props and motors. Both are on by default.
   It goes through the same switch, so the game never has to check it.
 
 Reversing: drop the two checks; nothing else depends on them.
+### D43. ESC latency of 0.3 ms (patch `0028`)
+
+SimITL modelled the ESC with a 2 ms delay and a 100 Hz low-pass on the
+motor voltage. At 35 Hz that is about 25 + 19 = 44 degrees of phase lag,
+on top of the motor's own spin-up lag. Real latency is much smaller: a
+DShot600 frame takes 27 us, and the ESC loop and one PWM period add a
+fraction of a millisecond. The winding's L/R of a 5-inch motor is about
+0.15 ms, a corner near 1 kHz. SimITL patch `0028-esc-latency.patch` sets
+0.3 ms and 1 kHz.
+
+The delay and the filter alone, run at SimITL's 8 kHz step with a sine on
+the motor command:
+
+| Frequency | Before: gain, lag | After: gain, lag |
+|---|---|---|
+| 10 Hz | 0.995, 12.7 deg | 1.000, 1.3 deg |
+| 35 Hz | 0.944, 43.7 deg | 0.999, 4.5 deg |
+| 100 Hz | 0.707, 114.8 deg | 0.995, 12.8 deg |
+
+With this repository's Betaflight 2025.12 and its default filters, the
+loop had enough margin, and the flight numbers change little: the
+freestyler-5 tops out at 143 instead of 140 km/h, and its full-throttle
+draw is 79 instead of 74 A (`flight_realism`, `battery_endurance`). The
+margin matters as soon as Betaflight's filters add lag. Bidirectional
+DShot, the RPM filter and 3 dynamic notches add that lag. With them and
+the old latency, the quads oscillated on roll at about 35 Hz at full
+throttle. The freestyler-5 then reached only 101 km/h and drew 95 A. With
+0.3 ms it flies 144 km/h at 77 A. A sweep showed that either part of the
+change alone also removes the oscillation: 0.5 ms with the 100 Hz filter,
+or 2 ms with a 500 Hz filter.
 
 ### D38. The Air65 II against its own blackbox logs
 
