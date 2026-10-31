@@ -140,6 +140,12 @@ private:
 
     // authoritative rigid body state
     Vec3 m_pos, m_vel, m_angVel;
+    // What m_pos could not take of the moves so far (compensated summation):
+    // far from the origin a float position only has 0.24 mm steps (2048 to
+    // 4096 m), finer than a step at 1 kHz below about 0.12 m/s, so slow moves
+    // were rounded away or up to whole steps.
+    Vec3 m_posCarry;
+    void movePos(Vec3 d);
     Quat m_rot;
     float m_propDamage[4] = {0, 0, 0, 0};
     double m_simTime = 0;

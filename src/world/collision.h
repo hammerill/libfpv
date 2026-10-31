@@ -62,6 +62,7 @@ struct Contact {
     Vec3 normal;         // from surface towards the query centre
     float depth = 0;     // penetration
     Vec3 surfaceVel;     // velocity of the surface at the point
+    Vec3 surfaceAngVel;  // angular velocity of the surface
     uint8_t material = 0;
     uint32_t objectId = 0;
 };

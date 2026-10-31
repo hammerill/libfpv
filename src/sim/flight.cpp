@@ -16,6 +16,12 @@ namespace fpv {
 namespace {
 constexpr float kImpactReportSpeed = 1.5f;   // m/s, below this a contact is not an "impact"
 constexpr float kRestingSpeed = 0.6f;        // m/s, no bounce below this
+// A contact is a patch, not a point: its friction also resists turning about
+// the normal (torsional friction), up to friction × load × this × the sphere's
+// radius. Without it a level quad resting on a flat surface spins freely: the
+// body sphere under the centre of mass takes the whole load, the landing
+// points none, and friction under the centre of mass makes no yaw torque.
+constexpr float kContactPatchRatio = 0.5f;
 constexpr float kPropDiscHalfThickness = 0.012f;
 constexpr float kPropNutHeight = 0.006f;     // motor top above the prop disc
 constexpr float kMaxSpeed = 120.0f;          // m/s, sanity clamp
@@ -185,8 +191,16 @@ void Flight::despawn() {
     teleport({0, 0, 0}, Quat{});
 }
 
+void Flight::movePos(Vec3 d) {
+    d += m_posCarry;
+    Vec3 next = m_pos + d;
+    m_posCarry = d - (next - m_pos);  // the differences of nearby floats are exact
+    m_pos = next;
+}
+
 void Flight::teleport(Vec3 pos, Quat rot) {
     m_pos = pos;
+    m_posCarry = {};
     m_rot = normalize(rot);
     m_vel = {};
     m_angVel = {};
@@ -309,6 +323,7 @@ void Flight::resolveContacts(float dt) {
     struct Item {
         Contact c;
         int motor;
+        float radius;
         float accN = 0;
         float approach = 0;
     };
@@ -318,7 +333,7 @@ void Flight::resolveContacts(float dt) {
         m_contacts.clear();
         Vec3 centre = m_pos + rot * s.local;
         m_world->sphereContacts(centre, s.radius, m_simTime, m_contacts);
-        for (const Contact &c : m_contacts) items.push_back({c, s.motor});
+        for (const Contact &c : m_contacts) items.push_back({c, s.motor, s.radius});
     }
     if (items.empty()) return;
 #if defined(LIBFPV_KAMIKAZE)
@@ -331,7 +346,7 @@ void Flight::resolveContacts(float dt) {
         float need = it.c.depth - dot(push, it.c.normal);
         if (need > 0) push += it.c.normal * need;
     }
-    m_pos += push;
+    movePos(push);
 
     Mat3 invI = worldInvInertia();
     float invM = 1.0f / m_mass;
@@ -372,6 +387,15 @@ void Flight::resolveContacts(float dt) {
                 float jt = std::min(vtLen / kT, mat.friction * it.accN);
                 m_vel -= t * (jt * invM);
                 m_angVel -= invI * cross(r, t * jt);
+            }
+
+            // torsional friction: the spin about the normal, relative to the surface
+            float spin = dot(m_angVel - c.surfaceAngVel, c.normal);
+            float kS = dot(c.normal, invI * c.normal);
+            if (std::fabs(spin) > 1e-6f && kS > 0) {
+                float limit = mat.friction * it.accN * kContactPatchRatio * it.radius;
+                float js = std::clamp(-spin / kS, -limit, limit);
+                m_angVel += invI * (c.normal * js);
             }
         }
     }
@@ -539,6 +563,7 @@ void Flight::step(float dt, const float channels[kChannelCount], bool radioLost)
         m_input.rcData[4] = -1.0f;
         m_input.rcData[2] = -1.0f;
         m_pos = {};
+        m_posCarry = {};
         m_rot = Quat{};
         m_vel = {};
         m_angVel = {};
@@ -607,7 +632,7 @@ void Flight::step(float dt, const float channels[kChannelCount], bool radioLost)
         float h = dt / (float)sub;
         resolveContacts(h);
         for (int k = 0; k < sub; k++) {
-            m_pos += m_vel * h;
+            movePos(m_vel * h);
             resolveContacts(h);
         }
         propStrikes(dt);

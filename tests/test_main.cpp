@@ -1521,11 +1521,241 @@ void testGps() {
     s.destroy();
 }
 
+// Resting on a floor the host reports through the raycast callback, as two
+// stacked planes (GTA SA: a carpet object 1 cm under the room's floor, each
+// hit by some of the rays): the quad must not turn by itself.
+struct LayeredFloor {
+    float heights[2];
+    int split;  // 0: one plane; 1: by ray direction
+};
+static int layeredFloorCast(void *user, const float o[3], const float d[3], float maxD, fpv_raycast_hit *hit) {
+    const LayeredFloor &f = *(const LayeredFloor *)user;
+    if (d[1] > -1e-4f) return 0;
+    int which = f.split ? (d[0] * d[2] > 0 ? 1 : 0) : 0;
+    float t = (f.heights[which] - o[1]) / d[1];
+    if (t < 0 || t > maxD) return 0;
+    hit->distance = t;
+    hit->normal[0] = 0;
+    hit->normal[1] = 1;
+    hit->normal[2] = 0;
+    hit->material = 0;
+    hit->object_id = (uint32_t)which;
+    return 1;
+}
+
+void testRestingYaw() {
+    Host h(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1));
+    World deep;  // the callback is the only floor
+    float a[3], b[3], c[3], d[3];
+    h.pos(-100, -50, -100, a);
+    h.pos(100, -50, -100, b);
+    h.pos(100, -50, 100, c);
+    h.pos(-100, -50, 100, d);
+    deep.quad(a, b, c, d);
+    loadWorld(deep);
+    auto yawOf = [](const fpv_frame &f) {
+        const float *q = f.rotation;  // x y z w; forward = rotate(q, +Z)
+        float fx = 2 * (q[0] * q[2] + q[3] * q[1]);
+        float fz = 1 - 2 * (q[0] * q[0] + q[1] * q[1]);
+        return std::atan2(fx, fz) * 57.2958f;
+    };
+    struct Case { const char *name; LayeredFloor floor; float yaw0; const char *preset; };
+    const Case cases[] = {
+        {"one plane", {{0, 0}, 0}, 0, "freestyler-5"},
+        {"carpet 1 cm under the floor", {{0, -0.01f}, 1}, 0, "freestyler-5"},
+        {"carpet, turned 30 deg", {{0, -0.01f}, 1}, 30, "freestyler-5"},
+        {"carpet, air65", {{0, -0.01f}, 1}, 20, "betafpv-air65-ii"},
+    };
+    for (const Case &k : cases) {
+        LayeredFloor fl = k.floor;
+        fpv_world_set_raycast_callback(layeredFloorCast, &fl);
+        Session s;
+        float p[3] = {0, 0.05f, 0};
+        s.spawn(p, k.preset);
+        float q[4] = {0, std::sin(k.yaw0 * 0.00872665f), 0, std::cos(k.yaw0 * 0.00872665f)};
+        fpv_drone_reset(s.drone, p, q);
+        s.rc.ch[4] = -1;
+        s.run(2.0f);
+        float y0 = yawOf(s.f);
+        s.run(20.0f);
+        float turned = yawOf(s.f) - y0;
+        std::printf("    %s: turned %.3f deg in 20 s (y %.4f)\n", k.name, turned, s.f.position[1]);
+        CHECK(std::fabs(turned) < 0.5f, "%s: still, turned %.2f deg", k.name, turned);
+        s.destroy();
+    }
+    fpv_world_set_raycast_callback(nullptr, nullptr);
+
+    // a turntable under a level quad: friction turns the quad with it. With
+    // the whole load on the body sphere under the centre of mass, the table
+    // turned under the quad and, the other way round, a quad spun up on a
+    // flat chair in GTA SA kept turning for many turns.
+    for (const char *preset : {"betafpv-air65-ii", "freestyler-5"}) {
+        loadWorld(deep);
+        World disc;
+        h.pos(-1, 0, -1, a);
+        h.pos(1, 0, -1, b);
+        h.pos(1, 0, 1, c);
+        h.pos(-1, 0, 1, d);
+        disc.quad(a, b, c, d);
+        fpv_mesh m = disc.mesh();
+        fpv_transform t{};
+        t.rotation[3] = 1;
+        uint32_t table = 0;
+        CHECK(fpv_surface_object_create(&m, &t, &table) == FPV_OK, "table: %s", fpv_last_error());
+        Session s;
+        float p[3] = {0, 0.05f, 0};
+        s.spawn(p, preset);
+        s.rc.ch[4] = -1;
+        s.run(1.0f);
+        float y0 = yawOf(s.f), angle = 0;
+        const float rate = 1.0f;  // rad/s about the host's up axis
+        s.run(3.0f, [&](float) {
+            angle += rate * 0.01f;
+            float up[3];
+            h.pos(0, 1, 0, up);
+            for (int i = 0; i < 3; i++) t.rotation[i] = up[i] * std::sin(angle * 0.5f);
+            t.rotation[3] = std::cos(angle * 0.5f);
+            fpv_surface_object_move(table, &t);
+        });
+        float turned = std::remainder(yawOf(s.f) - y0, 360.0f);
+        float tableDeg = std::remainder(angle * 57.2958f, 360.0f);
+        // then the table stops: the quad must stop with it, not coast
+        s.run(0.5f);
+        float y1 = yawOf(s.f);
+        s.run(2.0f);
+        float coast = std::remainder(yawOf(s.f) - y1, 360.0f);
+        std::printf("    %s on a turntable: turned %.1f deg with the table's %.1f, then %.2f deg after it stopped\n",
+                    preset, turned, tableDeg, coast);
+        CHECK(std::fabs(std::fabs(turned) - std::fabs(tableDeg)) < 25.0f, "%s turns with the table (%.1f of %.1f deg)",
+              preset, turned, tableDeg);
+        CHECK(std::fabs(coast) < 1.0f, "%s stops with the table (coasted %.1f deg)", preset, coast);
+        s.destroy();
+        fpv_surface_object_delete(table);
+    }
+}
+
+
+// Far from the origin (GTA SA's map: 2500 m) a float position only has
+// 0.24 mm steps, finer than one 1 ms step below about 0.12 m/s: a quad
+// carried slowly by a moving platform must move with it, not stick or jump
+// in whole steps.
+void testSlowFarFromOrigin() {
+    Host h(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1));
+    const float ox = 2495.0f, oz = -1697.0f;
+    World deep;
+    float a[3], b[3], c[3], d[3];
+    h.pos(-100, -50, -100, a);
+    h.pos(100, -50, -100, b);
+    h.pos(100, -50, 100, c);
+    h.pos(-100, -50, 100, d);
+    deep.quad(a, b, c, d);
+    loadWorld(deep);
+    World deck;
+    h.pos(-2, 0, -2, a);
+    h.pos(2, 0, -2, b);
+    h.pos(2, 0, 2, c);
+    h.pos(-2, 0, 2, d);
+    deck.quad(a, b, c, d);
+    fpv_mesh m = deck.mesh();
+    for (float speed : {0.03f, 0.08f, 0.2f}) {
+        fpv_transform t{};
+        t.rotation[3] = 1;
+        h.pos(ox, 0, oz, t.position);
+        uint32_t id = 0;
+        CHECK(fpv_surface_object_create(&m, &t, &id) == FPV_OK, "deck: %s", fpv_last_error());
+        Session s;
+        float p[3];
+        h.pos(ox, 0.05f, oz, p);
+        s.spawn(p, "freestyler-5");
+        s.rc.ch[4] = -1;
+        s.run(1.0f);
+        float x0 = h.right(s.f.position), z0 = h.fwd(s.f.position);
+        float moved = 0;
+        s.run(4.0f, [&](float) {
+            moved += speed * 0.01f;
+            h.pos(ox + moved, 0, oz + moved, t.position);
+            fpv_surface_object_move(id, &t);
+        });
+        float dx = h.right(s.f.position) - x0, dz = h.fwd(s.f.position) - z0;
+        std::printf("    deck at %.2f m/s: carried %.3f, %.3f m of %.3f m\n", speed, dx, dz, moved);
+        CHECK(std::fabs(dx - moved) < 0.1f * moved + 0.01f && std::fabs(dz - moved) < 0.1f * moved + 0.01f,
+              "carried with the deck at %.2f m/s (%.3f, %.3f of %.3f m)", speed, dx, dz, moved);
+        s.destroy();
+        fpv_surface_object_delete(id);
+    }
+}
+
+
+// The GPS elements after Betaflight reboots: switching quads and importing a
+// diff reboot it in-process, and the GPS satellites element went missing
+// until the next reboot from the overlay.
+void testGpsElementsAfterReboot() {
+    const int pos = 1 | (3 << 5) | (1 << 11);  // column 1, row 3, visible
+    auto sats = [](const fpv_frame &f) {
+        const uint8_t *row = &f.osd[3 * FPV_OSD_COLS];
+        return row[1] == 0x1E && row[2] == 0x1F;  // SYM_SAT_L, SYM_SAT_R
+    };
+    auto fly = [&](const char *preset, const char *what, bool setup) {
+        Session s;
+        float p[3] = {0, 0.1f, 0};
+        s.spawn(p, preset);
+        if (setup) {
+            char *o = nullptr;
+            // each quad has its own EEPROM: clear the cells testGps used there
+            std::string cmd;
+            for (const char *e : {"home_dist", "home_dir", "nheading", "altitude", "gps_speed", "flight_dist", "nvario"})
+                cmd += "set osd_" + std::string(e) + "_pos = 0\n";
+            cmd += "set osd_gps_sats_pos = " + std::to_string(pos) + "\nsave";
+            CHECK(fpv_cli_exec(cmd.c_str(), &o) == FPV_OK,
+                  "osd setup: %s", fpv_last_error());
+            fpv_free(o);
+        }
+        s.run(2.0f);
+        if (!sats(s.f)) {
+            std::printf("    row 3:");
+            for (int x = 0; x < 8; x++) std::printf(" %02x", s.f.osd[3 * FPV_OSD_COLS + x]);
+            std::printf("\n");
+        }
+        CHECK(sats(s.f), "GPS satellites shown: %s", what);
+        s.destroy();
+    };
+    {
+        // a disarm (the previous test may have left the quad armed) brings up
+        // the post-flight stats screen, which the next switch's reboot clears
+        Session s;
+        float p[3] = {0, 0.1f, 0};
+        s.spawn(p, "freestyler-5");
+        s.rc.ch[4] = -1;
+        s.run(0.5f);
+        s.destroy();
+    }
+    fly("betafpv-air65-ii", "air65 first", true);
+    fly("freestyler-5", "freestyler after air65", true);
+    fly("betafpv-air65-ii", "air65 after freestyler", false);
+    fly("freestyler-5", "freestyler again", false);
+    // a diff import that needs a reboot (a feature change)
+    Session s;
+    float p[3] = {0, 0.1f, 0};
+    s.spawn(p, "freestyler-5");
+    s.run(1.0f);
+    char *rep = nullptr;
+    CHECK(fpv_import_betaflight_diff("# diff all\nfeature -AIRMODE\nfeature AIRMODE\n"
+                                     "set osd_gps_sats_pos = 2145\nfeature -TELEMETRY\n", &rep) == FPV_OK,
+          "diff import: %s", fpv_last_error());
+    fpv_free(rep);
+    s.run(2.0f);
+    CHECK(sats(s.f), "GPS satellites shown after a diff import");
+    s.destroy();
+}
+
+
 void testOsdAudioOverlay() {
     Session s;
     float p[3] = {0, 0, 0};
     s.spawn(p);
-    s.run(0.5f);
+    // past the boot logo (4 s after a reboot) and the GPS coming alive, which
+    // adds the GPS elements: the counts below compare a settled OSD
+    s.run(5.0f);
     int chars = 0;
     for (uint8_t c : s.f.osd) chars += (c != 0 && c != ' ');
     CHECK(chars > 10, "Betaflight OSD has content (%d characters)", chars);
@@ -2176,7 +2406,10 @@ int main(int argc, char **argv) {
         {"wind_drift", testWindDrift},
         {"wind_shelter", testWindShelter},
         {"wind_sources", testWindSources},
+        {"resting_yaw", testRestingYaw},
+        {"slow_far_from_origin", testSlowFarFromOrigin},
         {"gps", testGps},
+        {"gps_elements_after_reboot", testGpsElementsAfterReboot},
         {"osd_audio_overlay", testOsdAudioOverlay},
         {"pinned", testPinned},
         {"terminate_reinit", testTerminateReinit},

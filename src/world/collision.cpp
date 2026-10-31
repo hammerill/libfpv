@@ -240,7 +240,7 @@ void CollisionWorld::setProxyPlanes(std::vector<Contact> planes) {
 size_t CollisionWorld::sphereContacts(Vec3 c, float r, double simTime, std::vector<Contact> &out) const {
     size_t before = out.size();
     auto addTri = [&](const Triangle &t, Vec3 centre, const auto &toWorldPoint, const auto &toWorldDir,
-                      const auto &velAt, uint32_t objectId) {
+                      const auto &velAt, Vec3 angVel, uint32_t objectId) {
         if (m_materials[t.material].flags & kMatNoCollision) return;
         Vec3 q = closestPointOnTriangle(centre, t.a, t.b, t.c);
         Vec3 d = centre - q;
@@ -260,6 +260,7 @@ size_t CollisionWorld::sphereContacts(Vec3 c, float r, double simTime, std::vect
         ct.material = t.material;
         ct.objectId = objectId;
         ct.surfaceVel = velAt(ct.point);
+        ct.surfaceAngVel = angVel;
         out.push_back(ct);
     };
     auto ident = [](Vec3 v) { return v; };
@@ -267,7 +268,7 @@ size_t CollisionWorld::sphereContacts(Vec3 c, float r, double simTime, std::vect
 
     Vec3 rr{r, r, r};
     if (m_static) {
-        m_static->queryAabb(c - rr, c + rr, [&](const Triangle &t) { addTri(t, c, ident, ident, zeroVel, 0); });
+        m_static->queryAabb(c - rr, c + rr, [&](const Triangle &t) { addTri(t, c, ident, ident, zeroVel, Vec3{}, 0); });
     }
     for (auto &kv : m_objects) {
         const Object &o = *kv.second;
@@ -279,7 +280,7 @@ size_t CollisionWorld::sphereContacts(Vec3 c, float r, double simTime, std::vect
         auto toWorldD = [&](Vec3 v) { return rotate(pose.rot, v); };
         bool moving = o.duration > 0 && simTime < o.t0 + o.duration;
         auto vel = [&](Vec3 p) { return moving ? o.linVel + cross(o.angVel, p - pose.pos) : Vec3{}; };
-        o.bvh.queryAabb(lc - rr, lc + rr, [&](const Triangle &t) { addTri(t, lc, toWorldP, toWorldD, vel, kv.first); });
+        o.bvh.queryAabb(lc - rr, lc + rr, [&](const Triangle &t) { addTri(t, lc, toWorldP, toWorldD, vel, moving ? o.angVel : Vec3{}, kv.first); });
     }
     for (const Contact &p : m_proxyPlanes) {
         // A proxy plane is a disc of 0.75 m around the host's hit point.

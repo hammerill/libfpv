@@ -1,0 +1,49 @@
+diff --git a/src/main/osd/osd.c b/src/main/osd/osd.c
+--- a/src/main/osd/osd.c
++++ b/src/main/osd/osd.c
+@@ -310,8 +310,20 @@
+ }
+ #endif
+ 
++#ifdef USE_GPS
++// The GPS state the list of active elements was built with. Set wherever the
++// list is built (an in-process reboot, a CLI save), not only on a change seen
++// by the refresh: a function-local copy survived the SITL reboot, and when
++// the GPS came back before the first refresh no change was seen, so the GPS
++// elements stayed out of the list.
++static bool osdActiveElementsGpsState;
++#endif
++
+ void osdAnalyzeActiveElements(void)
+ {
++#ifdef USE_GPS
++    osdActiveElementsGpsState = sensors(SENSOR_GPS);
++#endif
+     /* This code results in a total RX task RX_STATE_MODES state time of ~68us on an F411 overclocked to 108MHz
+      * This upsets the scheduler task duration estimation and will break SPI RX communication. This can
+      * occur in flight, e.g. when the OSD profile is changed by switch so can be ignored, or GPS sensor comms
+@@ -1360,6 +1372,10 @@
+ static void osdRestartStateMachine(void)
+ {
+     osdState = OSD_STATE_INIT;
++    // a real reboot drops the post-flight stats screen too; here it stayed
++    // up for its 60 s over the new configuration's elements
++    osdStatsEnabled = false;
++    osdStatsVisible = false;
+ }
+ 
+ #define OSD_UPDATE_INTERVAL_US (1000000 / osdConfig()->framerate_hz)
+@@ -1526,12 +1542,9 @@
+         }
+ 
+ #ifdef USE_GPS
+-        static bool lastGpsSensorState;
+         // Handle the case that the GPS_SENSOR may be delayed in activation
+         // or deactivate if communication is lost with the module.
+-        const bool currentGpsSensorState = sensors(SENSOR_GPS);
+-        if (lastGpsSensorState != currentGpsSensorState) {
+-            lastGpsSensorState = currentGpsSensorState;
++        if (osdActiveElementsGpsState != !!sensors(SENSOR_GPS)) {
+             osdAnalyzeActiveElements();
+         }
+ #endif // USE_GPS
