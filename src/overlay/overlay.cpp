@@ -362,6 +362,7 @@ void Overlay::tabFly() {
             ImGui::PopID();
         }
     }
+    windSection();
     sectionTitle("Input");
     InputStatus st = L.input.status();
     static const char *src[] = {"none", "radio", "gamepad (degraded)", "keyboard (degraded)", "game/script"};
@@ -372,6 +373,43 @@ void Overlay::tabFly() {
         if (ImGui::SmallButton("Set it up")) m_requestTab = &Overlay::tabRadio;
     }
     ImGui::TextDisabled("Overlay: %s", keyName(L.settings.overlayToggleKey));
+}
+
+// Wind on/off and strength, and what the drone feels now.
+void Overlay::windSection() {
+    Lib &L = lib();
+    sectionTitle("Wind");
+    bool changed = ImGui::Checkbox("Wind", &L.settings.windEnabled);
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!L.settings.windEnabled);
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10);
+    ImGui::SliderFloat("Weather wind strength", &L.settings.windStrength, 0, 2, "%.2fx");
+    changed |= ImGui::IsItemDeactivatedAfterEdit();
+    ImGui::EndDisabled();
+    if (changed) saveSettings();
+    if (!L.settings.windEnabled) {
+        ImGui::TextDisabled("Off: the air is still, whatever the game's weather.");
+        return;
+    }
+    if (!L.windSet && L.windSources.empty()) {
+        ImGui::TextDisabled("This game gives no wind.");
+        return;
+    }
+    if (!L.droneExists || !L.lastFrameValid) return;
+    // a wind is named by where it comes from
+    Vec3 w = L.conv.dirToInternal({L.lastFrame.wind[0], L.lastFrame.wind[1], L.lastFrame.wind[2]}) /
+             L.conv.unitsPerMeter();
+    float speed = length(Vec3{w.x, 0, w.z});
+    static const char *const kCompass[] = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
+    float from = std::atan2(-w.x, -w.z) * 180.0f / kPi;
+    int sector = ((int)std::lround(from / 45.0f) % 8 + 8) % 8;
+    ImGui::Text("At the drone: %.1f m/s from %s, %+.1f m/s vertical", speed, kCompass[sector], w.y);
+    float shelter = L.windProbe.shelter(), enclosed = L.windProbe.enclosure();
+    if (enclosed > 0.3f)
+        ImGui::TextDisabled("Indoors or under cover: little of the weather gets in.");
+    else if (shelter > 0.2f)
+        ImGui::TextDisabled("In the lee of obstacles: %.0f%% of the wind held off, gustier.",
+                            std::min(shelter, 1.0f) * 100);
 }
 
 // The setup wizard in progress (the full one in the Radio tab, the bomb

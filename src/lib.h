@@ -15,6 +15,7 @@
 #include "sim/flight.h"
 #include "sim/runner.h"
 #include "world/collision.h"
+#include "world/wind.h"
 
 struct fpv_drone {
     uint32_t magic;
@@ -38,6 +39,8 @@ struct Settings {
     KeyboardHover keyboardHover = KeyboardHover::Auto;  // automatic hover throttle, see InputManager
     float keyboardThrottleExpo = kDefaultKeyboardThrottleExpo;  // 1/s, see InputManager
     float keyboardYawExpo = kDefaultKeyboardYawExpo;            // 1/s, see InputManager
+    bool windEnabled = true;  // the game's wind, sources and blasts move the air
+    float windStrength = 1.0f;  // scales the weather's wind, 0..2
 #if defined(LIBFPV_KAMIKAZE)
     // fpv_kamikaze_config, internal units (seconds, m/s, kg, metres)
     float kamikazeArmingDelay = 0.0f, kamikazeMinImpactSpeed = 0.25f;
@@ -74,6 +77,13 @@ struct Lib {
 
     fpv_raycast_fn raycast = nullptr;
     void *raycastUser = nullptr;
+
+    // wind from the game (fpv_wind_*), internal units; probed and handed to
+    // the simulation in fpv_drone_tick
+    bool windSet = false;
+    WindAmbient windAmbient;
+    std::vector<WindSource> windSources;
+    WindProbe windProbe;
 
     // presentation state (host thread)
     Vec3 chasePos;

@@ -86,6 +86,53 @@ static void refreshRaycastProxies(const FlightSnapshot &s) {
     L.world.setProxyPlanes(std::move(planes));
 }
 
+// The game's wind made local around the drone (probes into the world) for
+// the next simulation steps.
+static void refreshWind(const FlightSnapshot &s, float frameDt) {
+    Lib &L = lib();
+    if (!L.settings.windEnabled || !s.active) {
+        L.windProbe.reset();
+        L.flight.setWind({});
+        return;
+    }
+    const CoordConverter &cv = L.conv;
+    // the drone's own collision world (static surfaces, objects) and the
+    // game's raycast, whichever is nearer
+    auto ray = [&](Vec3 o, Vec3 d, float maxDist, float &t, Vec3 &n) {
+        bool any = false;
+        {
+            std::lock_guard<std::mutex> lock(L.world.mutex());
+            uint8_t mat;
+            uint32_t obj;
+            float wt;
+            Vec3 wn;
+            if (L.world.raycast(o, d, maxDist, s.simTime, wt, wn, mat, obj)) {
+                any = true;
+                t = wt;
+                n = wn;
+                maxDist = wt;
+            }
+        }
+        if (L.raycast) {
+            float oh[3], dh[3];
+            put3(oh, cv.posToHost(o));
+            put3(dh, cv.dirToHost(d));
+            fpv_raycast_hit hit{};
+            if (L.raycast(L.raycastUser, oh, dh, cv.lenToHost(maxDist), &hit)) {
+                float ht = cv.lenToInternal(hit.distance);
+                if (ht >= 0 && ht <= maxDist) {
+                    any = true;
+                    t = ht;
+                    n = normalize(cv.dirToInternal({hit.normal[0], hit.normal[1], hit.normal[2]}), -d);
+                }
+            }
+        }
+        return any;
+    };
+    WindAmbient ambient = L.windSet ? L.windAmbient : WindAmbient{};
+    L.flight.setWind(L.windProbe.update(frameDt, s.pos, ambient, L.settings.windStrength, L.windSources, ray));
+}
+
 }  // namespace fpv
 
 using namespace fpv;
@@ -119,6 +166,7 @@ extern "C" FPV_API fpv_result fpv_drone_tick(fpv_drone *d, float frameDt, fpv_fr
     Vec3 vel = prev.active ? lerp(prev.vel, cur.vel, alpha) : cur.vel;
 
     refreshRaycastProxies(cur);
+    refreshWind(cur, frameDt);
 
     fpv_frame f;
     memset(&f, 0, sizeof(f));
@@ -272,6 +320,7 @@ extern "C" FPV_API fpv_result fpv_drone_tick(fpv_drone *d, float frameDt, fpv_fr
     f.osd_revision = L.kamikazeOsdRevision;
 #endif
     for (int i = 0; i < kChannelCount; i++) f.channels[i] = cur.channels[i];
+    put3(f.wind, cv.dirToHost(cur.wind) * cv.unitsPerMeter());
 
     updatePresentation(f);
     L.lastFrame = f;

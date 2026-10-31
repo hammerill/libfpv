@@ -481,6 +481,49 @@ void Flight::setHome(const Vec3 *home) {
     if (home) m_home = *home;
 }
 
+void Flight::setWind(WindState state) {
+    std::lock_guard<std::mutex> lock(m_windMutex);
+    m_windIn = std::move(state);
+    m_windChanged = true;
+}
+
+void Flight::addBlast(Vec3 pos, float radius) {
+    std::lock_guard<std::mutex> lock(m_windMutex);
+    m_blastsIn.push_back({pos, radius, 0});
+}
+
+// The air at the centre of mass and at each motor hub, for SimITL's
+// aerodynamics. Returns the one at the centre of mass.
+Vec3 Flight::updateWind(float dt) {
+    {
+        std::lock_guard<std::mutex> lock(m_windMutex);
+        if (m_windChanged) m_wind = m_windIn;
+        m_windChanged = false;
+        for (WindBlast &b : m_blastsIn) {
+            b.start = m_simTime;
+            if (m_active) m_blasts.push_back(b);  // none waits for a later drone
+        }
+        m_blastsIn.clear();
+    }
+    m_blasts.erase(std::remove_if(m_blasts.begin(), m_blasts.end(),
+                                  [&](const WindBlast &b) { return blastOver(b, m_simTime); }),
+                   m_blasts.end());
+    m_windClock.advance(m_wind, dt);
+    Vec3 com;
+    Vec3 hub[4];
+    if (m_active && (m_wind.on || !m_blasts.empty())) {
+        com = sampleWind(m_wind, m_windClock, m_blasts, m_pos, m_simTime);
+        Mat3 rot = toMat3(m_rot);
+        for (int i = 0; i < 4; i++) {
+            const Vec3F &lp = m_preset.init.quadMotorPos[i];
+            hub[i] = sampleWind(m_wind, m_windClock, m_blasts, m_pos + rot * Vec3{lp.x, lp.y, lp.z}, m_simTime);
+        }
+    }
+    m_input.windVelocity = {com.x, com.y, com.z};
+    for (int i = 0; i < 4; i++) m_input.rotorWind[i] = {hub[i].x, hub[i].y, hub[i].z};
+    return com;
+}
+
 void Flight::step(float dt, const float channels[kChannelCount], bool radioLost) {
     std::unique_lock<std::mutex> worldLock(m_world->mutex());
 
@@ -508,6 +551,7 @@ void Flight::step(float dt, const float channels[kChannelCount], bool radioLost)
 
     float ge[4] = {0, 0, 0, 0};
     if (m_active) updateGroundEffect(ge);
+    Vec3 wind = updateWind(dt);
     m_input.delta = dt;
     m_input.position = {m_pos.x, m_pos.y, m_pos.z};
     fillRotation(m_input, m_rot);
@@ -585,6 +629,7 @@ void Flight::step(float dt, const float channels[kChannelCount], bool radioLost)
     m_snap.rot = m_rot;
     m_snap.vel = m_vel;
     m_snap.angVel = m_angVel;
+    m_snap.wind = wind;
     bool anyBurned = false, anyBroken = false;
     for (int i = 0; i < 4; i++) {
         MotorSnapshot &m = m_snap.motors[i];

@@ -42,6 +42,10 @@ engine or mod loader.
   can set where home is with `fpv_gps_set_home`.
 - **Collisions.** The game provides static meshes, moving objects or a
   raycast callback, and libfpv reports impacts and prop damage.
+- **Wind.** The game gives its weather's wind, and the drone flies in it:
+  stronger higher up, gusty, calm in the lee of buildings and indoors,
+  with helicopter downwash and blast waves. Betaflight has to hold the quad
+  against it. Players can turn it off.
 - **Input.** Radios and gamepads are read through an embedded, hidden SDL3,
   with a radio setup wizard (arm, angle, beeper, turtle, air mode and OSD
   disable switches).

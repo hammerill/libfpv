@@ -15,6 +15,7 @@
 #include "input/input.h"
 #include "network/packets.h"
 #include "world/collision.h"
+#include "world/wind.h"
 #if defined(LIBFPV_KAMIKAZE)
 #include "sim/kamikaze.h"
 #endif
@@ -47,6 +48,7 @@ struct FlightSnapshot {
     bool modeAngle = false, modeHorizon = false, turtle = false, osdDisabled = false;
     uint32_t armingDisableFlags = 0;
     float altitude = -1;
+    Vec3 wind;  // the air's velocity at the drone
     float videoNoise = 0, videoBreakup = 0, videoSignal = 1;
     std::array<uint8_t, 16 * 30> osd{};
     uint32_t osdRevision = 0;
@@ -89,6 +91,11 @@ public:
     // where the drone arms. Any thread.
     void setHome(const Vec3 *home);
 
+    // Wind (any thread): the latest state from the host's probes, and a
+    // blast wave that starts at the next step.
+    void setWind(WindState state);
+    void addBlast(Vec3 pos, float radius);
+
 #if defined(LIBFPV_KAMIKAZE)
     Warhead &warhead() { return m_warhead; }
     // Host-requested detonation (simulation thread).
@@ -121,6 +128,7 @@ private:
     void propStrikes(float dt);
     void updateGroundEffect(float out[4]);
     void updateVideo();
+    Vec3 updateWind(float dt);
     void recordImpact(const Contact &c, float speed, float impulse, int motor);
     Mat3 worldInvInertia() const;
 
@@ -141,6 +149,13 @@ private:
     std::mutex m_homeMutex;
     bool m_hasHome = false;
     Vec3 m_home;
+    std::mutex m_windMutex;
+    WindState m_windIn;
+    bool m_windChanged = false;
+    std::vector<WindBlast> m_blastsIn;
+    WindState m_wind;  // simulation thread
+    WindClock m_windClock;
+    std::vector<WindBlast> m_blasts;
 
     StateInput m_input{};
     std::vector<Contact> m_contacts;

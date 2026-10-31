@@ -1209,6 +1209,174 @@ void testThreadedMode() {
     fpv_global_terminate();
 }
 
+// --- wind ------------------------------------------------------------------------
+
+void setWind(const Host &h, float right, float fwd, uint32_t flags = 0, float turbulence = -1) {
+    fpv_wind w;
+    fpv_wind_defaults(&w);
+    w.turbulence = turbulence;
+    for (int i = 0; i < 3; i++) w.velocity[i] = (h.R[i] * right + h.F[i] * fwd) * h.upm;
+    w.flags = flags;
+    CHECK(fpv_wind_set(&w) == FPV_OK, "wind_set: %s", fpv_last_error());
+}
+
+// Mean and peak of the air's speed at the drone over `seconds`, and its mean
+// along a host axis (up by default).
+void windAtDrone(Session &s, const Host &h, float seconds, float &mean, float &peak, float *meanAlong = nullptr,
+                 const float *axis = nullptr) {
+    double sum = 0, sumUp = 0;
+    int n = 0;
+    peak = 0;
+    s.run(seconds, [&](float) {
+        float l = std::sqrt(s.f.wind[0] * s.f.wind[0] + s.f.wind[1] * s.f.wind[1] + s.f.wind[2] * s.f.wind[2]) / h.upm;
+        sum += l;
+        sumUp += h.dir(s.f.wind, axis ? axis : h.U) / h.upm;
+        peak = std::max(peak, l);
+        n++;
+    });
+    mean = n ? (float)(sum / n) : 0;
+    if (meanAlong) *meanAlong = n ? (float)(sumUp / n) : 0;
+}
+
+// A hovering quad in angle mode with centred sticks drifts with the wind:
+// still air keeps it in place, 8 m/s carries it downwind, gusting.
+void testWindDrift() {
+    Host h(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1));
+    fpv_global_terminate();  // earlier tests may have left another convention
+    init(h.cs);
+    loadWorld(makeLevel(h, 300, 0));
+    float thr = findHoverThrottle(h);
+    Session s;
+    hoverFromRest(s, h, thr);
+    float x0 = h.right(s.f.position);
+    s.run(3.0f);
+    float still = std::fabs(h.right(s.f.position) - x0);
+    float wx = h.dir(s.f.wind, h.R) / h.upm;
+    CHECK(std::fabs(wx) < 1e-4f, "no wind by default, %.4f m/s", wx);
+
+    setWind(h, 8, 0);
+    float p[3];
+    h.pos(0, 50, 0, p);
+    float rot[4] = {0, 0, 0, 1};
+    fpv_drone_reset(s.drone, p, rot);
+    s.run(0.01f);
+    x0 = h.right(s.f.position);
+    double gust = 0, gust2 = 0;
+    int n = 0;
+    s.run(4.0f, [&](float) {
+        float v = h.dir(s.f.wind, h.R) / h.upm;
+        gust += v;
+        gust2 += v * v;
+        n++;
+    });
+    float mean = (float)(gust / n), sd = (float)std::sqrt(std::max(0.0, gust2 / n - (gust / n) * (gust / n)));
+    float drift = h.right(s.f.position) - x0;
+    std::printf("    still air drift %.2f m; 8 m/s at 10 m: %.1f m/s at 50 m (sd %.2f), drifted %.1f m in 4 s\n", still,
+                mean, sd, drift);
+    CHECK(still < 1.0f, "still air: no drift, %.2f m", still);
+    CHECK(mean > 8.5f && mean < 17.0f, "more wind at 50 m than at 10 m (about 11.7 m/s, gusting), %.1f m/s", mean);
+    CHECK(sd > 0.4f && sd < 4.0f, "gusts, sd %.2f m/s", sd);
+    CHECK(drift > 4.0f, "carried downwind, %.1f m", drift);
+    CHECK(s.armed(), "still flying");
+    fpv_wind_set(nullptr);
+    s.destroy();
+}
+
+// Behind a 60 m wall (upwind of the drone) the wind is mostly held off;
+// far from it, in the open, it is not. Without gusts, so the mean wind is
+// what is measured. Indoors (the host's flag) there is none. In Z-up
+// left-handed centimetres, for the conversions.
+void testWindShelter() {
+    Host h(fpv_coords_preset(FPV_COORDS_Z_UP_LEFT_HANDED, 100));
+    fpv_global_terminate();
+    init(h.cs);
+    loadWorld(makeLevel(h, 300, 40));  // the wall across forward = 40
+    setWind(h, 0, -8, 0, 0);           // blowing from beyond the wall towards the drone, no gusts
+    float p[3], open, lee, peak, openAlong, leeAlong, back[3];
+    for (int i = 0; i < 3; i++) back[i] = -h.F[i];  // the way the wind blows
+    Session s;
+    h.pos(0, 0, -150, p);
+    s.spawn(p);
+    s.run(1.0f);
+    windAtDrone(s, h, 1.0f, open, peak, &openAlong, back);
+    s.destroy();
+    h.pos(0, 0, 30, p);  // 10 m behind the wall
+    s.spawn(p);
+    s.run(1.0f);
+    windAtDrone(s, h, 1.0f, lee, peak, &leeAlong, back);
+    setWind(h, 0, -8, FPV_WIND_ENCLOSED, 0);
+    s.run(0.5f);
+    float inside;
+    windAtDrone(s, h, 1.0f, inside, peak);
+    std::printf("    on the ground: open %.2f m/s (%.2f mean along), 10 m behind the wall %.2f m/s (%.2f), "
+                "enclosed %.2f m/s\n",
+                open, openAlong, lee, leeAlong, inside);
+    CHECK(openAlong > 1.5f, "wind in the open, %.2f m/s", openAlong);
+    CHECK(std::fabs(leeAlong) < 0.2f * openAlong, "the wall holds the wind off, %.2f vs %.2f m/s", leeAlong, openAlong);
+    CHECK(inside < 0.05f, "no weather indoors, %.2f m/s", inside);
+    fpv_wind_set(nullptr);
+    s.destroy();
+}
+
+// A rotor hovering above the drone blows it down; a blast pushes it away
+// for a moment; neither lasts after the source is gone.
+void testWindSources() {
+    Host h(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1));
+    fpv_global_terminate();
+    init(h.cs);
+    loadWorld(makeLevel(h, 300, 0));
+    Session s;
+    float p[3];
+    h.pos(0, 0, 0, p);
+    s.spawn(p);
+    s.run(0.5f);
+    fpv_wind_source src{};
+    h.pos(0, 8, 0, src.position);
+    for (int i = 0; i < 3; i++) src.direction[i] = -h.U[i];
+    src.speed = 10 * h.upm;
+    src.radius = 5 * h.upm;
+    src.type = FPV_WIND_SOURCE_ROTOR;
+    CHECK(fpv_wind_set_sources(&src, 1) == FPV_OK, "set_sources: %s", fpv_last_error());
+    // on the ground under it: the wake lands here and turns outwards
+    float ground, peak, groundUp;
+    windAtDrone(s, h, 0.5f, ground, peak, &groundUp);
+    // in the column, 4 m below the disc
+    float rot[4] = {0, 0, 0, 1};
+    h.pos(0, 4, 0, p);
+    fpv_drone_reset(s.drone, p, rot);
+    float wash, up;
+    windAtDrone(s, h, 0.3f, wash, peak, &up);
+    // beside the rotor, on the ground: the wake spreads outwards
+    h.pos(9, 0, 0, p);
+    fpv_drone_reset(s.drone, p, rot);
+    float out, outPeak;
+    s.run(0.2f);
+    windAtDrone(s, h, 0.5f, out, outPeak);
+    float outward = h.dir(s.f.wind, h.R) / h.upm;
+    fpv_wind_set_sources(nullptr, 0);
+    s.run(0.05f);  // the simulation takes the change at its next step
+    float after;
+    windAtDrone(s, h, 0.3f, after, peak);
+    h.pos(15, 0, 0, p);
+    fpv_wind_add_blast(p, 3 * h.upm);  // 15 m from the drone (at right 0)
+    h.pos(0, 0, 0, p);
+    fpv_drone_reset(s.drone, p, rot);
+    float blast, blastPeak;
+    windAtDrone(s, h, 1.5f, blast, blastPeak);
+    float calm;
+    windAtDrone(s, h, 0.5f, calm, peak);
+    std::printf("    downwash 4 m under the rotor %.1f m/s (%.1f down), on the ground under it %.1f down, beside it "
+                "%.1f m/s (%.1f outwards); blast peak %.1f m/s, then %.2f\n",
+                wash, -up, -groundUp, out, outward, blastPeak, calm);
+    CHECK(-up > 6.0f, "downwash 4 m under a 10 m/s rotor (turning towards the ground), %.1f m/s down", -up);
+    CHECK(std::fabs(groundUp) < 0.5f * -up, "turns at the ground, %.1f m/s down", -groundUp);
+    CHECK(outward > 2.0f, "the wake spreads out along the ground, %.1f m/s", outward);
+    CHECK(after < 0.05f, "gone with the source, %.2f m/s", after);
+    CHECK(blastPeak > 3.0f && blastPeak < 40.0f, "a blast 15 m away gusts, %.1f m/s", blastPeak);
+    CHECK(calm < 0.05f, "and passes, %.2f m/s", calm);
+    s.destroy();
+}
+
 // GPS OSD elements, read off the OSD grid: home distance and arrow, heading,
 // speed, distance flown, altitude and vario, with Betaflight's home (where it armed)
 // and with the host's (fpv_gps_set_home). North is the host's forward axis.
@@ -2005,6 +2173,9 @@ int main(int argc, char **argv) {
         {"axes_y_up_left", [] { testAxes(FPV_COORDS_Y_UP_LEFT_HANDED, 1, "Y-up left-handed"); }},
         {"axes_z_up_left_cm", [] { testAxes(FPV_COORDS_Z_UP_LEFT_HANDED, 100, "Z-up left-handed (cm)"); }},
         {"axes_z_up_right_in", [] { testAxes(FPV_COORDS_Z_UP_RIGHT_HANDED, 39.37f, "Z-up right-handed (in)"); }},
+        {"wind_drift", testWindDrift},
+        {"wind_shelter", testWindShelter},
+        {"wind_sources", testWindSources},
         {"gps", testGps},
         {"osd_audio_overlay", testOsdAudioOverlay},
         {"pinned", testPinned},

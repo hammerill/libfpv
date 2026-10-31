@@ -49,6 +49,7 @@ set(LIBFPV_SOURCES
   src/util/log.cpp
   src/util/platform.cpp
   src/world/collision.cpp
+  src/world/wind.cpp
   src/osd/osd.cpp
   src/audio/synth.cpp
   ${LIBFPV_GEN_DIR}/embedded_presets.cpp

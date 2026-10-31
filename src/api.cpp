@@ -73,6 +73,8 @@ void loadSettings() {
         }
         s.keyboardThrottleExpo = std::clamp(j.value("keyboardThrottleExpo", s.keyboardThrottleExpo), 0.5f, 10.0f);
         s.keyboardYawExpo = std::clamp(j.value("keyboardYawExpo", s.keyboardYawExpo), 0.5f, 20.0f);
+        s.windEnabled = j.value("windEnabled", s.windEnabled);
+        s.windStrength = std::clamp(j.value("windStrength", s.windStrength), 0.0f, 2.0f);
 #if defined(LIBFPV_KAMIKAZE)
         s.kamikazeArmingDelay = std::clamp(j.value("kamikazeArmingDelay", s.kamikazeArmingDelay), 0.0f, 600.0f);
         s.kamikazeMinImpactSpeed = std::clamp(j.value("kamikazeMinImpactSpeed", s.kamikazeMinImpactSpeed), 0.1f, 30.0f);
@@ -112,7 +114,9 @@ void saveSettings() {
                                 : s.keyboardHover == KeyboardHover::Off ? "off"
                                                                         : "auto"},
               {"keyboardThrottleExpo", s.keyboardThrottleExpo},
-              {"keyboardYawExpo", s.keyboardYawExpo}};
+              {"keyboardYawExpo", s.keyboardYawExpo},
+              {"windEnabled", s.windEnabled},
+              {"windStrength", s.windStrength}};
 #if defined(LIBFPV_KAMIKAZE)
     j["kamikazeArmingDelay"] = s.kamikazeArmingDelay;
     j["kamikazeMinImpactSpeed"] = s.kamikazeMinImpactSpeed;
@@ -881,6 +885,7 @@ FPV_API fpv_result fpv_drone_create(const fpv_drone_desc *descIn, fpv_drone **ou
     L.droneExists = true;
     L.spawnPos = pos;
     L.spawnRot = rot;
+    L.windProbe.reset();  // the air around the last drone is not this one's
     L.drone.magic = 0xF9D0u;
     L.chaseValid = false;
     L.runner.heartbeat();
@@ -914,6 +919,7 @@ FPV_API fpv_result fpv_drone_reset(fpv_drone *d, const float position[3], const 
         L.flight.resetFlightTime();  // a reset starts a new flight
     });
     L.chaseValid = false;
+    L.windProbe.reset();
     return FPV_OK;
 }
 
@@ -940,6 +946,66 @@ FPV_API fpv_result fpv_gps_set_home(const float position[3]) {
     Vec3 home = L.conv.posToInternal({position[0], position[1], position[2]});
     if (!finite(home)) return setError(FPV_ERROR_INVALID_ARGUMENT, "home position is not finite");
     L.flight.setHome(&home);
+    return FPV_OK;
+}
+
+// --- wind ------------------------------------------------------------------------
+
+FPV_API void fpv_wind_defaults(fpv_wind *wind) {
+    if (!wind) return;
+    std::memset(wind, 0, sizeof(*wind));
+    wind->struct_size = sizeof(*wind);
+    wind->turbulence = -1.0f;
+}
+
+FPV_API fpv_result fpv_wind_set(const fpv_wind *wind) {
+    REQUIRE_INIT();
+    if (!wind) {
+        L.windSet = false;
+        L.windAmbient = WindAmbient{};
+        return FPV_OK;
+    }
+    if (wind->struct_size < sizeof(fpv_wind)) return setError(FPV_ERROR_ABI_MISMATCH, "set wind->struct_size = sizeof(fpv_wind)");
+    Vec3 v = L.conv.dirToInternal({wind->velocity[0], wind->velocity[1], wind->velocity[2]}) / L.conv.unitsPerMeter();
+    if (!finite(v) || !std::isfinite(wind->reference_height) || !std::isfinite(wind->turbulence))
+        return setError(FPV_ERROR_INVALID_ARGUMENT, "wind values are not finite");
+    WindAmbient a;
+    a.velocity = v;
+    a.refHeight = wind->reference_height > 0 ? L.conv.lenToInternal(wind->reference_height) : 10.0f;
+    a.turbulence = wind->turbulence < 0 ? -1.0f : std::min(wind->turbulence, 1.0f);
+    a.noShelter = (wind->flags & FPV_WIND_NO_SHELTER) != 0;
+    a.enclosed = (wind->flags & FPV_WIND_ENCLOSED) != 0;
+    L.windAmbient = a;
+    L.windSet = true;
+    return FPV_OK;
+}
+
+FPV_API fpv_result fpv_wind_set_sources(const fpv_wind_source *sources, uint32_t count) {
+    REQUIRE_INIT();
+    if (count && !sources) return setError(FPV_ERROR_INVALID_ARGUMENT, "sources is NULL");
+    L.windSources.clear();
+    for (uint32_t i = 0; i < count && L.windSources.size() < (size_t)kMaxWindSources; i++) {
+        const fpv_wind_source &h = sources[i];
+        WindSource w;
+        w.pos = L.conv.posToInternal({h.position[0], h.position[1], h.position[2]});
+        w.dir = normalize(L.conv.dirToInternal({h.direction[0], h.direction[1], h.direction[2]}), {0, -1, 0});
+        w.speed = L.conv.lenToInternal(h.speed);
+        w.radius = L.conv.lenToInternal(h.radius);
+        w.type = h.type == FPV_WIND_SOURCE_JET ? WindSource::Jet : WindSource::Rotor;
+        if (!finite(w.pos) || !finite(w.dir) || !(w.speed >= 0) || !(w.radius > 0) || !std::isfinite(w.speed))
+            continue;  // skipped, not fatal: one bad source must not stop the rest
+        L.windSources.push_back(w);
+    }
+    return FPV_OK;
+}
+
+FPV_API fpv_result fpv_wind_add_blast(const float position[3], float radius) {
+    REQUIRE_INIT();
+    if (!position) return setError(FPV_ERROR_INVALID_ARGUMENT, "position is NULL");
+    Vec3 p = L.conv.posToInternal({position[0], position[1], position[2]});
+    float r = L.conv.lenToInternal(radius);
+    if (!finite(p) || !(r > 0) || !std::isfinite(r)) return setError(FPV_ERROR_INVALID_ARGUMENT, "invalid blast");
+    if (L.settings.windEnabled) L.flight.addBlast(p, r);
     return FPV_OK;
 }
 

@@ -45,6 +45,7 @@ private:
     void rebuildFonts();
     void buildUi();
     void tabFly();
+    void windSection();
     void tabRadio();
     void tabDrone();
     void tabRates();

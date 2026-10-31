@@ -1,0 +1,97 @@
+diff --git a/src/network/packets.h b/src/network/packets.h
+--- a/src/network/packets.h
++++ b/src/network/packets.h
+@@ -156,6 +156,12 @@
+   // 1: motors spin backwards (Betaflight crash flip / turtle mode); the
+   // props push the other way and their reaction torque flips
+   uint8_t motorsReversed = 0;
++
++  // libfpv: wind, world frame, m/s: the velocity of the air (zero = still
++  // air) at the centre of mass and at each motor hub. Aerodynamics works on
++  // the airspeed (linearVelocity minus these), the motion on linearVelocity.
++  Vec3F windVelocity {};
++  Vec3F rotorWind[4] {};
+ };
+ 
+ //simulation output for game
+diff --git a/src/sim/physics.cpp b/src/sim/physics.cpp
+--- a/src/sim/physics.cpp
++++ b/src/sim/physics.cpp
+@@ -569,8 +569,6 @@
+ 
+     vec3 linVel;
+     copy(linVel, state.linearVelocity);
+-    // axial inflow through the props, positive when climbing along the thrust axis
+-    const auto vel = dot(linVel, up);
+ 
+     const auto ambientTemp = mSimState->stateInit.ambientTemp;
+     // prevent div by 0 
+@@ -579,10 +577,16 @@
+     const float maxPropWashSpeed = std::max(mSimState->stateInit.maxPropWashSpeed, 0.001f); 
+     const float propWashFactor   = mSimState->stateInit.propWashFactor;
+ 
+-    const float speed = std::abs(length(linVel)); // m/s
+-    float speedFactor = std::min(speed / maxPropWashSpeed, 1.0f);
+-
+     for (int i = 0; i < 4; i++) {
++      // libfpv: each prop works in the air around it, which moves with the
++      // wind there; the inflow, prop wash and cooling follow the airspeed
++      vec3 rotorWind;
++      copy(rotorWind, state.rotorWind[i]);
++      const vec3 airVel = linVel - rotorWind;
++      // axial inflow through the props, positive when climbing along the thrust axis
++      const auto vel = dot(airVel, up);
++      const float speed = length(airVel); // m/s
++      float speedFactor = std::min(speed / maxPropWashSpeed, 1.0f);
+ 
+       state.propDamage[i] = clamp(state.propDamage[i], 0.0f, 1.0f);
+ 
+@@ -595,7 +599,7 @@
+       // clamp speed so it has no propwash effect at 0 
+       // positive value depending on how much thrust is given against actual movement direction of quad
+       float reverseThrust = (speed > minPropWashSpeed) ? 
+-        std::max(0.0f, dot(normalize(linVel), normalize(motors[i].thrust * up) * -1.0f)) : 0.0f;
++        std::max(0.0f, dot(normalize(airVel), normalize(motors[i].thrust * up) * -1.0f)) : 0.0f;
+       // keep between 0.0 and 1.0, takes x % that point the most against movement direction
+       
+       reverseThrust = std::max(0.0f, (reverseThrust - propWashAngleOfAttack) / (1.0f - propWashAngleOfAttack));
+@@ -767,10 +771,14 @@
+     // drag:
+     vec3 linearVelocity;
+     copy(linearVelocity, state.linearVelocity);
++    // libfpv: drag works on the airspeed, the velocity relative to the wind
++    vec3 windVelocity;
++    copy(windVelocity, state.windVelocity);
++    const vec3 airVelocity = linearVelocity - windVelocity;
+ 
+-    float vel2 = length2(linearVelocity);
++    float vel2 = length2(airVelocity);
+     float vel = sqrt(vel2);
+-    auto dir = normalize(linearVelocity);
++    auto dir = normalize(airVelocity);
+ 
+     mat3 rotation;
+     copy(rotation, state.rotation);
+@@ -798,9 +806,11 @@
+       const float c = mSimState->stateInit.rotorDragFactor *
+                       std::sqrt(0.5f * AIR_RHO * discArea * std::max(mSimState->stateInit.propThrustFactor.z, 0.0f)) /
+                       maxOmega;
+-      vec3 localVel = xform_inv(rotation, linearVelocity);
+-      localVel[1] = 0.0f;  // in the prop plane only
+       for (auto i = 0u; i < 4; i++) {
++        vec3 rotorWind;
++        copy(rotorWind, state.rotorWind[i]);
++        vec3 localVel = xform_inv(rotation, linearVelocity - rotorWind);
++        localVel[1] = 0.0f;  // in the prop plane only
+         const float omega = std::abs(motors[i].rpm) * 2.0f * float(M_PI) / 60.0f;
+         rotorDrag[i] = xform(rotation, localVel * (-c * omega * (1.0f - state.propDamage[i])));
+         total_force = total_force + rotorDrag[i];
+@@ -829,7 +839,7 @@
+ 
+     // angular drag and tumbling
+     // 1. Get velocity in local frame
+-    vec3 local_vel = xform_inv(rotation, linearVelocity);
++    vec3 local_vel = xform_inv(rotation, linearVelocity - windVelocity);
+ 
+     // 2. Base Aerodynamic Tumbling (Munk Moment)
+     vec3 drag_profile;

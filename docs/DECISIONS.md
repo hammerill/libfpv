@@ -93,6 +93,10 @@ for v1.
   `int init()`. Native linkers ignore the difference. wasm-ld replaces a
   call through a mismatched signature with a trap, and every in-process
   reboot crashed (D28).
+* `0017-wind-relative-airspeed.patch`: `StateInput::windVelocity` and
+  `rotorWind[4]`, the air's velocity at the centre of mass and at each
+  motor hub. Every aerodynamic term works on the airspeed, the motion on
+  the ground velocity (D30).
 
 ## Simulation
 
@@ -411,6 +415,110 @@ comes after about 0.5 s instead of 0.7 s (34 km/h at 0.25 s instead of
 27), and hover throttle drops from 32 % to 29 %. `flight_realism` now lets
 the quad settle for 1 s after the teleport before it punches; the wobble
 from the teleport had been costing about 10 % of the thrust.
+
+### D30. Wind (patch `0017`, `src/world/wind.*`)
+
+Games have weather, and a quad in wind is a different thing to fly: it
+leans into the wind to hold position, drifts in angle mode, gets bumped
+by gusts, goes calm in the lee of a building and gets rough at its
+corners. Pushing the drone with a force would get none of that right.
+Real wind changes the *airspeed*, and everything aerodynamic follows from
+it: drag, rotor drag, the props' inflow and prop wash. Betaflight then
+has to fight the result through its own PID loop, as on a real quad.
+
+**The flight model (patch `0017`).** `StateInput` carries the air's
+velocity at the centre of mass and at each of the four motor hubs (world
+frame). SimITL subtracts it wherever it used the ground velocity for
+aerodynamics:
+
+* each prop's axial inflow (the thrust and torque falloff of D25), prop
+  wash and airspeed cooling use its own hub's air;
+* frame drag, the Munk and centre-of-pressure moments and the flutter
+  use the air at the centre of mass;
+* rotor drag uses each hub's air in its prop plane.
+
+Integration stays in the ground frame. Still air (all zero) is
+bit-for-bit the old model. The hubs get their own samples so that a gust
+that hits one side of the quad changes that side's thrust, and the
+torque is what the gyro feels.
+
+**What the host gives.** Only what a game knows: the weather's mean wind
+at 10 m (`fpv_wind_set`), moving-air sources it simulates
+(`fpv_wind_set_sources`: rotors and jets) and explosions
+(`fpv_wind_add_blast`). Everything local is libfpv's job, so every game
+gets it the same way.
+
+**Local wind (`WindProbe`, host thread, 10 Hz).** Rays through the same
+collision as the drone (static surfaces, objects and the host callback,
+whichever is nearer), about 50 per probe:
+
+* Height. The log profile `u(z) = u10·ln(z/z0)/ln(10/z0)` with
+  z0 = 0.3 m, clamped to 0.3–2.2×. z is the height over the *lowest*
+  ground within 25 m (five down rays): over a 50 m roof it is 50 m, not
+  the 2 m to the roof, so a rooftop gets the wind of its height. On the
+  ground in the open that is the 0.3× floor (2.4 m/s for an 8 m/s
+  weather wind); at Maze Bank height, about 1.9×. Within 3 m of a roof
+  that stands well above the ground it is halved at the surface (the air
+  that separated at the roof's edge has not come back down), so a quad
+  sitting on a skyscraper roof is not blown straight off it.
+* Shelter upwind. Five headings ±30° around upwind; at each, horizontal
+  rays at the drone's height and 3, 10, 25, 60 and 140 m above it. The
+  nearest wall at the drone's height is the obstacle; the highest rung
+  still hitting within 25 m of it gives its top. With x = distance /
+  obstacle height, the mean wind kept is `1 − cover·deficit(x)`:
+  deficit 0.85 from x = 1 (a little more, reversing the flow, right
+  behind the wall), falling as `exp(−(x−1)/5)`, so it is mostly back by
+  ten heights. `cover` (0..1) is how far below the top the drone is.
+  Turbulence rises by up to 0.8× in the wake, most at about one height
+  behind it (where the flow reattaches), less in the cavity. The
+  numbers are round values from wind tunnel and field studies of
+  building wakes (wake length about 10–15 H, recirculation about 1–2 H).
+* Windward walls. Three rays downwind, 15 m: a wall ahead slows the
+  wind (up to 60 %) and, if it is tall, turns part of it upwards.
+* Enclosure. A roof within 60 m and walls within 30 m in at least half of
+  eight directions scale the weather down to 5 % (halls, tunnels, car
+  parks). Hosts that know about interiors pass `FPV_WIND_ENCLOSED`.
+* All of it is low-passed with a 0.6 s time constant, and re-probed at
+  once when the wind turns more than 15°. A new or reset drone starts
+  without the old drone's memory.
+
+**Gusts (sim thread).** Perlin noise in five octaves at fixed sizes, 60 m
+down to 1.2 m, weighted like the von Kármán spectrum around the length
+scale (0.6 × height + 5 m, up to 80 m). The size of each octave is
+fixed and only its weight follows the length scale, so a changing
+length scale never jumps the field. The field is carried along by the
+wind (frozen turbulence) through a drift integrated every step, again so
+that a changing mean wind never jumps it. It is carried by the *free*
+wind, not by the calm air of a wake, otherwise gusts behind a building
+would stand still. Each eddy also changes shape over its own turnover
+time. The intensity is `1/ln(z/z0)` (0.1–0.35) unless the host gives
+one. Across the wind the gusts are 0.8× as strong, vertically 0.55×.
+
+**Sources and blasts.** A rotor wake follows momentum theory: it
+contracts to 0.71 R and twice the induced speed one radius below the
+disc, then spreads like a turbulent column. Where it lands (a ray from
+0.6 R below the hub, past the aircraft's own body) it turns into a wall
+jet along the ground. A jet spreads at about 6° and slows past a
+potential core of six radii. Both carry gusts of about a quarter of
+their speed. A blast is a front running out at 100 m/s (slower than a
+real shock, so the push lasts long enough to feel), 40 m/s at the
+explosion's radius and weakening as (R/r)^1.5, gone within about a
+second.
+
+**Cost.** About 50 host rays per probe at 10 Hz, plus one per rotor
+source every frame. In the simulation, five wind samples per step (about
+75 noise evaluations): microseconds. The player can turn wind off or
+scale the weather's part (F8 > Fly > Wind), saved in `settings.json`. It
+is on by default; with wind off, sources and blasts do nothing either.
+
+**Not modelled.** Flow around individual corners (speed-up, corner
+vortices), channelling along streets, thermals, and the drone's own prop
+wash reflecting off walls. A real CFD solve around the drone (a local
+lattice-Boltzmann grid on a heightfield from column rays) would give
+corners and streets; the probes were chosen for being cheap and stable,
+and they give most of the feel. To reverse: zero the wind inputs
+(`fpv_wind_set(NULL)`, or the player's switch); the flight model is then
+the D25 one exactly.
 
 ## Presentation
 

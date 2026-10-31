@@ -7,6 +7,8 @@
 //      fpv_surface_object_create/move        the moving platform
 //   3. fpv_drone_create                      spawn
 //      fpv_gps_set_home                      the launch pad is GPS home
+//      fpv_wind_set                          a breeze from the west (not in the
+//                                            scripted flights)
 //   4. every frame: fpv_drone_tick           pose + camera + OSD + impacts
 //      place the game camera at frame.camera (or chase/LOS)
 //      draw the drone at frame.position/rotation, props by frame.motors[].rpm
@@ -793,6 +795,18 @@ int main(int argc, char **argv) {
     // the home arrow and distance point at the launch pad, wherever the drone
     // is armed (without this, home is where it last armed)
     fpv_gps_set_home(dd.position);
+    // a 4 m/s breeze from the west (towards +X, east): the buildings shelter
+    // the air behind them. The scripted flights keep still air.
+    bool scripted = autopilot;
+#if defined(LIBFPV_KAMIKAZE)
+    scripted |= kamikazeDemo;
+#endif
+    if (!scripted) {
+        fpv_wind wind;
+        fpv_wind_defaults(&wind);
+        wind.velocity[0] = 4.0f;
+        fpv_wind_set(&wind);
+    }
 #if defined(LIBFPV_KAMIKAZE)
     // the next drone: a new, safe warhead at the spawn; ends any ending
     auto respawn = [&] {

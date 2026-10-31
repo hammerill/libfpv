@@ -488,6 +488,10 @@ typedef struct fpv_frame {
      * AUX6 OSD disable; kamikaze builds add AUX7 bomb arm and AUX8
      * explode. */
     float channels[FPV_CHANNEL_COUNT];
+
+    /* The air's velocity at the drone (wind, gusts, rotor downwash, blasts),
+     * host units / s; zero in still air or with wind off. */
+    float wind[3];
 } fpv_frame;
 
 /* Advances presentation by frame_dt seconds of host time and fills `frame`.
@@ -513,6 +517,80 @@ FPV_API fpv_result fpv_drone_tick(fpv_drone *drone, float frame_dt, fpv_frame *f
  * Betaflight: like a real quad, home is then where the drone last armed
  * (the default). Cheap; call it every frame if home moves. */
 FPV_API fpv_result fpv_gps_set_home(const float position[3]);
+
+/* ===========================================================================
+ * Wind
+ *
+ * The air moves and the drone flies in it: its drag, rotor drag, prop
+ * inflow and prop wash work on the airspeed, so Betaflight has to hold the
+ * quad against the wind and its gusts like on a real one. The game gives
+ * the weather's wind; libfpv adds what changes it around the drone: more
+ * wind higher up, gusts, the lee of buildings and walls (found with the
+ * same collision as the drone: static surfaces, objects and the raycast
+ * callback), updrafts in front of walls, and calm air indoors. The player
+ * turns it off or scales it in the overlay (F8 > Fly > Wind); it is on by
+ * default. See docs/INTEGRATION.md#wind.
+ * ======================================================================== */
+
+enum fpv_wind_flags {
+    /* Skip libfpv's obstacle probes (the wind is the same everywhere). */
+    FPV_WIND_NO_SHELTER = 1u << 0,
+    /* The drone is somewhere no weather reaches (an interior): only the
+     * sources and blasts below move the air. */
+    FPV_WIND_ENCLOSED = 1u << 1
+};
+
+typedef struct fpv_wind {
+    uint32_t struct_size;
+    /* The weather's mean wind, host units / s: the way the air moves (a
+     * north wind points south), in the open at reference_height above the
+     * ground. Give it horizontal; libfpv adds the vertical air motion. */
+    float velocity[3];
+    /* Host units above the ground; 0 = 10 m, the weather stations' height. */
+    float reference_height;
+    /* Gust strength as the standard deviation over the mean, 0..1 (about
+     * 0.15 open country, 0.3 a city street); < 0 = automatic from the
+     * height above the ground (the default). */
+    float turbulence;
+    uint32_t flags; /* fpv_wind_flags */
+} fpv_wind;
+
+FPV_API void fpv_wind_defaults(fpv_wind *wind);
+/* Sets the weather's wind. Cheap: call it every frame as the weather
+ * changes. NULL = still air (the default). */
+FPV_API fpv_result fpv_wind_set(const fpv_wind *wind);
+
+enum fpv_wind_source_type {
+    /* A rotor (helicopter): `speed` is the induced velocity at the disc,
+     * sqrt(thrust / (2 * 1.2 kg/m3 * disc area)) in host units / s, and
+     * `radius` the rotor's radius. The wake contracts to twice that speed
+     * below the disc and spreads out along the ground where it lands. */
+    FPV_WIND_SOURCE_ROTOR = 0,
+    /* A jet or fan (jet exhaust, VTOL nozzle, big fan): `speed` at the
+     * outlet, `radius` the outlet's; it spreads like a turbulent jet. */
+    FPV_WIND_SOURCE_JET = 1
+};
+
+typedef struct fpv_wind_source {
+    float position[3];  /* host coords: rotor hub or outlet */
+    float direction[3]; /* where the air is blown (a hovering rotor: down) */
+    float speed;        /* host units / s, see fpv_wind_source_type */
+    float radius;       /* host units */
+    uint32_t type;      /* fpv_wind_source_type */
+} fpv_wind_source;
+
+#define FPV_MAX_WIND_SOURCES 32
+/* Replaces the air movers near the drone (at most FPV_MAX_WIND_SOURCES,
+ * the rest are ignored). Call it every frame they move or change; count 0
+ * clears them. They blow whatever the weather and the shelter, but not
+ * with wind turned off by the player. */
+FPV_API fpv_result fpv_wind_set_sources(const fpv_wind_source *sources, uint32_t count);
+
+/* An explosion's blast wave: a gust that runs outwards from `position` and
+ * is gone within about a second. `radius` is the explosion's size in host
+ * units: the gust is about 40 m/s at that distance and weakens with the
+ * distance (to a fifth at three times it). Once per explosion. */
+FPV_API fpv_result fpv_wind_add_blast(const float position[3], float radius);
 
 #if defined(LIBFPV_KAMIKAZE)
 /* ===========================================================================

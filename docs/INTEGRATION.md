@@ -140,6 +140,143 @@ Keep showing:
 If the game cannot hide some element (it is baked into the engine), list it
 in the mod's README, so players know why it stays.
 
+## Wind
+
+The drone flies in moving air. Its drag, rotor drag, prop inflow and prop
+wash all work on the airspeed. In wind the quad leans to hold its place,
+drifts in angle mode and gets bumped by gusts, and Betaflight's PID loop
+has to deal with it like on a real quad. The game says what its weather
+is doing. libfpv works out what that means where the drone is: more wind
+higher up, gusts, calm air in the lee of buildings with rougher air
+behind them, updrafts in front of walls, and almost nothing indoors. All
+of that comes from rays into the same world the drone collides with
+(static surfaces, surface objects and the raycast callback), so a game
+that has collision gets shelter too.
+
+The player turns wind off, or scales the weather's part, in F8 > Fly >
+Wind. It is on by default. With it off, sources and blasts do nothing
+either, and the drone flies exactly as in still air.
+
+There are three calls, all optional. A game that makes none of them has
+still air.
+
+### The weather: `fpv_wind_set`
+
+```c
+fpv_wind w;
+fpv_wind_defaults(&w);           /* still air, automatic gusts, 10 m reference */
+w.velocity[0] = east_mps * upm;  /* host coords, host units per second: */
+w.velocity[1] = north_mps * upm; /* the way the air MOVES (a north wind points south) */
+w.flags = indoors ? FPV_WIND_ENCLOSED : 0;
+fpv_wind_set(&w);                /* every frame is fine; NULL = still air */
+```
+
+- **Give the mean wind, not the gusts.** `velocity` is the steady wind in
+  the open, 10 m above flat ground (`reference_height` changes that), as
+  a weather station would report it. libfpv makes the gusts, the height
+  profile and the shelter. If the game's wind value already wobbles,
+  low-pass it over a few seconds first. Otherwise its gusts pile on top
+  of libfpv's, and a game's scripted gusts tend to be periodic and the
+  same everywhere.
+- **Horizontal only.** libfpv adds the vertical air motion (gusts,
+  updrafts along walls). A vertical part you give is added as it is.
+- **Map the game's numbers to m/s.** Games often have a 0..1
+  "windiness". For reference: 2–3 m/s is a light breeze, 5–8 m/s a
+  breezy cloudy day, 10–12 m/s a storm. A 5" quad can still fly in about
+  15 m/s; a 65 mm whoop is blown away by 5.
+- **Interiors.** If the game knows the drone is indoors (a separate
+  interior world, a room, a cave), set `FPV_WIND_ENCLOSED`: the weather
+  stops, and only sources and blasts move the air. libfpv also detects
+  enclosed spaces by itself (a roof overhead and walls nearly all round).
+  But a game whose interiors float somewhere above the map would
+  otherwise get the wind of that height through every open door.
+- `turbulence`: leave it at -1 (automatic: about 0.35 near the ground,
+  down to 0.15 high up), or give the gusts' standard deviation over the
+  mean, 0..1. 0 is a perfectly steady wind (useful in tests).
+- `FPV_WIND_NO_SHELTER` turns the probes off: the same wind everywhere,
+  for games without collision, or to measure the probes' cost.
+
+### Things that blow: `fpv_wind_set_sources`
+
+These are the rotors and jets the game simulates: helicopter downwash, a
+VTOL's nozzles, a jet's exhaust, a big fan. Pass the ones near the drone
+every frame they move or change (at most `FPV_MAX_WIND_SOURCES`, 32).
+`count` 0 clears them.
+
+```c
+fpv_wind_source s = {0};
+/* position: the rotor hub (host coords); direction: where the air is blown */
+s.radius = rotor_radius;                                /* host units */
+s.speed = sqrtf(thrust_n / (2 * 1.2f * 3.14159f * r_m * r_m)) * upm;
+s.type = FPV_WIND_SOURCE_ROTOR;
+fpv_wind_set_sources(&s, 1);
+```
+
+- **Rotor.** `speed` is the induced velocity at the disc. With the
+  thrust T in newtons (for a hovering helicopter, its weight: mass ×
+  9.81) and the rotor radius r in metres, `v = sqrt(T / (2 · 1.2 · π ·
+  r²))`. A 2.5 t helicopter with a 5 m rotor gives about 11 m/s, so about
+  23 m/s in its wake. libfpv finds where the wake lands and spreads it
+  out along the ground there. The ray it casts for that starts 0.6 radii
+  below the hub, which skips the aircraft's own body under the rotor.
+- **Jet.** `speed` at the outlet, `radius` the outlet's.
+- Scale `speed` with the rotor or engine speed: thrust ∝ rpm², so the
+  induced velocity ∝ rpm. A parked helicopter with its rotor stopped is
+  no source.
+- Sources blow whatever the weather, the shelter or `FPV_WIND_ENCLOSED`.
+  Each costs one ray per frame.
+
+### Explosions: `fpv_wind_add_blast`
+
+```c
+fpv_wind_add_blast(explosion_pos, explosion_radius);  /* once, when it goes off */
+```
+
+A gust runs outwards from the point at 100 m/s and has passed within
+about a second. It is about 40 m/s at `radius` from the centre, a fifth
+of that at three radii, and nothing past twelve. The drone gets shoved
+and has to recover. Use the game's own explosion radius, or about 2–5 m
+for a grenade and 8–10 m for a car or a fuel tank.
+
+### What it costs
+
+When there is a weather wind and shelter is on: about 50 rays through the
+raycast callback every 0.1 s, plus one per rotor source per frame. All of
+them are cast on the host thread inside `fpv_drone_tick`. They are longer
+than the collision probes (up to 80 m upwind and 400 m down). In the
+simulation it costs a few microseconds per step. If the game's line test
+is slow, give the callback a cheaper path for long rays, or set
+`FPV_WIND_NO_SHELTER`.
+
+### Seeing it
+
+`frame.wind` is the air's velocity at the drone (host units / s) after
+everything: weather, height, shelter, gusts, sources and blasts. Use it
+for the game's own effects if you like (a wind sound in the goggles,
+dust). F8 > Fly > Wind shows the speed, where the wind comes from and how
+sheltered the drone is. DECISIONS D30 describes the model.
+
+### Case study: GTA San Andreas
+
+- The game has one wind for the whole map. `CWeather::Wind` (0xC812F0)
+  is set by the weather type: 0 to 0.25 when sunny, 0.7 cloudy, 1.0 in
+  the rain storms, 1.5 in the sandstorm. `CWeather::WindDir` (0xC813E0)
+  always blows towards the north-east, with its own scripted 1–2 s
+  wobble and gusts on top. The mod low-passes `WindDir` over 4 s for the
+  direction and maps `Wind` 1.0 to 11 m/s.
+- The game does apply its wind to its own aircraft
+  (`CVehicle::FlyingControl` works on the airspeed), but without height
+  or shelter. The stronger wind you hear on a rooftop is the wind sound
+  scaling with the camera's height, not physics.
+- Interiors are separate areas placed high above the map
+  (`CGame::currArea != 0`), so the mod sets `FPV_WIND_ENCLOSED` there.
+- Helicopters (`m_nVehicleSubType` 3) from the vehicle pool become rotor
+  sources: the rotor speed at +0x84C (the game counts 0.15 or more as
+  full power), the mass at +0x8C and the rotor radius from the model's
+  collision box.
+- New entries in `CExplosion::aExplosions` (0xC88950, 16 entries of 0x7C
+  bytes) become blasts.
+
 ## Kamikaze builds
 
 > **Dev-gatekept.** The kamikaze feature is only documented here and in
