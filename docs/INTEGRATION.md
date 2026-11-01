@@ -267,8 +267,10 @@ sheltered the drone is. DECISIONS D30 describes the model.
 - The extra sunny weathers have `Wind` 0: dead calm everywhere, even 300 m
   up, while the game's wind sound still blows there (it gets louder with
   the camera's height). Players noticed. The mod never gives less than
-  2 m/s; real air is never that still, least of all high up. Do the same
-  in any game whose weather can be perfectly calm.
+  0.5 m/s; real air is never that still, least of all high up. A floor of
+  2 m/s felt too windy on calm days: libfpv's height profile and gusts
+  already add to it up high. Do the same in any game whose weather can be
+  perfectly calm, and keep the floor low.
 - The game does apply its wind to its own aircraft
   (`CVehicle::FlyingControl` works on the airspeed), but without height
   or shelter. The stronger wind you hear on a rooftop is the wind sound
