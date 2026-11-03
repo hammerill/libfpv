@@ -57,7 +57,10 @@ void loadSettings() {
         Settings &s = L.settings;
         s.preset = j.value("preset", s.preset);
         s.overlayToggleKey = j.value("overlayToggleKey", s.overlayToggleKey);
-        s.audioVolume = j.value("audioVolume", s.audioVolume);
+        s.audioVolume = std::clamp(j.value("audioVolume", s.audioVolume), 0.0f, 2.0f);
+        s.beepVolume = std::clamp(j.value("beepVolume", s.beepVolume), 0.0f, 2.0f);
+        std::string hear = j.value("hearFrom", std::string("auto"));
+        s.hearFrom = hear == "drone" ? HearFrom::Drone : hear == "pilot" ? HearFrom::Pilot : HearFrom::Auto;
         s.osdStyle = j.value("osdStyle", s.osdStyle);
         s.cameraUptilt = j.value("cameraUptilt", s.cameraUptilt);
         s.cameraFov = j.value("cameraFov", s.cameraFov);
@@ -75,6 +78,12 @@ void loadSettings() {
         s.keyboardYawExpo = std::clamp(j.value("keyboardYawExpo", s.keyboardYawExpo), 0.5f, 20.0f);
         s.windEnabled = j.value("windEnabled", s.windEnabled);
         s.windStrength = std::clamp(j.value("windStrength", s.windStrength), 0.0f, 2.0f);
+        s.batteryDrain = j.value("batteryDrain", s.batteryDrain);
+        s.damage = j.value("damage", s.damage);
+        s.pilotStandIn = j.value("pilotStandIn", s.pilotStandIn);
+        s.pilotPose = j.value("pilotPose", s.pilotPose);
+        s.standInDistance = j.value("standInDistance", s.standInDistance);
+        s.standInReturnDistance = j.value("standInReturnDistance", s.standInReturnDistance);
 #if defined(LIBFPV_KAMIKAZE)
         s.kamikazeArmingDelay = std::clamp(j.value("kamikazeArmingDelay", s.kamikazeArmingDelay), 0.0f, 600.0f);
         s.kamikazeMinImpactSpeed = std::clamp(j.value("kamikazeMinImpactSpeed", s.kamikazeMinImpactSpeed), 0.1f, 30.0f);
@@ -105,6 +114,10 @@ void saveSettings() {
               {"preset", s.preset},
               {"overlayToggleKey", s.overlayToggleKey},
               {"audioVolume", s.audioVolume},
+              {"beepVolume", s.beepVolume},
+              {"hearFrom", s.hearFrom == HearFrom::Drone   ? "drone"
+                           : s.hearFrom == HearFrom::Pilot ? "pilot"
+                                                           : "auto"},
               {"osdStyle", s.osdStyle},
               {"cameraUptilt", s.cameraUptilt},
               {"cameraFov", s.cameraFov},
@@ -116,7 +129,13 @@ void saveSettings() {
               {"keyboardThrottleExpo", s.keyboardThrottleExpo},
               {"keyboardYawExpo", s.keyboardYawExpo},
               {"windEnabled", s.windEnabled},
-              {"windStrength", s.windStrength}};
+              {"windStrength", s.windStrength},
+              {"batteryDrain", s.batteryDrain},
+              {"damage", s.damage},
+              {"pilotStandIn", s.pilotStandIn},
+              {"pilotPose", s.pilotPose},
+              {"standInDistance", s.standInDistance},
+              {"standInReturnDistance", s.standInReturnDistance}};
 #if defined(LIBFPV_KAMIKAZE)
     j["kamikazeArmingDelay"] = s.kamikazeArmingDelay;
     j["kamikazeMinImpactSpeed"] = s.kamikazeMinImpactSpeed;
@@ -394,6 +413,12 @@ static void recreateEeprom(bool all) {
     });
 }
 
+void applySimOptions() {
+    Lib &L = lib();
+    L.flight.setBatteryDrain(L.settings.batteryDrain);
+    L.flight.setDamage(L.settings.damage);
+}
+
 fpv_result resetCurrentPreset() {
     std::string fileName = currentPreset().fileName;
     if (restoreShippedPreset(fileName)) reloadPresets(fileName);
@@ -420,6 +445,7 @@ fpv_result resetEverything() {
     reloadPresets("freestyler-5");  // the first-launch drone
     saveSettings();
     recreateEeprom(true);
+    applySimOptions();
 #if defined(LIBFPV_KAMIKAZE)
     applyKamikazeSettings();
 #endif
@@ -677,6 +703,7 @@ FPV_API fpv_result fpv_global_init(const fpv_global_config *cfgIn) {
         L.flight.applyPreset(preset);
     }
 
+    applySimOptions();
 #if defined(LIBFPV_KAMIKAZE)
     applyKamikazeSettings();
 #endif
@@ -926,6 +953,74 @@ FPV_API fpv_result fpv_drone_reset(fpv_drone *d, const float position[3], const 
 FPV_API fpv_result fpv_drone_repair(fpv_drone *d) {
     REQUIRE_DRONE(d);
     L.runner.call([&] { L.flight.repair(); });
+    return FPV_OK;
+}
+
+FPV_API fpv_result fpv_drone_damage_props(fpv_drone *d, int32_t motor, float amount) {
+    REQUIRE_DRONE(d);
+    if (motor < -1 || motor > 3 || !std::isfinite(amount))
+        return setError(FPV_ERROR_INVALID_ARGUMENT, "motor_index -1..3 and a finite amount");
+    float a = std::clamp(amount, 0.0f, 1.0f);
+    L.runner.call([&] { L.flight.damageProps(motor, a); });
+    return FPV_OK;
+}
+
+FPV_API fpv_result fpv_drone_set_pilot_position(fpv_drone *d, const float position[3]) {
+    REQUIRE_DRONE(d);
+    if (!position) return setError(FPV_ERROR_INVALID_ARGUMENT, "position is NULL");
+    Vec3 p = L.conv.posToInternal({position[0], position[1], position[2]});
+    if (!finite(p)) return setError(FPV_ERROR_INVALID_ARGUMENT, "pilot position is not finite");
+    L.runner.call([&] { L.flight.setPilotPosition(p); });
+    return FPV_OK;
+}
+
+FPV_API void fpv_set_view(fpv_view view) {
+    Lib &L = lib();
+    std::lock_guard<std::recursive_mutex> lock(L.mutex);
+    L.view = view >= FPV_VIEW_FPV && view <= FPV_VIEW_PILOT ? (int)view : FPV_VIEW_FPV;
+}
+
+// --- simulation options and the pilot ---------------------------------------------
+
+FPV_API void fpv_sim_set_options(uint32_t options) {
+    Lib &L = lib();
+    std::lock_guard<std::recursive_mutex> lock(L.mutex);
+    L.settings.batteryDrain = !(options & FPV_SIM_NO_BATTERY_DRAIN);
+    L.settings.damage = !(options & FPV_SIM_NO_DAMAGE);
+    applySimOptions();
+    if (L.initialized) saveSettings();
+}
+
+FPV_API uint32_t fpv_sim_get_options(void) {
+    Lib &L = lib();
+    std::lock_guard<std::recursive_mutex> lock(L.mutex);
+    return (L.settings.batteryDrain ? 0u : (uint32_t)FPV_SIM_NO_BATTERY_DRAIN) |
+           (L.settings.damage ? 0u : (uint32_t)FPV_SIM_NO_DAMAGE);
+}
+
+FPV_API fpv_result fpv_pilot_set_support(uint32_t features, float standIn, float standInReturn) {
+    REQUIRE_INIT();
+    L.pilotFeatures = features & (FPV_PILOT_STAND_IN | FPV_PILOT_POSE);
+    float start = std::isfinite(standIn) && standIn > 0 ? L.conv.lenToInternal(standIn) : 20.0f;
+    float stop = std::isfinite(standInReturn) && standInReturn > 0 ? L.conv.lenToInternal(standInReturn) : 10.0f;
+    L.pilotStandInDefault = start;
+    L.pilotReturnDefault = std::min(stop, start);
+    return FPV_OK;
+}
+
+FPV_API fpv_result fpv_pilot_get_config(fpv_pilot_config *c) {
+    REQUIRE_INIT();
+    if (!c || c->struct_size < offsetof(fpv_pilot_config, stand_in_distance))
+        return setError(FPV_ERROR_ABI_MISMATCH, "set config->struct_size = sizeof(fpv_pilot_config)");
+    fpv_pilot_config out{};
+    out.struct_size = std::min<uint32_t>(c->struct_size, sizeof(out));
+    if (L.settings.pilotStandIn) out.features |= L.pilotFeatures & FPV_PILOT_STAND_IN;
+    if (L.settings.pilotPose) out.features |= L.pilotFeatures & FPV_PILOT_POSE;
+    float start = L.settings.standInDistance > 0 ? L.settings.standInDistance : L.pilotStandInDefault;
+    float stop = L.settings.standInReturnDistance > 0 ? L.settings.standInReturnDistance : L.pilotReturnDefault;
+    out.stand_in_distance = L.conv.lenToHost(start);
+    out.stand_in_return_distance = L.conv.lenToHost(std::min(stop, start));
+    memcpy(c, &out, out.struct_size);
     return FPV_OK;
 }
 

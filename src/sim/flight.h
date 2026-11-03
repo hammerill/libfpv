@@ -5,6 +5,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -45,6 +46,7 @@ struct FlightSnapshot {
     std::array<MotorSnapshot, 4> motors{};
     float batVoltage = 0, batVoltageSag = 0, batCurrent = 0, mahDrawn = 0;
     bool armed = false, failsafe = false, beeper = false, onGround = false, crashed = false;
+    bool beeperSwitch = false;  // the beeper sounds for the pilot's switch (through the motors)
     bool modeAngle = false, modeHorizon = false, turtle = false, osdDisabled = false;
     uint32_t armingDisableFlags = 0;
     float altitude = -1;
@@ -74,6 +76,13 @@ public:
     bool active() const { return m_active; }
     void teleport(Vec3 pos, Quat rot);
     void repair();
+    // Adds `amount` (0..1) to a prop's damage, motor -1 = all. Simulation
+    // thread; nothing with damage off.
+    void damageProps(int motor, float amount);
+    // The player's simulation options (any thread): the battery keeps its
+    // charge (it still sags), props and motors take no damage.
+    void setBatteryDrain(bool on) { m_batteryDrain = on; }
+    void setDamage(bool on) { m_damage = on; }
     // Zeroes Betaflight's total armed time, the OSD flight timer.
     void resetFlightTime();
     void applyPreset(const DronePreset &preset);
@@ -110,6 +119,7 @@ public:
 
     double simTime() const { return m_simTime; }
     Vec3 pilotPosition() const { return m_pilotPos; }
+    void setPilotPosition(Vec3 p) { m_pilotPos = p; }  // simulation thread
     // Lowest point of the collision shape below the centre of mass (metres).
     float restHeight() const;
 
@@ -148,6 +158,9 @@ private:
     void movePos(Vec3 d);
     Quat m_rot;
     float m_propDamage[4] = {0, 0, 0, 0};
+    std::atomic<bool> m_batteryDrain{true}, m_damage{true};
+    void keepBattery();  // FPV_SIM_NO_BATTERY_DRAIN
+    void keepMotors();   // FPV_SIM_NO_DAMAGE
     double m_simTime = 0;
     double m_lastGroundContact = -1;
     double m_lastMotorStrike[5] = {-1, -1, -1, -1, -1};

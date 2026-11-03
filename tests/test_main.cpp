@@ -2368,6 +2368,167 @@ struct Test {
 
 }  // namespace
 
+// FPV_SIM_NO_BATTERY_DRAIN keeps the charge but not the sag; FPV_SIM_NO_DAMAGE
+// makes the props immune, also to the game's fpv_drone_damage_props.
+void testSimOptions() {
+    Host h(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1));
+    float p[3], rot[4] = {0, 0, 0, 1};
+    h.pos(0, 0, 0, p);
+    auto punches = [&](uint32_t options, float &fresh, float &after, float &minCell) {
+        fpv_sim_set_options(options);
+        CHECK(fpv_sim_get_options() == options, "options read back %u", fpv_sim_get_options());
+        Session s;
+        s.spawn(p);
+        s.arm();
+        s.run(0.5f);
+        fresh = s.f.battery.cell_voltage;
+        minCell = fresh;
+        for (int i = 0; i < 12; i++) {
+            fpv_drone_reset(s.drone, p, rot);
+            s.rc.ch[2] = 1.0f;
+            s.run(1.5f, [&](float) { minCell = std::min(minCell, s.f.battery.cell_voltage); });
+            s.rc.ch[2] = -1.0f;
+            s.run(0.5f);
+        }
+        fpv_drone_reset(s.drone, p, rot);
+        s.run(1.0f);
+        after = s.f.battery.cell_voltage;
+        s.destroy();
+    };
+    float fresh, after, minCell;
+    punches(0, fresh, after, minCell);
+    std::printf("    drain on: idle %.2f -> %.2f V/cell, %.2f in the punches\n", fresh, after, minCell);
+    CHECK(fresh - after > 0.05f, "the pack drains (%.2f -> %.2f V/cell)", fresh, after);
+    punches(FPV_SIM_NO_BATTERY_DRAIN, fresh, after, minCell);
+    std::printf("    drain off: idle %.2f -> %.2f V/cell, %.2f in the punches\n", fresh, after, minCell);
+    CHECK(std::fabs(fresh - after) < 0.02f, "no drain: same idle voltage (%.2f -> %.2f V/cell)", fresh, after);
+    CHECK(fresh - minCell > 0.15f, "no drain: still sags in a punch (%.2f -> %.2f V/cell)", fresh, minCell);
+
+    Session s;
+    s.spawn(p);
+    fpv_sim_set_options(FPV_SIM_NO_DAMAGE);
+    CHECK(fpv_drone_damage_props(s.drone, -1, 1.0f) == FPV_OK, "damage call");
+    CHECK(fpv_drone_damage_props(s.drone, 4, 1.0f) == FPV_ERROR_INVALID_ARGUMENT, "motor index checked");
+    s.run(0.1f);
+    CHECK(!(s.f.flags & FPV_DRONE_CRASHED) && s.f.motors[0].prop_damage == 0, "immune props stay intact");
+    fpv_sim_set_options(0);
+    fpv_drone_damage_props(s.drone, 2, 0.4f);
+    s.run(0.1f);
+    CHECK(std::fabs(s.f.motors[2].prop_damage - 0.4f) < 1e-4f && s.f.motors[0].prop_damage == 0, "one prop damaged (%.2f)",
+          s.f.motors[2].prop_damage);
+    fpv_drone_damage_props(s.drone, -1, 1.0f);
+    s.run(0.1f);
+    CHECK(s.f.flags & FPV_DRONE_CRASHED, "all props broken by the game: crashed");
+    fpv_drone_repair(s.drone);
+    s.run(0.1f);
+    CHECK(!(s.f.flags & FPV_DRONE_CRASHED), "repaired");
+    s.destroy();
+}
+
+// The pilot's features: only what the game supports, the player's choice.
+void testPilotConfig() {
+    fpv_pilot_config c{};
+    c.struct_size = sizeof(c);
+    CHECK(fpv_pilot_get_config(&c) == FPV_OK && c.features == 0, "no features without support (%u)", c.features);
+    CHECK(fpv_pilot_set_support(FPV_PILOT_STAND_IN | FPV_PILOT_POSE, 30, 15) == FPV_OK, "support");
+    fpv_pilot_get_config(&c);
+    CHECK(c.features == (FPV_PILOT_STAND_IN | FPV_PILOT_POSE), "both on by default (%u)", c.features);
+    CHECK(std::fabs(c.stand_in_distance - 30) < 1e-3f && std::fabs(c.stand_in_return_distance - 15) < 1e-3f,
+          "the game's distances (%.1f, %.1f)", c.stand_in_distance, c.stand_in_return_distance);
+    fpv_pilot_set_support(FPV_PILOT_POSE, 0, 0);
+    fpv_pilot_get_config(&c);
+    CHECK(c.features == FPV_PILOT_POSE && std::fabs(c.stand_in_distance - 20) < 1e-3f, "defaults (%u, %.1f)", c.features,
+          c.stand_in_distance);
+    // the Fly tab draws the Pilot section
+    fpv_overlay_set_display(1280, 720, 1.0f);
+    fpv_overlay_set_open(1);
+    const fpv_draw_data *dd = nullptr;
+    for (int i = 0; i < 3; i++) dd = fpv_overlay_render(0.016f);
+    CHECK(dd && dd->total_vertex_count > 100, "overlay with the Pilot section");
+    fpv_overlay_set_open(0);
+    fpv_pilot_set_support(0, 0, 0);
+
+    Host h(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1));
+    float p[3];
+    h.pos(0, 0, 0, p);
+    Session s;
+    s.spawn(p);
+    s.arm();
+    s.run(0.1f);
+    CHECK(s.f.flags & FPV_DRONE_RADIO_ACTIVE, "armed: the radio is in use");
+    s.destroy();
+}
+
+// Heard from the pilot: quieter far away, quieter still behind a wall; the
+// beeper switch beeps through the motors' volume.
+void testHearing() {
+    Host h(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1));
+    loadWorld(makeLevel(h, 200, 30));  // a wall 30 m ahead of the drone
+    CHECK(fpv_audio_configure(48000, 2) == FPV_OK, "audio configure");
+    fpv_audio_set_volume(1.0f);
+    fpv_audio_set_beep_volume(1.0f);
+    std::vector<float> buf(4800 * 2);
+    Session s;
+    auto energy = [&] {
+        double e = 0;
+        for (int b = 0; b < 4; b++) {  // 0.4 s: the hearing settles, keep the last 0.1 s
+            s.run(0.1f);
+            fpv_audio_read(buf.data(), 4800);
+        }
+        for (float v : buf) e += v * v;
+        return e / buf.size();
+    };
+    float p[3];
+    h.pos(0, 0, 0, p);
+    s.spawn(p);
+    s.arm();
+    s.rc.ch[2] = -0.8f;  // armed, still on the ground
+    s.run(1.0f);
+    fpv_set_view(FPV_VIEW_FPV);
+    double onboard = energy();
+    fpv_set_view(FPV_VIEW_LOS);
+    float pilot[3];
+    h.pos(0, 0, -3, pilot);
+    fpv_drone_set_pilot_position(s.drone, pilot);
+    double near = energy();
+    h.pos(0, 0, -60, pilot);
+    fpv_drone_set_pilot_position(s.drone, pilot);
+    double far = energy();
+    h.pos(0, 0, 60, pilot);  // as far, behind the wall
+    fpv_drone_set_pilot_position(s.drone, pilot);
+    double walled = energy();
+    fpv_set_view(FPV_VIEW_FPV);
+    double back = energy();
+    std::printf("    hearing: onboard %.2e, pilot at 3 m %.2e, 60 m %.2e, 60 m behind a wall %.2e, onboard again %.2e\n",
+                onboard, near, far, walled, back);
+    CHECK(near > far * 50, "far away is much quieter (%.2e vs %.2e)", near, far);
+    CHECK(far > 0 && walled < far * 0.3, "a wall in between is quieter still (%.2e vs %.2e)", walled, far);
+    CHECK(std::fabs(back - onboard) < onboard * 0.3, "FPV view: onboard again (%.2e vs %.2e)", back, onboard);
+    for (float v : buf) {
+        if (!(std::fabs(v) <= 1.0f)) {
+            CHECK(false, "audio sample out of range %f", v);
+            break;
+        }
+    }
+
+    // the beeper switch (AUX3) disarmed: beeps through the motors
+    s.rc.ch[4] = -1.0f;
+    s.run(0.5f);
+    s.rc.ch[6] = 1.0f;
+    fpv_audio_set_volume(1.0f);
+    fpv_audio_set_beep_volume(0.0f);
+    double motorsOnly = energy() + energy();
+    fpv_audio_set_volume(0.0f);
+    fpv_audio_set_beep_volume(1.0f);
+    double beepsOnly = energy() + energy();
+    std::printf("    beeper switch: motor volume only %.2e, beep volume only %.2e\n", motorsOnly, beepsOnly);
+    CHECK(motorsOnly > 1e-4, "the beeper switch is heard with the beeps muted");
+    CHECK(beepsOnly < motorsOnly * 0.01, "and follows the motor volume");
+    fpv_audio_set_volume(0.1f);
+    fpv_audio_set_beep_volume(0.1f);
+    s.destroy();
+}
+
 int main(int argc, char **argv) {
     std::setvbuf(stdout, nullptr, _IONBF, 0);  // keep output if a test crashes
     std::string filter = argc > 1 ? argv[1] : "";
@@ -2411,6 +2572,9 @@ int main(int argc, char **argv) {
         {"gps", testGps},
         {"gps_elements_after_reboot", testGpsElementsAfterReboot},
         {"osd_audio_overlay", testOsdAudioOverlay},
+        {"sim_options", testSimOptions},
+        {"pilot_config", testPilotConfig},
+        {"hearing", testHearing},
         {"pinned", testPinned},
         {"terminate_reinit", testTerminateReinit},
         {"threaded", testThreadedMode},

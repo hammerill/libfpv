@@ -68,6 +68,8 @@ int bfb_yaw_motors_reversed(void);
 int bfb_crash_flip_active(void);
 /* The OSD DISABLE mode is on: Betaflight clears the OSD. */
 int bfb_osd_disabled(void);
+/* The BEEPER mode (the pilot's beeper switch) is on. */
+int bfb_beeper_switch(void);
 /* Text of OSD custom message element `index` (0..3, "Custom message N" in
  * the Configurator), drawn wherever the player put that element; up to 16
  * characters, "" draws nothing, NULL gives the element back to Betaflight. */

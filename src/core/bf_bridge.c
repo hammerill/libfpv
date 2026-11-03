@@ -311,6 +311,11 @@ int bfb_osd_disabled(void)
     return IS_RC_MODE_ACTIVE(BOXOSD) ? 1 : 0;
 }
 
+int bfb_beeper_switch(void)
+{
+    return IS_RC_MODE_ACTIVE(BOXBEEPERON) ? 1 : 0;
+}
+
 void bfb_battery_reset(void)
 {
     batteryInit();

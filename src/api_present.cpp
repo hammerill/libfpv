@@ -17,6 +17,20 @@ namespace fpv {
 // The audio synth is read from the host's audio thread without the API
 // mutex, so it lives behind an atomic pointer and is never destroyed.
 static std::atomic<AudioSynth *> g_audio{nullptr};
+static std::atomic<bool> g_audioPulled{false};
+
+bool audioPulled() { return g_audioPulled.load(std::memory_order_relaxed); }
+
+namespace {
+constexpr float kSpeedOfSound = 343.0f;  // m/s, dry air at 20 C
+// The onboard sound is the level heard this far from the drone, so the two
+// match when the drone flies by the pilot.
+constexpr float kReferenceDistance = 2.0f;
+// Air absorption grows about with the frequency squared (ISO 9613-1, 20 C,
+// 70 % humidity: 4.7, 9.7, 33 and 117 dB/km at 1, 2, 4 and 8 kHz), so the
+// highs go first: a low-pass where the loss over the distance is 3 dB.
+constexpr float kAirAbsorption = 2.0e-9f;  // dB per metre per Hz^2
+}  // namespace
 
 AudioSynth &audioSynth() {
     AudioSynth *a = g_audio.load();
@@ -37,8 +51,75 @@ OsdRenderer &osdRenderer() {
     return *L.osd;
 }
 
+bool hearsFromPilot() {
+    Lib &L = lib();
+    switch (L.settings.hearFrom) {
+    case HearFrom::Drone: return false;
+    case HearFrom::Pilot: return true;
+    default: return L.view == FPV_VIEW_LOS || L.view == FPV_VIEW_PILOT;
+    }
+}
+
+// How the drone sounds at the ear (internal frame, metres). See
+// docs/DECISIONS.md "Hearing the drone from the pilot".
+static Hearing hearing(Vec3 dronePos, Vec3 droneVel) {
+    Lib &L = lib();
+    const Lib::HearingProbe &pr = L.hearingProbe;
+    Hearing h;
+    h.fromPilot = hearsFromPilot() ? 1.0f : 0.0f;
+    Vec3 ear = earPosition();
+    Vec3 d = dronePos - ear;
+    float r = length(d);
+    float rr = std::max(r, 0.3f);
+    // what the ear hears now left the drone when it was where it was then:
+    // tau = r(t - tau) / c gives tau = r / (c + dr/dt), and its change the
+    // moving source's Doppler shift, f c / (c - v)
+    float closing = r > 1e-3f ? dot(droneVel, d / r) : 0.0f;
+    h.delay = r / std::max(0.5f * kSpeedOfSound, kSpeedOfSound + closing);
+    // spherical spreading: -6 dB per doubling of the distance
+    float spread = std::min(1.0f, kReferenceDistance / rr);
+    // Walls: a wall's mass law (TL = 20 log10(f m) - 47 dB) lets the lows
+    // through and blocks the highs, and the sound that bends around an
+    // edge instead (Maekawa: 10 log10(3 + 20 N) dB) also loses its highs
+    // first. One wall or building edge ~12 dB and a cutoff near 1.6 kHz,
+    // each more one less, down to a low rumble.
+    float walls = pr.valid ? pr.walls : 0.0f;
+    float wallDb = 12.0f * std::log2(1.0f + walls);
+    h.gain = spread * std::pow(10.0f, -wallDb / 20.0f);
+    h.wallCutoff = 20000.0f / (1.0f + 11.5f * std::pow(walls, 1.5f));
+    h.airCutoff = std::min(20000.0f, std::sqrt(3.0f / (kAirAbsorption * rr)));
+    // where the drone is for the ear: the game's listener, or facing it
+    if (L.listenerSet && r > 1e-3f) h.pan = std::clamp(rotate(conj(L.listenerRot), d / r).x, -1.0f, 1.0f);
+    // the ground's reflection (an image source under the ground below the
+    // ear): a copy that arrives a little later, comb-filtering the direct
+    // sound as the drone climbs or comes closer
+    float hEar = kPilotEarHeight, hDrone = d.y + hEar;
+    if (hDrone > 0 && r > 0.5f) {
+        float horiz2 = std::max(0.0f, r * r - d.y * d.y);
+        float reflected = std::sqrt(horiz2 + (hDrone + hEar) * (hDrone + hEar));
+        h.groundDelay = (reflected - r) / kSpeedOfSound;
+        h.groundGain = 0.5f * r / reflected;  // grass and dirt keep about half
+    }
+    if (pr.valid) {
+        // a slap echo off the walls around the ear (urban canyon, a yard),
+        // there and back
+        if (pr.reflectors > 0 && pr.echoDistance > 0) {
+            h.echoDelay = 2 * pr.echoDistance / kSpeedOfSound;
+            h.echoGain = 0.35f * pr.reflectors * std::min(1.0f, 10.0f / pr.echoDistance) * (1 - 0.6f * pr.enclosure);
+        }
+        // reverberation: a room's diffuse sound hardly falls with the
+        // distance, the direct sound does, so far drones sound wetter
+        float wet = 0.6f * pr.enclosure + 0.15f * pr.reflectors;
+        float wallLoss = h.gain / std::max(spread, 1e-6f);
+        h.reverb = wet * wallLoss * std::min(1.0f, std::sqrt(kReferenceDistance / rr));
+        h.reverbTime = std::clamp(pr.enclosure > 0.5f ? 0.3f + 0.04f * pr.roomSize : 0.6f, 0.3f, 2.5f);
+        h.onboardReverb = 0.25f * wet;
+    }
+    return h;
+}
+
 // Called by fpv_drone_tick with the API mutex held.
-void updatePresentation(const fpv_frame &f) {
+void updatePresentation(const fpv_frame &f, Vec3 dronePos, Vec3 droneVel, bool beeperSwitch) {
     Lib &L = lib();
     const DronePreset &p = currentPreset();
     AudioParams ap;
@@ -53,9 +134,11 @@ void updatePresentation(const fpv_frame &f) {
     ap.maxRpm = p.soundMaxRpm;
     ap.blades = p.propBladeCount;
     ap.beeper = (f.flags & FPV_DRONE_BEEPER) != 0;
+    ap.motorBeep = ap.beeper && beeperSwitch;
     ap.paused = (f.flags & FPV_DRONE_PAUSED) != 0;
+    ap.hearing = hearing(dronePos, droneVel);
     audioSynth().setParams(ap);
-    audioSynth().setVolume(L.settings.audioVolume);
+    audioSynth().setVolume(L.settings.audioVolume, L.settings.beepVolume);
 }
 
 }  // namespace fpv
@@ -111,6 +194,7 @@ FPV_API fpv_result fpv_audio_configure(uint32_t sampleRate, uint32_t channels) {
 
 FPV_API uint32_t fpv_audio_read(float *out, uint32_t frames) {
     if (!out || !frames) return 0;
+    g_audioPulled.store(true, std::memory_order_relaxed);
     return audioSynth().read(out, frames);
 }
 
@@ -118,7 +202,29 @@ FPV_API void fpv_audio_set_volume(float v) {
     Lib &L = lib();
     std::lock_guard<std::recursive_mutex> lock(L.mutex);
     L.settings.audioVolume = std::clamp(std::isfinite(v) ? v : 0.1f, 0.0f, 2.0f);
-    audioSynth().setVolume(L.settings.audioVolume);
+    audioSynth().setVolume(L.settings.audioVolume, L.settings.beepVolume);
+}
+
+FPV_API void fpv_audio_set_beep_volume(float v) {
+    Lib &L = lib();
+    std::lock_guard<std::recursive_mutex> lock(L.mutex);
+    L.settings.beepVolume = std::clamp(std::isfinite(v) ? v : 0.1f, 0.0f, 2.0f);
+    audioSynth().setVolume(L.settings.audioVolume, L.settings.beepVolume);
+}
+
+FPV_API void fpv_audio_set_listener(const float position[3], const float rotation[4]) {
+    Lib &L = lib();
+    std::lock_guard<std::recursive_mutex> lock(L.mutex);
+    L.listenerSet = false;
+    if (!position) return;
+    Vec3 p = L.conv.posToInternal({position[0], position[1], position[2]});
+    if (!finite(p)) return;
+    Quat q{0, 0, 0, 1};
+    if (rotation) q = L.conv.rotToInternal({rotation[0], rotation[1], rotation[2], rotation[3]});
+    if (!std::isfinite(q.w) || qdot(q, q) < 1e-12f) q = Quat{0, 0, 0, 1};
+    L.listenerPos = p;
+    L.listenerRot = normalize(q);
+    L.listenerSet = true;
 }
 
 // --- input and overlay ---------------------------------------------------------

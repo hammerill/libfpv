@@ -520,6 +520,30 @@ and they give most of the feel. To reverse: zero the wind inputs
 (`fpv_wind_set(NULL)`, or the player's switch); the flight model is then
 the D25 one exactly.
 
+### D32. Simulation options: no battery drain, no damage
+
+Players can turn off two parts of the simulation in F8 > Drone (saved in
+`settings.json`, `fpv_sim_set_options` for the game): the battery's drain
+and the damage to props and motors. Both are on by default.
+
+- **No battery drain** tops the pack up to SimITL's charged capacity before
+  every step (`Flight::keepBattery`), so the voltage curve stays at full
+  charge. The sag is computed afterwards from the step's current (D27), so
+  the OSD voltage still dips in a punch and comes back at hover, as on a
+  fresh pack. The mAh counter stays near 0: it is Betaflight's reading of
+  the charge actually lost, and showing a made-up number would be worse.
+- **No damage** ignores every source of prop damage in libfpv (strikes,
+  `FPV_MATERIAL_KILLS_PROPS`, `fpv_drone_damage_props`) and keeps the
+  windings 1 C under SimITL's burn-out temperature before and after each
+  step, clearing the burned-out flag (`Flight::keepMotors`). The motors
+  still warm up, so the OSD's ESC temperature reads true. A kamikaze
+  warhead still destroys the drone: that is its own feature, not damage.
+- `fpv_drone_damage_props` is how the game damages props from what libfpv
+  cannot see (fire, a water volume, bullets, see INTEGRATION.md "Damage").
+  It goes through the same switch, so the game never has to check it.
+
+Reversing: drop the two checks; nothing else depends on them.
+
 ## Presentation
 
 ### D14. Overlay: libfpv is a "legacy" ImGui backend
@@ -560,7 +584,8 @@ glided over 15 ms. Each motor mixes a band-limited blade-pass saw
 (harmonics above Nyquist dropped), the motor's electrical whine (7 pole
 pairs), RPM-tracking low-passed noise scaled by load, and a
 once-per-revolution wobble from prop damage. Betaflight's beeper is a
-2.7 kHz tone. The output is soft-clipped with `tanh`.
+2.7 kHz tone. The output is soft-clipped with `tanh`. The beeps and the
+hearing from the pilot are D31.
 
 ### D17. Motor state is cleared on spawn and despawn
 
@@ -575,6 +600,100 @@ SimITL's per-quad `.bin` EEPROMs load fine (version 178), but differ from
 defaults only in `feature -GPS -TELEMETRY`: there are no modes and no
 tune. So libfpv ships no per-preset tune. The `<preset>.diff.txt`
 mechanism (D7) is there for preset authors.
+
+### D31. Hearing the drone from the pilot, and two beepers
+
+**Beeps.** Betaflight's beeper output is split by its reason. While the
+pilot's BEEPER mode switch is on (`bfb_beeper_switch`) the beeps come from
+the motors, as DShot beacon beeps do on a real quad (a 1.76 kHz tone through
+the windings), and follow the motor volume. Every other beep (arming, low
+battery, failsafe) is the 2.7 kHz piezo buzzer, with its own volume. So
+muting the beeps never silences the lost-drone finder.
+
+**Where it is heard.** The player picks Auto, the drone or the pilot (F8 >
+Camera & sound). Auto hears it onboard in the FPV and chase views and from
+the pilot in the LOS and pilot views; the game reports its view with
+`fpv_set_view` (FPV_VIEW_PILOT is the F key, D33). Onboard is the sound as
+before. The two are always both computed and cross-faded over 150 ms, so
+switching views does not click.
+
+**From the pilot.** The ear is the pilot's head (1.6 m above
+`pilot_position`, facing the drone) or the game's listener
+(`fpv_audio_set_listener`, its camera in the pilot view). The model, from
+the literature on outdoor sound propagation:
+
+- *Travel time and Doppler.* The drone's mono signal goes through a delay
+  line (2 s, 690 m). The read point is the emission time,
+  `tau = r / (c + dr/dt)` with c = 343 m/s, so its change gives the moving
+  source's shift `f c / (c - v)` exactly (checked: 1760 Hz at 40 m/s gives
+  1993 / 1576 Hz approaching / receding, theory 1992 / 1576). It moves at
+  most half a sample per sample; a jump of 17 m or more between two updates
+  is a teleport and is taken at once.
+- *Spreading.* 1/r (6 dB per doubling), with the onboard level equal to the
+  level 2 m away, so a fly-by of the pilot matches the onboard sound.
+- *Air absorption.* About proportional to the frequency squared (ISO 9613-1
+  at 20 C, 70 % humidity: about 5, 10, 33 and 117 dB/km at 1, 2, 4 and
+  8 kHz), so the highs go first: a one-pole low-pass at the frequency where
+  the loss is 3 dB, `sqrt(3 / (2e-9 r))` (12 kHz at 10 m, 4 kHz at 100 m,
+  1.7 kHz at 500 m).
+- *Walls.* Rays from the ear to the drone, 10 times a second, through the
+  drone's collision world and the game's raycast; hits within 0.5 m of the
+  last one are the same wall (both faces), up to 4. Sound gets past an
+  obstacle two ways, both losing the highs first: through it (the mass law,
+  TL = 20 log10(f m) - 47 dB, so a wall passes the bass) and around its
+  edges (Maekawa's barrier diffraction, 10 log10(3 + 20 N) dB with the
+  Fresnel number N = 2 delta / lambda, capped at about 25 dB in practice).
+  libfpv does not trace the edges; it takes the result: 12 log2(1 + n) dB
+  for n walls (12, 19, 24, 28 dB) and a 12 dB/octave low-pass at
+  20000 / (1 + 11.5 n^1.5) Hz (1.6 kHz, 620 Hz, 340 Hz, 220 Hz). A 5"
+  quad's blade-pass tone is around 1 kHz, so behind one wall it is muffled,
+  behind two only its rumble is left.
+- *The ground.* The reflection off the ground under the ear (an image
+  source), at half the level: a copy a little later, which comb-filters the
+  direct sound and sweeps as the drone climbs or comes closer, the familiar
+  "phasing" of a fly-by.
+- *Echoes and reverberation.* Six horizontal rays and one up, 40 m, around
+  the ear (or the drone, when heard onboard). The share of directions with a
+  wall gives a slap echo (there and back to their mean distance, weaker
+  farther away); a roof makes it a room. The reverberation is a Schroeder /
+  Freeverb network (four damped combs, two all-passes) with RT60 0.3 s plus
+  0.04 s per metre of mean room size indoors, 0.6 s outdoors. Its send falls
+  with the square root of the distance while the direct sound falls with
+  the distance, because a room's diffuse sound hardly depends on where the
+  source is: far drones sound wetter, the main distance cue indoors.
+  Onboard, a quarter of the send: a room around the drone is audible, but
+  the props are close.
+
+Probing costs nothing until the host pulls audio (`fpv_audio_read`).
+Directivity (the rotors are louder below) and the ear's head shadow are
+left out. Sources: ISO 9613-1:1993; Z. Maekawa, "Noise reduction by
+screens" (1965); the mass law of sound insulation; and quadcopter noise
+measurements (blade-pass harmonics dominate up to about 6 kHz, broadband
+above).
+
+Reversing: `hearsFromPilot()` returning false is the old sound.
+
+### D33. The pilot: the F key, the stand-in and the piloting pose
+
+Games with a character get a standard F key (INTEGRATION.md "The pilot"):
+the view goes back to the character while the drone stays in the world,
+radio included, and F7 goes back to that drone instead of launching a new
+one. libfpv treats that view like LOS (FPV_VIEW_PILOT): it is heard from the
+pilot, and `fpv_drone_set_pilot_position` follows a character who walks.
+
+The stand-in (the character carried with a far drone, a copy left at the
+piloting spot) and the piloting pose are game code, but the player's choice
+of them is libfpv's, so it is the same in every game and saved with the
+other settings: `fpv_pilot_set_support` says what the game does and its
+default distances, the overlay offers only those (F8 > Fly > Pilot, on by
+default), and `fpv_pilot_get_config` reads the choice. Turning the stand-in
+off keeps the real character at the spot, at the cost of the world loading
+less far from it.
+
+The pose needs to know that the pilot is flying. `FPV_DRONE_RADIO_ACTIVE` is
+set while armed or for 3 s after any channel moved by more than 0.05 of its
+range: noisy AUX pots and switches jitter by about 0.01-0.02, and the
+threshold is the same for every game.
 
 ## Platforms
 

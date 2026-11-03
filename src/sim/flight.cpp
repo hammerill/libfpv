@@ -220,6 +220,30 @@ void Flight::repair() {
 #endif
 }
 
+void Flight::damageProps(int motor, float amount) {
+    if (!m_damage || !m_active || !(amount > 0)) return;
+    for (int i = 0; i < 4; i++)
+        if (motor < 0 || motor == i) m_propDamage[i] = std::min(1.0f, m_propDamage[i] + amount);
+}
+
+// The pack is topped up before every step, so its voltage curve stays at
+// full charge; the sag (current times the internal resistance) still
+// follows the load.
+void Flight::keepBattery() {
+    SimITL::SimState &ss = SimITL::Sim::getInstance().mSimState;
+    ss.batteryState.batCapacity = ss.stateInit.quadBatCapacityCharged;
+}
+
+// The windings never reach the burn-out temperature (they still warm up),
+// and a motor burned before the option was turned on works again.
+void Flight::keepMotors() {
+    SimITL::SimState &ss = SimITL::Sim::getInstance().mSimState;
+    for (auto &m : ss.motorsState) {
+        m.temp = std::min(m.temp, ss.stateInit.motorMaxT - 1.0f);
+        m.status &= ~(int32_t)MotorStatus::MotorBurnedOut;
+    }
+}
+
 #if defined(LIBFPV_KAMIKAZE)
 // The blast destroys the drone: the props are gone, the motors stop, and it
 // stays where it exploded (frozen) until it is repaired.
@@ -402,7 +426,7 @@ void Flight::resolveContacts(float dt) {
 
     for (const Item &it : items) {
         Material mat = m_world->material(it.c.material);
-        if (it.motor >= 0 && (mat.flags & kMatKillsProps)) m_propDamage[it.motor] = 1.0f;
+        if (it.motor >= 0 && (mat.flags & kMatKillsProps) && m_damage) m_propDamage[it.motor] = 1.0f;
         if (it.approach > kImpactReportSpeed) recordImpact(it.c, it.approach, it.accN, it.motor);
 #if defined(LIBFPV_KAMIKAZE)
         if (it.approach > kWarheadTouchSpeed &&
@@ -435,7 +459,7 @@ void Flight::propStrikes(float dt) {
             if (std::fabs(dot(c.point - hub, up)) > kPropDiscHalfThickness) continue;
             Material mat = m_world->material(c.material);
             if (mat.flags & kMatKillsProps) {
-                m_propDamage[i] = 1.0f;
+                if (m_damage) m_propDamage[i] = 1.0f;
                 break;
             }
             if (m_simTime - m_lastMotorStrike[i + 1] < 0.02) continue;
@@ -445,7 +469,8 @@ void Flight::propStrikes(float dt) {
             float spin = std::fabs(out.motorRpm[i]) / maxRpm;
             float severity = closing + spin * 3.0f;
             if (severity < 0.5f) continue;
-            m_propDamage[i] = std::min(1.0f, m_propDamage[i] + severity / std::max(1.0f, m_preset.collision.propDurability));
+            if (m_damage)
+                m_propDamage[i] = std::min(1.0f, m_propDamage[i] + severity / std::max(1.0f, m_preset.collision.propDurability));
             recordImpact(c, closing, 0.0f, i);
 #if defined(LIBFPV_KAMIKAZE)
             // a spinning prop hitting something is a touch too
@@ -592,7 +617,10 @@ void Flight::step(float dt, const float channels[kChannelCount], bool radioLost)
     bfb_gps_update(m_pos.x, m_pos.z, m_pos.y, m_vel.x, m_vel.z, m_vel.y);
     bfb_baro_update(m_pos.y);
 
+    if (!m_batteryDrain) keepBattery();
+    if (!m_damage) keepMotors();
     simitl_update(m_input);
+    if (!m_damage) keepMotors();
     // after the update: arming inside it may have just moved home
     {
         std::lock_guard<std::mutex> lock(m_homeMutex);
@@ -665,11 +693,11 @@ void Flight::step(float dt, const float channels[kChannelCount], bool radioLost)
         m.command = std::clamp(out.motorOutput[i], 0.0f, 1.0f);
         m.propDamage = m_propDamage[i];
         m.flags = 0;
-        if (out.motorStatus[i] & MotorStatus::MotorBurnedOut) {
+        if ((out.motorStatus[i] & MotorStatus::MotorBurnedOut) && m_damage) {
             m.flags |= 1u;
             anyBurned = true;
         }
-        if (out.motorStatus[i] & MotorStatus::MotorDamaged || m_propDamage[i] > 0.05f) m.flags |= 2u;
+        if ((out.motorStatus[i] & MotorStatus::MotorDamaged && m_damage) || m_propDamage[i] > 0.05f) m.flags |= 2u;
         if (m_propDamage[i] >= 0.99f) {
             m.flags |= 4u;
             anyBroken = true;
@@ -682,6 +710,7 @@ void Flight::step(float dt, const float channels[kChannelCount], bool radioLost)
     m_snap.armed = bfb_is_armed();
     m_snap.failsafe = bfb_failsafe_active();
     m_snap.beeper = out.beep != 0;
+    m_snap.beeperSwitch = m_snap.beeper && bfb_beeper_switch();
     m_snap.armingDisableFlags = bfb_arming_disable_flags();
     uint32_t modes = bfb_flight_mode_flags();
     m_snap.modeAngle = (modes & 1u) != 0;    // ANGLE_MODE

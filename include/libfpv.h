@@ -345,6 +345,16 @@ FPV_API fpv_result fpv_drone_delete(fpv_drone *drone);
 FPV_API fpv_result fpv_drone_reset(fpv_drone *drone, const float position[3], const float rotation[4]);
 /* Fresh battery, cool undamaged motors and new propellers. */
 FPV_API fpv_result fpv_drone_repair(fpv_drone *drone);
+/* The game damages the propellers: fire, water, a bullet through the props,
+ * anything that would hurt a real one (docs/INTEGRATION.md#damage).
+ * `motor_index` 0..3, or -1 for all four; `amount` 0..1 is added to each
+ * one's prop_damage (1 breaks it). Does nothing while the player has damage
+ * off (FPV_SIM_NO_DAMAGE), so the game can call it whatever the setting. */
+FPV_API fpv_result fpv_drone_damage_props(fpv_drone *drone, int32_t motor_index, float amount);
+/* Moves the pilot (the LOS camera, the video link's receiver and the ear
+ * when the drone is heard from the pilot), host coords of the feet. For a
+ * game whose character walks while the drone flies (FPV_VIEW_PILOT). */
+FPV_API fpv_result fpv_drone_set_pilot_position(fpv_drone *drone, const float position[3]);
 /* Switches the physical preset (frame, motors, props, battery, camera). */
 FPV_API fpv_result fpv_drone_set_preset(fpv_drone *drone, const char *preset);
 
@@ -412,12 +422,17 @@ enum fpv_drone_flags {
     /* The pilot's OSD disable switch is on: Betaflight draws no OSD, and the
      * game must hide any UI it still shows over the FPV view too. See
      * docs/INTEGRATION.md#osd-disable-switch. */
-    FPV_DRONE_OSD_DISABLED = 1u << 9
+    FPV_DRONE_OSD_DISABLED = 1u << 9,
+    /* The pilot is using the radio: the drone is armed, or a channel moved
+     * in the last 3 s by more than a stick's jitter (0.05 of the -1..1 range,
+     * so the noise of an AUX switch or pot doesn't count). For the pilot
+     * character's piloting pose, see docs/INTEGRATION.md#the-pilot. */
+    FPV_DRONE_RADIO_ACTIVE = 1u << 10
 #if defined(LIBFPV_KAMIKAZE)
     ,
     /* Kamikaze builds: the warhead exploded. The drone is destroyed (frozen
      * where it exploded, no video signal) until fpv_drone_repair(). */
-    FPV_DRONE_DETONATED = 1u << 10
+    FPV_DRONE_DETONATED = 1u << 11
 #endif
 };
 
@@ -498,6 +513,76 @@ typedef struct fpv_frame {
  * In FPV_TIMING_MANUAL mode it does not advance the simulation (use
  * fpv_step). Call once per rendered frame. `frame->struct_size` must be set. */
 FPV_API fpv_result fpv_drone_tick(fpv_drone *drone, float frame_dt, fpv_frame *frame);
+
+/* The view the game shows. libfpv hears the drone from it (the player's
+ * "Hear the drone from" setting, F8 > Camera & sound: in Auto, onboard in
+ * FPV and chase, from the pilot in LOS and pilot views). Cheap; call it
+ * whenever the view changes. Default FPV_VIEW_FPV. */
+typedef enum fpv_view {
+    FPV_VIEW_FPV = 0,    /* frame.camera, the goggles */
+    FPV_VIEW_CHASE = 1,  /* a camera following the drone (frame.chase_camera) */
+    FPV_VIEW_LOS = 2,    /* frame.los_camera, the pilot watching the drone */
+    /* The game's own camera on the pilot character (F), the drone left
+     * flying or standing in the world, see docs/INTEGRATION.md#the-pilot. */
+    FPV_VIEW_PILOT = 3
+} fpv_view;
+
+FPV_API void fpv_set_view(fpv_view view);
+
+/* ===========================================================================
+ * Simulation options
+ *
+ * The player's choices (F8 > Drone), saved in <data_dir>/settings.json. Games
+ * normally leave them to the player.
+ * ======================================================================== */
+
+enum fpv_sim_options {
+    /* The battery never runs empty: it still sags under load (the OSD
+     * voltage dips in a punch), but it does not lose its charge. */
+    FPV_SIM_NO_BATTERY_DRAIN = 1u << 0,
+    /* Props and motors are never damaged: no broken props from hits,
+     * prop-killing materials or fpv_drone_damage_props, no burned motors. */
+    FPV_SIM_NO_DAMAGE = 1u << 1
+};
+
+FPV_API void fpv_sim_set_options(uint32_t options);  /* fpv_sim_options */
+FPV_API uint32_t fpv_sim_get_options(void);
+
+/* ===========================================================================
+ * The pilot (the game's character)
+ *
+ * What the game does with its pilot character, as the player chose in the
+ * overlay (F8 > Fly > Pilot). The game says what it can do once, after
+ * fpv_global_init, and reads the player's choice when it needs it (cheap).
+ * See docs/INTEGRATION.md#the-pilot.
+ * ======================================================================== */
+
+enum fpv_pilot_features {
+    /* The game moves the character along with a far drone (streaming,
+     * the world's reactions) and leaves a stand-in at the piloting spot. */
+    FPV_PILOT_STAND_IN = 1u << 0,
+    /* The character plays a piloting pose (standing, holding a radio)
+     * while idle with FPV_DRONE_RADIO_ACTIVE. */
+    FPV_PILOT_POSE = 1u << 1
+};
+
+typedef struct fpv_pilot_config {
+    uint32_t struct_size;
+    uint32_t features;  /* fpv_pilot_features the player has on (and the game supports) */
+    /* The stand-in takes over once the drone is farther than this from the
+     * piloting spot, host units, and the character is itself again once the
+     * drone is back within stand_in_return_distance (smaller). */
+    float stand_in_distance;
+    float stand_in_return_distance;
+} fpv_pilot_config;
+
+/* `features`: what the game supports (fpv_pilot_features); the overlay only
+ * offers those, on by default. The distances (host units) are the game's
+ * defaults, which the player can change; <= 0 = 20 m and 10 m. Not calling
+ * it = no features (a game without a character). */
+FPV_API fpv_result fpv_pilot_set_support(uint32_t features, float stand_in_distance,
+                                         float stand_in_return_distance);
+FPV_API fpv_result fpv_pilot_get_config(fpv_pilot_config *config);
 
 /* ===========================================================================
  * GPS
@@ -953,11 +1038,22 @@ FPV_API fpv_result fpv_osd_render_rgba(const fpv_frame *frame, uint8_t *rgba, ui
  * Audio
  * ======================================================================== */
 
-/* Optional built-in motor sound. Pull interleaved float samples from your
- * audio thread; returns the number of frames written (always `frames`). */
+/* Optional built-in drone sound: the motors and Betaflight's beeper. Pull
+ * interleaved float samples from your audio thread; returns the number of
+ * frames written (always `frames`). Heard onboard or from the pilot (with
+ * distance, walls in between, Doppler, the ground's reflection and echoes),
+ * see fpv_set_view and docs/INTEGRATION.md#audio. */
 FPV_API fpv_result fpv_audio_configure(uint32_t sample_rate, uint32_t channels);
 FPV_API uint32_t fpv_audio_read(float *out, uint32_t frames);
+/* The motors, with the beeper switch's beeps: those come from the motors
+ * (DShot beacon), so muting the beeper never hides a lost drone. 0..2. */
 FPV_API void fpv_audio_set_volume(float volume);
+/* Betaflight's other beeps (arming, low battery, failsafe...). 0..2. */
+FPV_API void fpv_audio_set_beep_volume(float volume);
+/* The ear when the drone is heard from the pilot: host coords and rotation
+ * (like a camera's). The game passes its camera in FPV_VIEW_PILOT; NULL
+ * position (the default) = the pilot's head, facing the drone. */
+FPV_API void fpv_audio_set_listener(const float position[3], const float rotation[4]);
 
 /* ===========================================================================
  * Configuration

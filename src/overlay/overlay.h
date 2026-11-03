@@ -46,6 +46,7 @@ private:
     void buildUi();
     void tabFly();
     void windSection();
+    void pilotSection();
     void tabRadio();
     void tabDrone();
     void tabRates();

@@ -9,7 +9,8 @@
 //      fpv_gps_set_home                      the launch pad is GPS home
 //      fpv_wind_set                          a breeze from the west (not in the
 //                                            scripted flights)
-//   4. every frame: fpv_drone_tick           pose + camera + OSD + impacts
+//   4. every frame: fpv_set_view             the camera shown (where the drone is heard from)
+//      fpv_drone_tick                        pose + camera + OSD + impacts
 //      place the game camera at frame.camera (or chase/LOS)
 //      draw the drone at frame.position/rotation, props by frame.motors[].rpm
 //      lens distortion + video noise post-process from frame.camera/video
@@ -933,6 +934,8 @@ int main(int argc, char **argv) {
         fpv_surface_object_move(platformId, &pt);
 
         // 4. tick
+        // the view decides where the drone is heard from (F8 > Camera & sound)
+        fpv_set_view(camMode == 0 ? FPV_VIEW_FPV : camMode == 1 ? FPV_VIEW_CHASE : FPV_VIEW_LOS);
         fpv_drone_tick(drone, dt, &frame);
         for (int i = 0; i < 4; i++)
             propAngle[i] += frame.motors[i].rpm / 60.0 * 6.2831853 * dt * frame.motors[i].spin_direction;

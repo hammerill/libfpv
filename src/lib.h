@@ -27,10 +27,16 @@ class Overlay;
 class OsdRenderer;
 class AudioSynth;
 
+// Where the drone is heard from (F8 > Camera & sound). Auto: onboard in the
+// FPV and chase views, from the pilot in the LOS and pilot views.
+enum class HearFrom { Auto = 0, Drone = 1, Pilot = 2 };
+
 struct Settings {
     std::string preset;          // file name of the selected preset
     int overlayToggleKey = FPV_KEY_F8;
-    float audioVolume = 0.1f;
+    float audioVolume = 0.1f;  // the motors, with the beeper switch's beeps (DShot beacon)
+    float beepVolume = 0.1f;   // Betaflight's other beeps
+    HearFrom hearFrom = HearFrom::Auto;
     int osdStyle = FPV_OSD_STYLE_ANALOG;
     // camera overrides (< 0 = use the preset's value)
     float cameraUptilt = -1, cameraFov = -1;
@@ -41,6 +47,12 @@ struct Settings {
     float keyboardYawExpo = kDefaultKeyboardYawExpo;            // 1/s, see InputManager
     bool windEnabled = true;  // the game's wind, sources and blasts move the air
     float windStrength = 1.0f;  // scales the weather's wind, 0..2
+    bool batteryDrain = true;   // off: FPV_SIM_NO_BATTERY_DRAIN
+    bool damage = true;         // off: FPV_SIM_NO_DAMAGE
+    // the pilot character (fpv_pilot_*): the player's choices, applied
+    // only where the game supports them; distances in metres, < 0 = the game's
+    bool pilotStandIn = true, pilotPose = true;
+    float standInDistance = -1, standInReturnDistance = -1;
 #if defined(LIBFPV_KAMIKAZE)
     // fpv_kamikaze_config, internal units (seconds, m/s, kg, metres)
     float kamikazeArmingDelay = 0.0f, kamikazeMinImpactSpeed = 0.25f;
@@ -84,6 +96,33 @@ struct Lib {
     WindAmbient windAmbient;
     std::vector<WindSource> windSources;
     WindProbe windProbe;
+
+    // the pilot character (fpv_pilot_set_support): what the game can do and
+    // its default stand-in distances, metres
+    uint32_t pilotFeatures = 0;
+    float pilotStandInDefault = 20, pilotReturnDefault = 10;
+
+    // the view the game shows (fpv_set_view) and the ear for hearing the
+    // drone from the pilot (fpv_audio_set_listener), internal frame
+    int view = FPV_VIEW_FPV;
+    bool listenerSet = false;
+    Vec3 listenerPos;
+    Quat listenerRot;
+    // walls between the ear and the drone, and the echoes around the ear
+    // (host thread, a few times a second)
+    struct HearingProbe {
+        float timer = 0;
+        float walls = 0;           // smoothed obstacle count
+        float enclosure = 0;       // 0 open .. 1 a closed room
+        float reflectors = 0;      // share of the directions with a wall near
+        float echoDistance = 0;    // mean distance to those walls, m
+        float roomSize = 0;        // mean distance to all surfaces probed, m
+        bool valid = false;
+    } hearingProbe;
+
+    // FPV_DRONE_RADIO_ACTIVE: channels at the last movement, and its time
+    float radioRest[FPV_CHANNEL_COUNT] = {};
+    double radioMovedAt = -1e9;
 
     // presentation state (host thread)
     Vec3 chasePos;
@@ -150,6 +189,18 @@ void applyKamikazeSettings();
 uint32_t kamikazeEndingView();
 uint32_t kamikazeEndingThen();
 #endif
+
+constexpr float kPilotEarHeight = 1.6f;  // m above the pilot's feet: the LOS eye and the ear
+
+// Hearing the drone (frame.cpp, api_present.cpp): from the pilot (the
+// player's setting and the view), the ear's position, and whether the host
+// pulls any sound at all (no probes otherwise).
+bool hearsFromPilot();
+Vec3 earPosition();
+bool audioPulled();
+
+// Pushes the simulation options (battery drain, damage) to the flight model.
+void applySimOptions();
 
 // Runs a CLI script on the simulation thread; returns BFB_CLI_* code.
 int runCli(const std::string &script, std::string &output);

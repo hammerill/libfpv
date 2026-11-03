@@ -11,9 +11,14 @@
 
 namespace fpv {
 
-void updatePresentation(const fpv_frame &f);  // api_present.cpp
+void updatePresentation(const fpv_frame &f, Vec3 dronePos, Vec3 droneVel, bool beeperSwitch);  // api_present.cpp
 
 static_assert(FPV_CHANNEL_COUNT == kChannelCount, "fpv_frame.channels matches the input channels");
+
+constexpr float kWallThickness = 0.5f;   // m: hits closer than this after one are the same wall
+constexpr float kEchoRange = 40.0f;      // m: surfaces farther away make no echo worth hearing
+constexpr float kRadioJitter = 0.05f;    // of the -1..1 range: a pot's or switch's noise
+constexpr double kRadioActiveSeconds = 3.0;
 
 #if defined(LIBFPV_KAMIKAZE)
 // After the explosion the camera and the transmitter are gone: the goggles
@@ -86,6 +91,42 @@ static void refreshRaycastProxies(const FlightSnapshot &s) {
     L.world.setProxyPlanes(std::move(planes));
 }
 
+// A ray against the drone's own collision world (static surfaces, objects)
+// and the game's raycast, whichever is nearer. Host thread.
+static bool worldRay(double simTime, Vec3 o, Vec3 d, float maxDist, float &t, Vec3 &n) {
+    Lib &L = lib();
+    const CoordConverter &cv = L.conv;
+    bool any = false;
+    {
+        std::lock_guard<std::mutex> lock(L.world.mutex());
+        uint8_t mat;
+        uint32_t obj;
+        float wt;
+        Vec3 wn;
+        if (L.world.raycast(o, d, maxDist, simTime, wt, wn, mat, obj)) {
+            any = true;
+            t = wt;
+            n = wn;
+            maxDist = wt;
+        }
+    }
+    if (L.raycast) {
+        float oh[3], dh[3];
+        put3(oh, cv.posToHost(o));
+        put3(dh, cv.dirToHost(d));
+        fpv_raycast_hit hit{};
+        if (L.raycast(L.raycastUser, oh, dh, cv.lenToHost(maxDist), &hit)) {
+            float ht = cv.lenToInternal(hit.distance);
+            if (ht >= 0 && ht <= maxDist) {
+                any = true;
+                t = ht;
+                n = normalize(cv.dirToInternal({hit.normal[0], hit.normal[1], hit.normal[2]}), -d);
+            }
+        }
+    }
+    return any;
+}
+
 // The game's wind made local around the drone (probes into the world) for
 // the next simulation steps.
 static void refreshWind(const FlightSnapshot &s, float frameDt) {
@@ -95,42 +136,88 @@ static void refreshWind(const FlightSnapshot &s, float frameDt) {
         L.flight.setWind({});
         return;
     }
-    const CoordConverter &cv = L.conv;
-    // the drone's own collision world (static surfaces, objects) and the
-    // game's raycast, whichever is nearer
-    auto ray = [&](Vec3 o, Vec3 d, float maxDist, float &t, Vec3 &n) {
-        bool any = false;
-        {
-            std::lock_guard<std::mutex> lock(L.world.mutex());
-            uint8_t mat;
-            uint32_t obj;
-            float wt;
-            Vec3 wn;
-            if (L.world.raycast(o, d, maxDist, s.simTime, wt, wn, mat, obj)) {
-                any = true;
-                t = wt;
-                n = wn;
-                maxDist = wt;
-            }
-        }
-        if (L.raycast) {
-            float oh[3], dh[3];
-            put3(oh, cv.posToHost(o));
-            put3(dh, cv.dirToHost(d));
-            fpv_raycast_hit hit{};
-            if (L.raycast(L.raycastUser, oh, dh, cv.lenToHost(maxDist), &hit)) {
-                float ht = cv.lenToInternal(hit.distance);
-                if (ht >= 0 && ht <= maxDist) {
-                    any = true;
-                    t = ht;
-                    n = normalize(cv.dirToInternal({hit.normal[0], hit.normal[1], hit.normal[2]}), -d);
-                }
-            }
-        }
-        return any;
-    };
+    auto ray = [&](Vec3 o, Vec3 d, float maxDist, float &t, Vec3 &n) { return worldRay(s.simTime, o, d, maxDist, t, n); };
     WindAmbient ambient = L.windSet ? L.windAmbient : WindAmbient{};
     L.flight.setWind(L.windProbe.update(frameDt, s.pos, ambient, L.settings.windStrength, L.windSources, ray));
+}
+
+// Where the ear is when the drone is heard from the pilot: the game's
+// listener, or the pilot's head.
+Vec3 earPosition() {
+    Lib &L = lib();
+    return L.listenerSet ? L.listenerPos : L.flight.pilotPosition() + Vec3{0, kPilotEarHeight, 0};
+}
+
+// For the sound heard from the pilot (or onboard, for the room around the
+// drone): the walls between the ear and the drone, and the surfaces around
+// the ear that echo. 10 times a second, smoothed.
+static void refreshHearing(const FlightSnapshot &s, Vec3 dronePos, bool fromPilot, float frameDt) {
+    Lib &L = lib();
+    Lib::HearingProbe &h = L.hearingProbe;
+    if (!s.active || !audioPulled()) {  // no sound pulled yet: no rays
+        h.valid = false;
+        return;
+    }
+    h.timer -= frameDt;
+    if (h.valid && h.timer > 0) return;
+    h.timer = 0.1f;
+    float t;
+    Vec3 n;
+    // walls: hits along the line, both faces of a thin wall counted once
+    Vec3 ear = earPosition();
+    Vec3 d = dronePos - ear;
+    float dist = length(d);
+    int walls = 0;
+    if (dist > 0.5f) {
+        Vec3 dir = d / dist;
+        float from = 0;
+        while (walls < 4) {
+            float left = dist - 0.3f - from;
+            if (left <= 0 || !worldRay(s.simTime, ear + dir * from, dir, left, t, n)) break;
+            walls++;
+            from += t + kWallThickness;
+        }
+    }
+    // the surroundings of whichever ear is heard: six directions around and up
+    Vec3 at = fromPilot ? ear : dronePos;
+    int around = 0;
+    float hitSum = 0, allSum = 0;
+    for (int i = 0; i < 6; i++) {
+        float a = i * kPi / 3;
+        Vec3 dir{std::sin(a), 0, std::cos(a)};
+        if (worldRay(s.simTime, at, dir, kEchoRange, t, n)) {
+            around++;
+            hitSum += t;
+            allSum += t;
+        } else {
+            allSum += kEchoRange;
+        }
+    }
+    bool roof = worldRay(s.simTime, at, {0, 1, 0}, kEchoRange, t, n);
+    allSum += roof ? t : kEchoRange;
+    float reflectors = around / 6.0f;
+    float enclosure = roof ? 0.4f + 0.6f * reflectors : 0.3f * reflectors;
+    float k = h.valid ? 0.35f : 1.0f;
+    h.walls += (walls - h.walls) * k;
+    h.enclosure += (enclosure - h.enclosure) * k;
+    h.reflectors += (reflectors - h.reflectors) * k;
+    if (around) h.echoDistance += (hitSum / around - h.echoDistance) * (h.echoDistance > 0 ? k : 1.0f);
+    h.roomSize += (allSum / 7 - h.roomSize) * k;
+    h.valid = true;
+}
+
+// FPV_DRONE_RADIO_ACTIVE: armed, or a channel moved past the jitter lately.
+static bool radioActive(const FlightSnapshot &s) {
+    Lib &L = lib();
+    double now = wallSeconds();
+    for (int i = 0; i < kChannelCount; i++) {
+        if (std::fabs(s.channels[i] - L.radioRest[i]) > kRadioJitter) {
+            std::copy(s.channels.begin(), s.channels.end(), L.radioRest);
+            L.radioMovedAt = now;
+            break;
+        }
+    }
+    return s.armed || now - L.radioMovedAt < kRadioActiveSeconds;
 }
 
 }  // namespace fpv
@@ -167,6 +254,7 @@ extern "C" FPV_API fpv_result fpv_drone_tick(fpv_drone *d, float frameDt, fpv_fr
 
     refreshRaycastProxies(cur);
     refreshWind(cur, frameDt);
+    refreshHearing(cur, pos, hearsFromPilot(), frameDt);
 
     fpv_frame f;
     memset(&f, 0, sizeof(f));
@@ -183,6 +271,7 @@ extern "C" FPV_API fpv_result fpv_drone_tick(fpv_drone *d, float frameDt, fpv_fr
     if (cur.modeHorizon) flags |= FPV_DRONE_MODE_HORIZON;
     if (cur.turtle) flags |= FPV_DRONE_TURTLE;
     if (cur.osdDisabled) flags |= FPV_DRONE_OSD_DISABLED;
+    if (cur.active && radioActive(cur)) flags |= FPV_DRONE_RADIO_ACTIVE;
 #if defined(LIBFPV_KAMIKAZE)
     if (cur.active && cur.warhead.state == WarheadState::Detonated) flags |= FPV_DRONE_DETONATED;
 #endif
@@ -261,7 +350,7 @@ extern "C" FPV_API fpv_result fpv_drone_tick(fpv_drone *d, float frameDt, fpv_fr
         if (dist > 1e-3f && L.world.raycast(pos, dir / dist, dist, cur.simTime, t, n, m, o)) chase = pos + dir / dist * std::max(0.05f, t - 0.1f);
     }
     makeCamera(f.chase_camera, chase, pos - chase, {0, 1, 0}, 75.0f, 16.0f / 9.0f, 0.05f);
-    Vec3 eye = L.flight.pilotPosition() + Vec3{0, 1.6f, 0};
+    Vec3 eye = L.flight.pilotPosition() + Vec3{0, kPilotEarHeight, 0};
     makeCamera(f.los_camera, eye, pos - eye, {0, 1, 0}, 50.0f, 16.0f / 9.0f, 0.1f);
 
     // --- motors, battery, video --------------------------------------------------
@@ -322,7 +411,7 @@ extern "C" FPV_API fpv_result fpv_drone_tick(fpv_drone *d, float frameDt, fpv_fr
     for (int i = 0; i < kChannelCount; i++) f.channels[i] = cur.channels[i];
     put3(f.wind, cv.dirToHost(cur.wind) * cv.unitsPerMeter());
 
-    updatePresentation(f);
+    updatePresentation(f, pos, vel, cur.beeperSwitch);
     L.lastFrame = f;
     L.lastFrameValid = true;
     memcpy(frameOut, &f, std::min<size_t>(frameOut->struct_size, sizeof(f)));

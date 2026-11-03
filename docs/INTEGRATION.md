@@ -284,6 +284,104 @@ sheltered the drone is. DECISIONS D30 describes the model.
 - New entries in `CExplosion::aExplosions` (0xC88950, 16 entries of 0x7C
   bytes) become blasts.
 
+## The pilot
+
+In a game with a character, the character is the pilot: the drone launches
+from them, the LOS camera and the video link start from them, and they stay
+in the world while the drone flies.
+
+### The F key: back to the pilot, the drone left flying
+
+Implementing **F** is standard for every libfpv game with a character:
+
+- **F** puts the view back on the pilot character (the game's own camera and
+  controls), while the drone stays intact and present in the world. Don't
+  delete it, don't disarm it, keep calling `fpv_drone_tick` and keep drawing
+  it. The radio still flies it: technically this is another line-of-sight
+  view, from the character's own camera. If it is in the air when the player
+  presses F, it keeps flying (or falls, if the player lets go of the sticks).
+- **F7** launches a drone when there is none, as before. With a drone left
+  in the world by F, F7 doesn't spawn a new one: it puts the view back on
+  that drone. What F7 does while flying stays the game's (e.g. recall).
+- Tell libfpv: `fpv_set_view(FPV_VIEW_PILOT)` on F, and the view you go
+  back to on F7 (`FPV_VIEW_FPV`, or the chase / LOS view the player had).
+  The drone sound treats the pilot view like LOS (heard from the pilot, see
+  [Audio](#audio)): pass the game camera every frame with
+  `fpv_audio_set_listener(camera_position, camera_rotation)`, and
+  `fpv_audio_set_listener(NULL, NULL)` when you leave the pilot view.
+- The character walks and drives in the pilot view. Move the pilot with it,
+  `fpv_drone_set_pilot_position(drone, feet)`, so the LOS camera, the video
+  range and the ear follow (also the home point, if you set it to the pilot,
+  see [GPS](#telling-libfpv-where-home-is)).
+- While the drone is left in the world, keep the game's own reactions to it
+  (impacts, damage, pedestrians) running as during a flight, and keep the
+  game's HUD shown: the player is on foot.
+- Y (move the pilot to the drone) can stay available from the pilot view.
+
+### The piloting pose
+
+While the character stands still in the pilot view and the radio is in use,
+play an FPV piloting pose (standing, holding a radio transmitter in both
+hands), as the stand-in does. "In use" is `FPV_DRONE_RADIO_ACTIVE` in
+`frame.flags`: armed, or a channel moved in the last 3 s. A radio is never
+perfectly still (AUX pots and switches jitter by 1-2 %), so the flag only
+counts moves of more than 5 % of a channel's range; don't use your own
+threshold. Leave the pose as soon as the character moves.
+
+### The player's choices: `fpv_pilot_set_support`
+
+The stand-in ([Spawning](#spawning-flights-and-the-world-around-the-drone))
+and the pose are the game's code, but whether they happen is the player's
+choice, the same in every game (F8 > Fly > Pilot, both on by default).
+Once after `fpv_global_init`, say what the game does and its own stand-in
+distances:
+
+```c
+// the stand-in takes over beyond 20 m and ends back within 10 m (host units)
+fpv_pilot_set_support(FPV_PILOT_STAND_IN | FPV_PILOT_POSE, 20 * upm, 10 * upm);
+```
+
+Then read the choice whenever it is needed (cheap, every frame is fine):
+
+```c
+fpv_pilot_config pc = {sizeof pc};
+fpv_pilot_get_config(&pc);
+bool standIn = pc.features & FPV_PILOT_STAND_IN;  // distances: pc.stand_in_distance, pc.stand_in_return_distance
+bool pose = pc.features & FPV_PILOT_POSE;
+```
+
+- Stand-in off: the character is not carried with the drone. It stays at
+  the piloting spot as itself, whatever the distance (the world may then
+  load less far from it, and that's the player's call).
+- Pose off: the character keeps the game's idle animation, also as a
+  stand-in.
+- The overlay only shows what the game supports; a game that doesn't call
+  `fpv_pilot_set_support` shows no Pilot section.
+
+## Damage
+
+Make everything that looks like it could damage a prop damage it. That is
+the rule for every integration, as on a real quad:
+
+- **Surfaces.** Water, lava, fire, saws, fans, spinning blades: give their
+  triangles `FPV_MATERIAL_KILLS_PROPS` (or return such a material from the
+  raycast callback). A prop touching one breaks.
+- **Everything libfpv can't see.** Fire and flames (also a burning car or
+  a molotov's area), water volumes and the sea, bullets
+  and shotgun pellets through the props, melee hits, explosions (with or
+  without a warhead), a helicopter's rotor: call
+  `fpv_drone_damage_props(drone, motor, amount)`, with the prop that was
+  hit (the one nearest to the hit point, from `frame.motors[i].position`)
+  or -1 for all four. A bullet through a prop: about 0.5 to 1 on that prop.
+  Fire or water: about 0.5 per second on all four, every frame
+  (`0.5 * frame_dt`). An explosion: 1 on all four within its radius.
+- **Don't check the setting.** The player can make the drone immune
+  (F8 > Drone > "Props and motors take damage" off, `FPV_SIM_NO_DAMAGE`):
+  libfpv then ignores all of it, including `fpv_drone_damage_props`. The game
+  always calls it.
+- Effects that are only the game's (sparks, smoke, sound) can still play
+  when the drone is immune.
+
 ## Kamikaze builds
 
 > **Dev-gatekept.** The kamikaze feature is only documented here and in
@@ -613,6 +711,8 @@ hit. What worked in GTA IV:
   Move Niko here; Super Mario 64: Mario under the recalled drone), put it
   on **Y**, so the same key does it in every libfpv game. Like the game's
   other own keys, it can follow the label (the key marked Y on any layout).
+- Back to the pilot with the drone left in the world is **F**, and F7 goes
+  back to that drone ([The F key](#the-f-key-back-to-the-pilot-the-drone-left-flying)).
 - The radio mapping (`radio_mappings.json`) is per data folder. A player
   who already set up the radio for another libfpv game can copy that file
   into the new game's data folder.
@@ -645,7 +745,9 @@ hit. What worked in GTA IV:
   turning the drone back home shows the pilot there, as in real FPV.
   Super Mario 64 does this (Mario stays visible where he stands) and so
   does GTA San Andreas; GTA IV does not yet (the hidden character leaves
-  nobody at home).
+  nobody at home). The player can turn the stand-in and the pose off and
+  change the distances, so read them from `fpv_pilot_get_config`
+  ([The player's choices](#the-players-choices-fpv_pilot_set_support)).
 - "Return the character to where the drone is" (move here): ray down from
   the drone, load the area, put the character 1 m above the ground facing
   the drone's heading, and put the game camera behind it.
@@ -657,6 +759,20 @@ hit. What worked in GTA IV:
 A `waveOut` thread (44.1 kHz, stereo, 16-bit, 4 × 512-frame buffers) that
 pulls `fpv_audio_read` is enough, and the sound plays through the game's
 output device. Stop and join it before deleting the drone.
+
+- Call `fpv_set_view` whenever the view changes. The player chooses where
+  the drone is heard from (F8 > Camera & sound): Auto (the default) hears it
+  onboard in the FPV and chase views and from the pilot in the LOS and pilot
+  views, where it is quieter far away and behind walls (through the same
+  collision as the drone: static surfaces, objects and the raycast
+  callback), with Doppler, the ground's reflection and echoes. Without the
+  call every view sounds onboard.
+- In the pilot view (F), pass the game camera with `fpv_audio_set_listener`
+  every frame, so the drone pans to where it is on screen.
+- There are two volumes: the motors (`fpv_audio_set_volume`, with the
+  beeper switch's beeps, which come from the motors on a real quad) and
+  Betaflight's other beeps (`fpv_audio_set_beep_volume`). Players set both
+  in the overlay; a game only calls them to follow its own volume sliders.
 
 ### Sound effects for the game's reactions
 

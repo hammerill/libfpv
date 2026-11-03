@@ -37,6 +37,7 @@ engine or mod loader.
   CLI is available in-process, and `diff all` from a real quad can be imported.
 - **Physics presets.** Frame, motor, propeller, battery, VTX and camera are
   set in JSON presets (`assets/presets/`), with a separate EEPROM for each quad.
+  Players can turn off the battery drain and the prop and motor damage.
 - **GPS.** A simulated GPS and barometer drive Betaflight's speed, home
   arrow and distance, altitude, vario and distance-flown elements. The game
   can set where home is with `fpv_gps_set_home`.
@@ -51,9 +52,11 @@ engine or mod loader.
   disable switches).
   Keyboard and gamepad fallbacks are included.
 - **Presentation.** The OSD uses Betaflight's MAX7456 fonts (analog or HD
-  look). A Dear ImGui overlay opens on F8, and synthesized motor sound comes
-  through `fpv_audio_read`. Both the OSD and the overlay are returned as
-  textured triangles, so one small renderer draws both.
+  look). A Dear ImGui overlay opens on F8, and synthesized motor and beeper
+  sound comes through `fpv_audio_read`, heard onboard or from the pilot:
+  quieter far away and behind walls, with Doppler, the ground's reflection
+  and echoes. Both the OSD and the overlay are returned as textured
+  triangles, so one small renderer draws both.
 - **Camera.** Uptilt and FOV are adjustable, and there is a fisheye lens
   (on by default). Analog video noise grows with range and with obstacles in
   the way.

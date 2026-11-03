@@ -363,6 +363,7 @@ void Overlay::tabFly() {
         }
     }
     windSection();
+    pilotSection();
     sectionTitle("Input");
     InputStatus st = L.input.status();
     static const char *src[] = {"none", "radio", "gamepad (degraded)", "keyboard (degraded)", "game/script"};
@@ -373,6 +374,45 @@ void Overlay::tabFly() {
         if (ImGui::SmallButton("Set it up")) m_requestTab = &Overlay::tabRadio;
     }
     ImGui::TextDisabled("Overlay: %s", keyName(L.settings.overlayToggleKey));
+}
+
+// What the game does with its character, where it supports it (fpv_pilot_*).
+void Overlay::pilotSection() {
+    Lib &L = lib();
+    if (!L.pilotFeatures) return;
+    sectionTitle("Pilot");
+    bool changed = false;
+    if (L.pilotFeatures & FPV_PILOT_STAND_IN) {
+        changed |= ImGui::Checkbox("Stand-in at the piloting spot", &L.settings.pilotStandIn);
+        ImGui::TextDisabled(L.settings.pilotStandIn
+                                ? "Far from the drone, the character goes with it (so the world around it loads and "
+                                  "reacts) and a stand-in stays where you pilot."
+                                : "The character stays where you pilot; the world may load less far from it.");
+        ImGui::BeginDisabled(!L.settings.pilotStandIn);
+        float start = L.settings.standInDistance > 0 ? L.settings.standInDistance : L.pilotStandInDefault;
+        float stop = L.settings.standInReturnDistance > 0 ? L.settings.standInReturnDistance : L.pilotReturnDefault;
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10);
+        if (ImGui::SliderFloat("Stand in beyond", &start, 5, 300, "%.0f m")) {
+            L.settings.standInDistance = start;
+            if (stop > start) L.settings.standInReturnDistance = start;
+        }
+        changed |= ImGui::IsItemDeactivatedAfterEdit();
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10);
+        if (ImGui::SliderFloat("Back within", &stop, 1, start, "%.0f m")) L.settings.standInReturnDistance = stop;
+        changed |= ImGui::IsItemDeactivatedAfterEdit();
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Game's")) {
+            L.settings.standInDistance = L.settings.standInReturnDistance = -1;
+            changed = true;
+        }
+        ImGui::EndDisabled();
+    }
+    if (L.pilotFeatures & FPV_PILOT_POSE) {
+        changed |= ImGui::Checkbox("Piloting pose", &L.settings.pilotPose);
+        ImGui::TextDisabled("Standing still while you use the radio, the character holds it like a pilot.");
+    }
+    if (changed) saveSettings();
 }
 
 // Wind on/off and strength, and what the drone feels now.
@@ -806,6 +846,18 @@ void Overlay::tabDrone() {
                        L.presetDir.c_str());
 #endif
 
+    sectionTitle("Simulation");
+    bool changed = ImGui::Checkbox("Battery drains", &L.settings.batteryDrain);
+    ImGui::TextDisabled(L.settings.batteryDrain ? "The pack empties as you fly."
+                                                : "The pack never empties; its voltage still dips under load.");
+    changed |= ImGui::Checkbox("Props and motors take damage", &L.settings.damage);
+    ImGui::TextDisabled(L.settings.damage ? "Hits, water, fire and bullets break props; overheated motors burn out."
+                                          : "Props and motors are never damaged.");
+    if (changed) {
+        applySimOptions();
+        saveSettings();
+    }
+
     sectionTitle("Reset");
     // confirmation popups; `what` returns the status line
     auto confirm = [&](const char *button, const char *title, const char *text, fpv_result (*what)(),
@@ -1116,6 +1168,20 @@ void Overlay::tabCamera() {
     }
     sectionTitle("Sound");
     if (ImGui::SliderFloat("Motor sound volume", &L.settings.audioVolume, 0, 1.5f)) fpv_audio_set_volume(L.settings.audioVolume);
+    if (ImGui::IsItemDeactivatedAfterEdit()) saveSettings();
+    ImGui::TextDisabled("With the beeper switch's beeps: the ESCs beep through the motors.");
+    if (ImGui::SliderFloat("Beep volume", &L.settings.beepVolume, 0, 1.5f)) fpv_audio_set_beep_volume(L.settings.beepVolume);
+    if (ImGui::IsItemDeactivatedAfterEdit()) saveSettings();
+    ImGui::TextDisabled("Betaflight's other beeps: arming, low battery, failsafe.");
+    const char *hearModes[] = {"Auto", "The drone", "The pilot"};
+    int hear = (int)L.settings.hearFrom;
+    if (ImGui::Combo("Hear the drone from", &hear, hearModes, 3)) {
+        L.settings.hearFrom = (HearFrom)hear;
+        saveSettings();
+    }
+    if (L.settings.hearFrom == HearFrom::Auto)
+        ImGui::TextDisabled(hearsFromPilot() ? "Auto: from the pilot, in this view." : "Auto: onboard, in this view.");
+    ImGui::TextDisabled("From the pilot, the drone is quieter far away and behind walls, with echoes and Doppler.");
     sectionTitle("Video link");
     const fpv_frame &f = L.lastFrame;
     ImGui::Text("%s link, signal %.0f%%, noise %.0f%%", f.video.is_digital ? "Digital" : "Analog",
