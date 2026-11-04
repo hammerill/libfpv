@@ -1182,6 +1182,7 @@ void Overlay::tabCamera() {
     if (L.settings.hearFrom == HearFrom::Auto)
         ImGui::TextDisabled(hearsFromPilot() ? "Auto: from the pilot, in this view." : "Auto: onboard, in this view.");
     ImGui::TextDisabled("From the pilot, the drone is quieter far away and behind walls, with echoes and Doppler.");
+    ImGui::TextDisabled("Games that support it hear their own sounds from the pilot too.");
     sectionTitle("Video link");
     const fpv_frame &f = L.lastFrame;
     ImGui::Text("%s link, signal %.0f%%, noise %.0f%%", f.video.is_digital ? "Digital" : "Analog",

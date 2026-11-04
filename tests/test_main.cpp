@@ -2469,14 +2469,19 @@ void testHearing() {
     fpv_audio_set_beep_volume(1.0f);
     std::vector<float> buf(4800 * 2);
     Session s;
+    // 0.3 s for the hearing to settle, then the mean over 0.5 s: the four
+    // motors' slightly different rpm beat, so a 0.1 s window swings by 30 %
     auto energy = [&] {
         double e = 0;
-        for (int b = 0; b < 4; b++) {  // 0.4 s: the hearing settles, keep the last 0.1 s
+        size_t n = 0;
+        for (int b = 0; b < 8; b++) {
             s.run(0.1f);
             fpv_audio_read(buf.data(), 4800);
+            if (b < 3) continue;
+            for (float v : buf) e += v * v;
+            n += buf.size();
         }
-        for (float v : buf) e += v * v;
-        return e / buf.size();
+        return e / n;
     };
     float p[3];
     h.pos(0, 0, 0, p);
@@ -2486,23 +2491,26 @@ void testHearing() {
     s.run(1.0f);
     fpv_set_view(FPV_VIEW_FPV);
     double onboard = energy();
+    CHECK(!(s.f.flags & FPV_DRONE_HEARD_FROM_PILOT), "FPV view (Auto): heard onboard, no HEARD_FROM_PILOT flag");
     fpv_set_view(FPV_VIEW_LOS);
+    s.run(0.05f);
+    CHECK(s.f.flags & FPV_DRONE_HEARD_FROM_PILOT, "LOS view (Auto): the HEARD_FROM_PILOT flag");
     float pilot[3];
     h.pos(0, 0, -3, pilot);
     fpv_drone_set_pilot_position(s.drone, pilot);
-    double near = energy();
+    double close = energy();
     h.pos(0, 0, -60, pilot);
     fpv_drone_set_pilot_position(s.drone, pilot);
-    double far = energy();
+    double distant = energy();
     h.pos(0, 0, 60, pilot);  // as far, behind the wall
     fpv_drone_set_pilot_position(s.drone, pilot);
     double walled = energy();
     fpv_set_view(FPV_VIEW_FPV);
     double back = energy();
     std::printf("    hearing: onboard %.2e, pilot at 3 m %.2e, 60 m %.2e, 60 m behind a wall %.2e, onboard again %.2e\n",
-                onboard, near, far, walled, back);
-    CHECK(near > far * 50, "far away is much quieter (%.2e vs %.2e)", near, far);
-    CHECK(far > 0 && walled < far * 0.3, "a wall in between is quieter still (%.2e vs %.2e)", walled, far);
+                onboard, close, distant, walled, back);
+    CHECK(close > distant * 50, "far away is much quieter (%.2e vs %.2e)", close, distant);
+    CHECK(distant > 0 && walled < distant * 0.3, "a wall in between is quieter still (%.2e vs %.2e)", walled, distant);
     CHECK(std::fabs(back - onboard) < onboard * 0.3, "FPV view: onboard again (%.2e vs %.2e)", back, onboard);
     for (float v : buf) {
         if (!(std::fabs(v) <= 1.0f)) {

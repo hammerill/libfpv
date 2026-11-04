@@ -69,7 +69,17 @@ private:
     // from the pilot: the drone's mono signal travels through a delay line
     std::vector<float> m_line;  // power of two
     uint32_t m_write = 0;
-    double m_delay = -1;  // samples, < 0 = not started
+    // The read points, in samples, each smoothed per sample by three one-pole
+    // stages: the host updates the targets once a frame (a staircase), and
+    // following each step within one audio block made the pitch wobble.
+    struct Smoothed {
+        double stage[2] = {0, 0};
+        double value = 0;
+    };
+    double m_delay = -1;  // the direct sound (Smoothed's value); < 0 = not started
+    double m_delayStage[2] = {0, 0};
+    Smoothed m_ground, m_echo;  // the extra delays of the ground's reflection and the slap echo
+    float m_groundLp = 0;  // the ground keeps the lows of its reflection
     float m_air = 0, m_wall1 = 0, m_wall2 = 0;  // one-pole low-pass states
     float m_mix = 0;      // glides to hearing.fromPilot
     // reverberation: Schroeder/Freeverb, four damped combs and two all-passes

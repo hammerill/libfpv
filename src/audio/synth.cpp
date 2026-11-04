@@ -106,9 +106,7 @@ uint32_t AudioSynth::read(float *out, uint32_t frames) {
     toward(h.airCutoff, th.airCutoff);
     toward(h.wallCutoff, th.wallCutoff);
     toward(h.pan, th.pan);
-    toward(h.groundDelay, th.groundDelay);
     toward(h.groundGain, th.groundGain);
-    toward(h.echoDelay, th.echoDelay);
     toward(h.echoGain, th.echoGain);
     toward(h.reverb, th.reverb);
     toward(h.reverbTime, th.reverbTime);
@@ -117,14 +115,28 @@ uint32_t AudioSynth::read(float *out, uint32_t frames) {
     const Hearing &hf = from.hearing;
     float pausedGain = target.paused ? 0.0f : 1.0f;
 
-    // the travel time, in samples: the delay line's read point moves to the
-    // new one over the block (Doppler), at most half a sample per sample (a
-    // drone at half the speed of sound); a jump of 17 m or more between two
-    // updates is a teleport (or a new ear), taken at once
+    // the travel time, in samples. The host sets it once a frame; the read
+    // point follows it smoothly (three one-pole stages of 40 ms, per sample),
+    // so its slope is the Doppler shift without the frame rate's staircase in
+    // it (25 fps leaves a ripple of 0.05 %), at most half a sample per sample
+    // (a drone at half the speed of sound). A jump of 17 m or more between
+    // two updates is a teleport (or a new ear), taken at once.
     double maxDelay = std::min<double>(kMaxDelay * rate, kLineSize - 4.0);
     double delayTarget = std::clamp((double)th.delay * rate, 1.0, maxDelay);
-    if (m_delay < 0 || std::fabs(delayTarget - m_delay) > 0.05 * rate) m_delay = delayTarget;
-    double delayStep = std::clamp((delayTarget - m_delay) / std::max<uint32_t>(1, frames), -0.5, 0.5);
+    double groundTarget = std::max(0.0, (double)th.groundDelay * rate);
+    double echoTarget = std::max(0.0, (double)th.echoDelay * rate);
+    if (m_delay < 0 || std::fabs(delayTarget - m_delay) > 0.05 * rate) {
+        m_delay = m_delayStage[0] = m_delayStage[1] = delayTarget;
+        m_ground = Smoothed{{groundTarget, groundTarget}, groundTarget};
+        m_echo = Smoothed{{echoTarget, echoTarget}, echoTarget};
+    }
+    const double follow = 1.0 - std::exp(-1.0 / (rate * 0.04));
+    auto smooth = [&](double &value, double stage[2], double target) {
+        stage[0] += (target - stage[0]) * follow;
+        stage[1] += (stage[0] - stage[1]) * follow;
+        value += std::clamp((stage[1] - value) * follow, -0.5, 0.5);
+    };
+    const float aGround = onePole(1500.0f, rate);
 
     const float aAir = onePole(h.airCutoff, rate), aWall = onePole(h.wallCutoff, rate);
     const float beepRamp = 1.0f - std::exp(-(float)dt / 0.002f);
@@ -198,14 +210,19 @@ uint32_t AudioSynth::read(float *out, uint32_t frames) {
         // --- from the pilot ---------------------------------------------------
         m_line[m_write & (kLineSize - 1)] = mono;
         m_write++;
-        m_delay = std::clamp(m_delay + delayStep, 1.0, maxDelay);
+        smooth(m_delay, m_delayStage, delayTarget);
+        m_delay = std::clamp(m_delay, 1.0, maxDelay);
+        smooth(m_ground.value, m_ground.stage, groundTarget);
+        smooth(m_echo.value, m_echo.stage, echoTarget);
         float x = delayTap(m_delay);
-        float gd = hf.groundDelay + (h.groundDelay - hf.groundDelay) * t;
+        // the ground's reflection, low-passed: grass, dirt and asphalt are
+        // rough at the highs' wavelengths, so only the lows add up coherently
+        // (an unfiltered copy comb-filtered the whole sound into a flanger)
         float gg = hf.groundGain + (h.groundGain - hf.groundGain) * t;
-        if (gg > 1e-4f) x += gg * delayTap(std::min(maxDelay, m_delay + gd * rate));
-        float ed = hf.echoDelay + (h.echoDelay - hf.echoDelay) * t;
+        m_groundLp += (delayTap(std::min(maxDelay, m_delay + m_ground.value)) - m_groundLp) * aGround;
+        if (gg > 1e-4f) x += gg * m_groundLp;
         float eg = hf.echoGain + (h.echoGain - hf.echoGain) * t;
-        if (eg > 1e-4f) x += eg * delayTap(std::min(maxDelay, m_delay + ed * rate));
+        if (eg > 1e-4f) x += eg * delayTap(std::min(maxDelay, m_delay + m_echo.value));
         m_air += (x - m_air) * aAir;
         m_wall1 += (m_air - m_wall1) * aWall;
         m_wall2 += (m_wall1 - m_wall2) * aWall;

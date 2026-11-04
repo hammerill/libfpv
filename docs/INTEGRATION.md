@@ -769,6 +769,21 @@ output device. Stop and join it before deleting the drone.
   call every view sounds onboard.
 - In the pilot view (F), pass the game camera with `fpv_audio_set_listener`
   every frame, so the drone pans to where it is on screen.
+- **The game's own sounds from the pilot too.** While the drone is heard
+  from the pilot, `frame.flags` has `FPV_DRONE_HEARD_FROM_PILOT`. Move the
+  game's own listener to the pilot then, so every sound (traffic, peds,
+  gunfire, explosions near the drone) is heard from where the pilot stands,
+  as for a real pilot flying something far away: at `frame.los_camera`
+  (the pilot's head, facing the drone) in the FPV and chase views. In the
+  LOS and pilot views the game's camera is already there. Back to the
+  game's camera as soon as the flag goes. Most engines position sounds
+  relative to one listener or camera; redirect that, not the render camera.
+  - With a stand-in ([Spawning](#spawning-flights-and-the-world-around-the-drone)),
+    the world's population and streaming follow the drone, so once it is far
+    the pilot's surroundings empty out and get quiet (the drone and the
+    world around it are heard far off, correctly). That is the price of the
+    stand-in, not a reason to drop this: players who want a living world
+    around the pilot turn the stand-in off (F8 > Fly > Pilot).
 - There are two volumes: the motors (`fpv_audio_set_volume`, with the
   beeper switch's beeps, which come from the motors on a real quad) and
   Betaflight's other beeps (`fpv_audio_set_beep_volume`). Players set both

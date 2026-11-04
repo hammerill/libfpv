@@ -626,9 +626,15 @@ the literature on outdoor sound propagation:
   line (2 s, 690 m). The read point is the emission time,
   `tau = r / (c + dr/dt)` with c = 343 m/s, so its change gives the moving
   source's shift `f c / (c - v)` exactly (checked: 1760 Hz at 40 m/s gives
-  1993 / 1576 Hz approaching / receding, theory 1992 / 1576). It moves at
-  most half a sample per sample; a jump of 17 m or more between two updates
-  is a teleport and is taken at once.
+  1993 / 1576 Hz approaching / receding, theory 1992 / 1576). The host sets
+  tau once a frame, a staircase: the read point follows it through three
+  one-pole stages of 40 ms, per sample. Following each step within one
+  audio block instead (the first version) swung the pitch by 15 % at
+  25 fps, heard as a wobbly drone; now the ripple is under 0.3 %
+  (`fpv_synth_tests`: a drone receding at 20 m/s, hearing set at 25, 30 and
+  60 fps). The lag, about 0.12 s, only delays the shift. It moves at most
+  half a sample per sample; a jump of 17 m or more between two updates is a
+  teleport and is taken at once.
 - *Spreading.* 1/r (6 dB per doubling), with the onboard level equal to the
   level 2 m away, so a fly-by of the pilot matches the onboard sound.
 - *Air absorption.* About proportional to the frequency squared (ISO 9613-1
@@ -651,7 +657,17 @@ the literature on outdoor sound propagation:
 - *The ground.* The reflection off the ground under the ear (an image
   source), at half the level: a copy a little later, which comb-filters the
   direct sound and sweeps as the drone climbs or comes closer, the familiar
-  "phasing" of a fly-by.
+  "phasing" of a fly-by. Only below 1.5 kHz (a one-pole low-pass on the
+  reflection): grass, dirt and asphalt are rough at the highs' wavelengths,
+  so their reflection does not add up coherently. Unfiltered, the whole
+  sound was comb-filtered into a flanger. Its delay is smoothed like the
+  direct sound's, and so is the slap echo's.
+- *The game's own sounds.* `FPV_DRONE_HEARD_FROM_PILOT` in `frame.flags`
+  says the drone is heard from the pilot, so a game can hear everything
+  else from there too (its listener at `frame.los_camera`). Then the whole
+  scene sounds as it does to a real pilot whose drone is far away, which
+  the drone alone from the pilot, over the game's sounds at the drone,
+  does not.
 - *Echoes and reverberation.* Six horizontal rays and one up, 40 m, around
   the ear (or the drone, when heard onboard). The share of directions with a
   wall gives a slap echo (there and back to their mean distance, weaker

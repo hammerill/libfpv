@@ -272,6 +272,7 @@ extern "C" FPV_API fpv_result fpv_drone_tick(fpv_drone *d, float frameDt, fpv_fr
     if (cur.turtle) flags |= FPV_DRONE_TURTLE;
     if (cur.osdDisabled) flags |= FPV_DRONE_OSD_DISABLED;
     if (cur.active && radioActive(cur)) flags |= FPV_DRONE_RADIO_ACTIVE;
+    if (hearsFromPilot()) flags |= FPV_DRONE_HEARD_FROM_PILOT;
 #if defined(LIBFPV_KAMIKAZE)
     if (cur.active && cur.warhead.state == WarheadState::Detonated) flags |= FPV_DRONE_DETONATED;
 #endif

@@ -427,7 +427,14 @@ enum fpv_drone_flags {
      * in the last 3 s by more than a stick's jitter (0.05 of the -1..1 range,
      * so the noise of an AUX switch or pot doesn't count). For the pilot
      * character's piloting pose, see docs/INTEGRATION.md#the-pilot. */
-    FPV_DRONE_RADIO_ACTIVE = 1u << 10
+    FPV_DRONE_RADIO_ACTIVE = 1u << 10,
+    /* The drone is heard from the pilot (the player's "Hear the drone from"
+     * setting and the view, see fpv_set_view). The game's own sounds should
+     * then be heard from the pilot too: put the game's listener at
+     * frame.los_camera (the pilot's head, facing the drone) in the FPV and
+     * chase views; in the LOS and pilot views its camera is already there.
+     * See docs/INTEGRATION.md#audio. */
+    FPV_DRONE_HEARD_FROM_PILOT = 1u << 12
 #if defined(LIBFPV_KAMIKAZE)
     ,
     /* Kamikaze builds: the warhead exploded. The drone is destroyed (frozen

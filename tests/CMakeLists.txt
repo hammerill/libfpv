@@ -18,3 +18,9 @@ if(LIBFPV_KAMIKAZE)
   target_compile_definitions(fpv_wizard_tests PRIVATE LIBFPV_KAMIKAZE=1)
 endif()
 add_test(NAME fpv_wizard_tests COMMAND fpv_wizard_tests)
+
+# The drone sound's synth, without the library: Doppler without the frame rate's wobble.
+add_executable(fpv_synth_tests test_synth.cpp ${PROJECT_SOURCE_DIR}/src/audio/synth.cpp)
+target_include_directories(fpv_synth_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_compile_features(fpv_synth_tests PRIVATE cxx_std_17)
+add_test(NAME fpv_synth_tests COMMAND fpv_synth_tests)
