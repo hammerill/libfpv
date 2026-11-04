@@ -569,7 +569,8 @@ enum fpv_pilot_features {
      * the world's reactions) and leaves a stand-in at the piloting spot. */
     FPV_PILOT_STAND_IN = 1u << 0,
     /* The character plays a piloting pose (standing, holding a radio)
-     * while idle with FPV_DRONE_RADIO_ACTIVE. */
+     * with FPV_DRONE_RADIO_ACTIVE, while the drone is flown from its own
+     * views. Never in FPV_VIEW_PILOT: there the character is the game's. */
     FPV_PILOT_POSE = 1u << 1
 };
 

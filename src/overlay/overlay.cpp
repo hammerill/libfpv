@@ -410,7 +410,7 @@ void Overlay::pilotSection() {
     }
     if (L.pilotFeatures & FPV_PILOT_POSE) {
         changed |= ImGui::Checkbox("Piloting pose", &L.settings.pilotPose);
-        ImGui::TextDisabled("Standing still while you use the radio, the character holds it like a pilot.");
+        ImGui::TextDisabled("While you fly from the drone and use the radio, the character holds it like a pilot.");
     }
     if (changed) saveSettings();
 }

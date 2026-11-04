@@ -320,13 +320,20 @@ Implementing **F** is standard for every libfpv game with a character:
 
 ### The piloting pose
 
-While the character stands still in the pilot view and the radio is in use,
-play an FPV piloting pose (standing, holding a radio transmitter in both
-hands), as the stand-in does. "In use" is `FPV_DRONE_RADIO_ACTIVE` in
-`frame.flags`: armed, or a channel moved in the last 3 s. A radio is never
-perfectly still (AUX pots and switches jitter by 1-2 %), so the flag only
-counts moves of more than 5 % of a channel's range; don't use your own
-threshold. Leave the pose as soon as the character moves.
+While the player flies from the drone's views (FPV, chase, LOS) and the
+radio is in use, the character at the piloting spot (or its stand-in) plays
+an FPV piloting pose: standing, holding a radio transmitter in both hands.
+"In use" is `FPV_DRONE_RADIO_ACTIVE` in `frame.flags`: armed, or a channel
+moved in the last 3 s. A radio is never perfectly still (AUX pots and
+switches jitter by 1-2 %), so the flag only counts moves of more than 5 % of
+a channel's range; don't use your own threshold. Without it, release the
+pose back to the game's own idle animation.
+
+Not in the pilot view (F): there the character is the player's again and
+behaves as if there were no drone, with the game's own animations (idles,
+walking, driving), while the radio still flies the drone. Release the pose
+when the player presses F, and don't play it again until they go back to a
+drone view.
 
 ### The player's choices: `fpv_pilot_set_support`
 
@@ -354,7 +361,7 @@ bool pose = pc.features & FPV_PILOT_POSE;
   the piloting spot as itself, whatever the distance (the world may then
   load less far from it, and that's the player's call).
 - Pose off: the character keeps the game's idle animation, also as a
-  stand-in.
+  stand-in. (In the pilot view it does either way.)
 - The overlay only shows what the game supports; a game that doesn't call
   `fpv_pilot_set_support` shows no Pilot section.
 

@@ -711,6 +711,12 @@ set while armed or for 3 s after any channel moved by more than 0.05 of its
 range: noisy AUX pots and switches jitter by about 0.01-0.02, and the
 threshold is the same for every game.
 
+The pose is for the drone's views only, not the pilot view. Posing the
+character again there whenever it stood still (as first advised) fought the
+game: its own idle moves broke the pose, and the game had to suppress them.
+In the pilot view the character is the game's, as if there were no drone,
+and the radio in the player's hands is enough.
+
 ## Platforms
 
 ### D19. Windows: MinGW-w64 cross build, fully static runtimes
