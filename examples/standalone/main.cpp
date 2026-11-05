@@ -34,7 +34,8 @@
 // and targets to hit (surface objects, so a direct hit names its object_id).
 //      fpv_kamikaze_set_ending_support       the endings this game can do
 // The bomb is not installed by default: F8 > Kamikaze > "Bomb installed" (or
-// the game's own fpv_kamikaze_set_installed) adds it, for every drone.
+// the game's own fpv_kamikaze_set_installed) adds it to the current quad,
+// saved with that quad.
 // Keys: K bomb arm switch, X explode, R respawn (also during the ending).
 // After the explosion the game shows the player's ending (F8 > Kamikaze):
 // the view (signal lost or a cutscene) for its duration, then respawn, or

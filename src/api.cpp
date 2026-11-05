@@ -101,6 +101,11 @@ void loadSettings() {
                                : then == "nothing" ? FPV_KAMIKAZE_THEN_NOTHING
                                                    : -1;
         s.kamikazeOsd = j.value("kamikazeOsd", s.kamikazeOsd);
+        s.kamikazeInstalled.clear();
+        auto bomb = j.find("kamikazeInstalled");
+        if (bomb != j.end() && bomb->is_array())
+            for (const auto &q : *bomb)
+                if (q.is_string()) s.kamikazeInstalled.push_back(q.get<std::string>());
 #endif
     } catch (const std::exception &e) {
         FPV_LOGW("settings.json ignored: %s", e.what());
@@ -147,6 +152,7 @@ void saveSettings() {
     if (s.kamikazeEndingView >= 0 && s.kamikazeEndingView < 2) j["kamikazeEndingView"] = views[s.kamikazeEndingView];
     if (s.kamikazeEndingThen >= 0 && s.kamikazeEndingThen < 3) j["kamikazeEndingThen"] = thens[s.kamikazeEndingThen];
     j["kamikazeOsd"] = s.kamikazeOsd;
+    j["kamikazeInstalled"] = s.kamikazeInstalled;
 #endif
     writeFileAtomic(pathFromUtf8(L.dataDir) / "settings.json", j.dump(2));
 }
@@ -333,6 +339,9 @@ fpv_result selectPreset(const std::string &key, bool applyToFlight) {
             L.flight.applyPreset(p);
         });
     }
+#if defined(LIBFPV_KAMIKAZE)
+    applyKamikazeSettings();  // the bomb is per quad
+#endif
     return FPV_OK;
 }
 

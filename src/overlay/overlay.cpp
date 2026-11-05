@@ -661,7 +661,7 @@ void Overlay::tabKamikaze() {
     if (ImGui::Checkbox("Bomb installed", &installed)) fpv_kamikaze_set_installed(installed);
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Carry the warhead: its weight, its OSD line and the bomb arm (AUX7) and explode (AUX8) "
-                          "switches. Kept for this session, also on respawned drones.");
+                          "switches. Saved for this quad (each quad has its own), also on respawned drones.");
     warheadStatus();
     bool changed = false;
     const float w = ImGui::GetFontSize() * 14;

@@ -61,6 +61,9 @@ struct Settings {
     // the player's ending view / then (fpv_kamikaze_ending_*), -1 = the host's default
     int kamikazeEndingView = -1, kamikazeEndingThen = -1;
     bool kamikazeOsd = true;
+    // file names of the quads (presets) that carry the bomb
+    // (fpv_kamikaze_set_installed, overlay); none by default
+    std::vector<std::string> kamikazeInstalled;
 #endif
 };
 
@@ -143,9 +146,6 @@ struct Lib {
     AudioSynth *audio = nullptr;
 
 #if defined(LIBFPV_KAMIKAZE)
-    // the bomb is installed (fpv_kamikaze_set_installed, overlay): kept for
-    // the session, so every new or respawned drone carries it too; not saved
-    bool kamikazeInstalled = false;
     // the endings the host can do and its defaults (fpv_kamikaze_set_ending_support)
     uint32_t kamikazeViewMask = 0x3, kamikazeThenMask = 0x7;
     uint32_t kamikazeDefaultView = 0, kamikazeDefaultThen = 0;  // SIGNAL_LOST, RESPAWN
@@ -182,8 +182,11 @@ fpv_result resetCurrentPreset();
 fpv_result resetEverything();
 
 #if defined(LIBFPV_KAMIKAZE)
-// Pushes the kamikaze settings to the warhead and the flight model.
+// Pushes the kamikaze settings to the warhead and the flight model, the
+// bomb as the current quad has it.
 void applyKamikazeSettings();
+// The current quad carries the bomb (Settings::kamikazeInstalled).
+bool kamikazeInstalledOnCurrent();
 // The ending view / then in effect: the player's choice if the host
 // supports it, else the host's default (fpv_kamikaze_ending_*).
 uint32_t kamikazeEndingView();

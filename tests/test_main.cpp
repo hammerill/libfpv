@@ -121,6 +121,12 @@ World makeLevel(const Host &h, float size, float wallFwd) {
     return w;
 }
 
+#if defined(LIBFPV_KAMIKAZE)
+// the bomb on every spawned quad (it is saved per quad): 1 in the kamikaze
+// tests, 0 in the others, < 0 = left as the quad has it
+int g_bomb = 0;
+#endif
+
 struct Session {
     fpv_drone *drone = nullptr;
     fpv_frame f{};
@@ -133,6 +139,9 @@ struct Session {
         d.preset = preset ? preset : "freestyler-5";
         fpv_result r = fpv_drone_create(&d, &drone);
         CHECK(r == FPV_OK, "drone_create: %s", fpv_last_error());
+#if defined(LIBFPV_KAMIKAZE)
+        if (r == FPV_OK && g_bomb >= 0) fpv_kamikaze_set_installed(g_bomb);
+#endif
     }
     void run(float seconds, const std::function<void(float t)> &each = nullptr) {
         int n = (int)std::lround(seconds / 0.01f);
@@ -2134,8 +2143,10 @@ void testKamikazeGroundTap() {
 
 // Without the bomb installed the drone is a plain quad; installed, it is
 // live at once (no arming delay by default), its OSD line is a Betaflight
-// element, and it stays installed for the next drone.
+// element, and it is saved per quad: the next drone of the quad carries it,
+// another quad does not, and it survives a restart.
 void testKamikazeInstall() {
+    g_bomb = -1;  // this test installs it itself
     Host h(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1));
     float p[3];
     h.pos(0, 0, 0, p);
@@ -2205,7 +2216,35 @@ void testKamikazeInstall() {
     k = warhead(s2.drone);
     CHECK((k.flags & FPV_KAMIKAZE_INSTALLED) && k.payload_mass > 0, "a new drone carries it too");
     CHECK(osdHas(s2.f, "BOMB_SAFE"), "OSD shows BOMB_SAFE");
+
+    // per quad: another quad has none, and switching back brings it again
+    CHECK(fpv_drone_set_preset(s2.drone, "propeater-5") == FPV_OK, "set preset: %s", fpv_last_error());
+    s2.run(0.3f);
+    k = warhead(s2.drone);
+    CHECK(!fpv_kamikaze_is_installed() && !(k.flags & FPV_KAMIKAZE_INSTALLED) && k.payload_mass == 0,
+          "another quad has no bomb (%.3f kg)", k.payload_mass);
+    CHECK(fpv_drone_set_preset(s2.drone, "freestyler-5") == FPV_OK, "set preset: %s", fpv_last_error());
+    s2.run(0.3f);
+    k = warhead(s2.drone);
+    CHECK(fpv_kamikaze_is_installed() && (k.flags & FPV_KAMIKAZE_INSTALLED) && k.payload_mass > 0,
+          "back on the first quad, it carries it again");
     s2.destroy();
+
+    // saved: a restart keeps it on that quad only
+    fpv_global_terminate();
+    init(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1));
+    loadWorld(makeLevel(Host(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1)), 100, 0));
+    Session s3;
+    s3.spawn(p, "propeater-5");
+    s3.run(0.3f);
+    CHECK(!fpv_kamikaze_is_installed(), "after a restart the other quad still has none");
+    s3.destroy();
+    s3.spawn(p);
+    s3.run(0.3f);
+    k = warhead(s3.drone);
+    CHECK(fpv_kamikaze_is_installed() && (k.flags & FPV_KAMIKAZE_INSTALLED) && k.payload_mass > 0,
+          "after a restart the quad still carries it");
+    s3.destroy();
 }
 
 // The payload is real weight: reported, configurable, and it slows the climb.
@@ -2614,7 +2653,7 @@ int main(int argc, char **argv) {
             fpv_kamikaze_config kc;
             fpv_kamikaze_config_defaults(&kc);
             fpv_kamikaze_set_config(&kc);
-            fpv_kamikaze_set_installed(std::string(t.name).rfind("kamikaze", 0) == 0);
+            g_bomb = std::string(t.name).rfind("kamikaze", 0) == 0;
 #endif
         }
         int before = g_failures;

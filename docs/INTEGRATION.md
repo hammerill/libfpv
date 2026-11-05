@@ -413,9 +413,11 @@ The bomb is not installed by default: until it is, the drone flies like in
 any other build (no extra weight, no warhead OSD, the bomb switches do
 nothing). The player installs it in the overlay (F8 > Kamikaze > "Bomb
 installed"), or the game calls `fpv_kamikaze_set_installed(1)` (a
-kamikaze mission, a drone picked up). It stays installed for the session,
-not per drone: a new, respawned or repaired drone carries it too. It is
-not saved, so every launch of the game starts without it.
+kamikaze mission, a drone picked up). The choice is per quad (preset) and
+saved in `settings.json`: it applies to the current quad, switching quads
+applies that quad's own choice, and a new, respawned or repaired drone of
+the quad carries it too. A game that decides per mission sets it each time
+it spawns the drone.
 
 The motors only arm with the bomb switch off. Take off, flip it, and the
 warhead is live (OSD `BOMB_ARMED`; with an arming delay set, `ARMING 3` first).

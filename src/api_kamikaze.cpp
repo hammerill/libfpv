@@ -30,11 +30,18 @@ void applyKamikazeSettings() {
     w.osd = s.kamikazeOsd;
     L.flight.warhead().setConfig(w);
     float kg = s.kamikazePayloadKg, drop = s.kamikazePayloadDrop;
-    bool installed = L.kamikazeInstalled;
+    bool installed = kamikazeInstalledOnCurrent();
     L.runner.call([&] {
         L.flight.setBombInstalled(installed);
         L.flight.setPayload(kg, drop);
     });
+}
+
+bool kamikazeInstalledOnCurrent() {
+    Lib &L = lib();
+    if (L.presets.empty()) return false;
+    const auto &on = L.settings.kamikazeInstalled;
+    return std::find(on.begin(), on.end(), currentPreset().fileName) != on.end();
 }
 
 uint32_t kamikazeEndingView() {
@@ -109,12 +116,22 @@ FPV_API fpv_result fpv_kamikaze_set_installed(int installed) {
     Lib &L = lib();
     std::lock_guard<std::recursive_mutex> lock(L.mutex);
     if (!L.initialized) return setError(FPV_ERROR_NOT_INITIALIZED, "call fpv_global_init first");
-    L.kamikazeInstalled = installed != 0;
+    if ((installed != 0) != kamikazeInstalledOnCurrent()) {
+        auto &on = L.settings.kamikazeInstalled;
+        const std::string &quad = currentPreset().fileName;
+        if (installed) on.push_back(quad);
+        else on.erase(std::remove(on.begin(), on.end(), quad), on.end());
+        saveSettings();
+    }
     applyKamikazeSettings();
     return FPV_OK;
 }
 
-FPV_API int fpv_kamikaze_is_installed(void) { return lib().kamikazeInstalled ? 1 : 0; }
+FPV_API int fpv_kamikaze_is_installed(void) {
+    Lib &L = lib();
+    std::lock_guard<std::recursive_mutex> lock(L.mutex);
+    return L.initialized && kamikazeInstalledOnCurrent() ? 1 : 0;
+}
 
 FPV_API fpv_result fpv_kamikaze_detonate(fpv_drone *d, int evenIfSafe) {
     Lib &L = lib();

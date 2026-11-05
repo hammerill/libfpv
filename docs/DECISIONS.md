@@ -967,16 +967,20 @@ so hosts linking through CMake see the API automatically. A host built
 with it against a library built without it fails to link or to resolve
 `fpv_kamikaze_*`, which is the feature check.
 
-**Installed or not.** The bomb is a per-session choice, off by default:
+**Installed or not.** The bomb is a per-quad choice, off by default:
 `fpv_kamikaze_set_installed` or the overlay's "Bomb installed" (F8 >
 Fly). Uninstalled, the drone is the plain quad of other builds: no
 payload weight or collision sphere, no warhead OSD, and `Warhead` ignores
 AUX7 and AUX8 (it does not hold AUX1, reports both switches off, and
 neither the switches nor `fpv_kamikaze_detonate` can fire it). The flag
-lives in `Lib` and on the `Warhead` of the one `Flight`, which outlives
-drones, so a new, respawned or repaired drone keeps it; it is not saved in
-`settings.json`, since a game decides per mission whether the drone
-carries a bomb. Installing or removing it safes the warhead (a switch left
+is saved per quad: `Settings::kamikazeInstalled` lists the preset file
+names that carry it (`"kamikazeInstalled"` in `settings.json`), and
+selecting a preset pushes its choice to the `Warhead` of the one `Flight`,
+which outlives drones, so a new, respawned or repaired drone keeps it. It
+used to be a session-only flag, not saved, on the idea that a game decides
+per mission; but a player who builds a strike quad expects it to stay one,
+like any other part of the quad, and a game deciding per mission still
+can by calling `fpv_kamikaze_set_installed` at spawn. Installing or removing it safes the warhead (a switch left
 on must be cycled), except on a wreck, which stays one until repaired.
 
 **Switches.** AUX7 is the bomb arm switch and AUX8 the explode switch.

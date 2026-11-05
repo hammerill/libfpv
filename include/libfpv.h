@@ -693,8 +693,9 @@ FPV_API fpv_result fpv_wind_add_blast(const float position[3], float radius);
  * explode (AUX8). The bomb is not installed by default: the drone then
  * flies like in any other build (no extra weight, no warhead OSD, the
  * bomb switches do nothing). The player installs it in the overlay
- * (F8 > Kamikaze), or the game with fpv_kamikaze_set_installed(); it stays for
- * the session, on every new, respawned or repaired drone. With it, the
+ * (F8 > Kamikaze), or the game with fpv_kamikaze_set_installed(), on each
+ * quad (preset) separately; it is saved, and every new, respawned or repaired
+ * drone of that quad carries it. With it, the
  * rules, as on the real thing:
  *
  *   - The motors do not arm while the bomb arm switch is on. Arm the
@@ -782,11 +783,13 @@ typedef struct fpv_detonation {
  * frame; a detonation is also visible as FPV_DRONE_DETONATED. */
 FPV_API int fpv_kamikaze_poll_detonation(fpv_detonation *out);
 
-/* Installs (non-zero) or removes (0) the bomb, at once, also in flight.
- * Kept until changed or the program exits (not saved), for every drone:
- * a new or respawned one carries it too. Removing it from a destroyed
- * drone leaves the wreck until fpv_drone_repair(). The player can do the
- * same in the overlay (F8 > Kamikaze). */
+/* Installs (non-zero) or removes (0) the bomb on the current quad (preset),
+ * at once, also in flight. Each quad keeps its own choice (none by default),
+ * saved in <data_dir>/settings.json: switching the quad applies its own, and
+ * a new or respawned drone of the quad carries it too. Removing it from a
+ * destroyed drone leaves the wreck until fpv_drone_repair(). The player can
+ * do the same in the overlay (F8 > Kamikaze). fpv_kamikaze_is_installed()
+ * tells about the current quad (0 before fpv_global_init). */
 FPV_API fpv_result fpv_kamikaze_set_installed(int installed);
 FPV_API int fpv_kamikaze_is_installed(void);
 
