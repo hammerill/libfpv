@@ -1,0 +1,19 @@
+{
+    "version": 3,
+    "name": "TBob 1604.5 3650kV",
+    "fileName": "tbobby-16045-3650kV-mine",
+    "buildIn": false,
+    "description": "A couple of dudes wished to get 3mm propnuts. And thus they came into existence (or so they thought - they actually existed prior but nobody gave a fork).",
+    "motorKV": 3325.0,
+    "motorR": 0.13300000131130219,
+    "motorI0": 1.0,
+    "motorRth": 35.0,
+    "motorCth": 5.5,
+    "motorMaxT": 125.0,
+    "motorImbalance": {
+        "x": 18.5,
+        "y": 7.699999809265137,
+        "z": 6.400000095367432
+    },
+    "mass": 0.014000000432133675
+}

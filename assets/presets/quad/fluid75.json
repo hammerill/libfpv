@@ -1,0 +1,66 @@
+{
+    "version": 4,
+    "name": "Fluid75 II",
+    "fileName": "fluid75",
+    "buildIn": false,
+    "description": "A 75mm whoop retrofitted with mid-tier motors: a 75mm 1S whoop with 22000KV 0802 motors and a cheap aliexprop toothpick frame to mitigate PID tune problems. It seems the decision to use solid core wire wasn't the smartest, and thus arises the kraken!",
+    "frameDragArea": {
+        "x": 0.00165,
+        "y": 0.00255,
+        "z": 0.0011
+    },
+    "frameDragConstant": 1.25,
+    "mass": 0.01,
+    "invInertia": {
+        "x": 35500,
+        "y": 22000,
+        "z": 37530
+    },
+    "gyroBaseNoiseAmp": 0.03999999910593033,
+    "gyrobaseNoiseFreq": 500,
+    "frameHarmonic1Amp": 0.010000010952353477,
+    "frameHarmonic1Freq": 370,
+    "frameHarmonic2Amp": 0.015000000596046448,
+    "frameHarmonic2Freq": 600,
+    "minPropWashSpeed": 0.5,
+    "maxPropWashSpeed": 8,
+    "propWashAngleOfAttack": 0.12,
+    "propWashFactor": 0.5,
+    "maxGroundEffectDist": 0.125,
+    "motor1Pos": {
+        "x": 0.026516500860452652,
+        "y": 0.0005,
+        "z": -0.026516500860452652
+    },
+    "motor2Pos": {
+        "x": 0.026516500860452652,
+        "y": 0.0005,
+        "z": 0.026516500860452652
+    },
+    "motor3Pos": {
+        "x": -0.026516500860452652,
+        "y": 0.0005,
+        "z": -0.026516500860452652
+    },
+    "motor4Pos": {
+        "x": -0.026516500860452652,
+        "y": 0.0005,
+        "z": 0.026516500860452652
+    },
+    "motor1Dir": -1,
+    "motor2Dir": 1,
+    "motor3Dir": 1,
+    "motor4Dir": -1,
+    "motorVariance": {
+        "x": 0.996999979019165,
+        "y": 1.0010000467300415,
+        "z": 0.9989999532699585,
+        "w": 1
+    },
+    "motor": "R-Paowah 0802 Evie 25000kv",
+    "propeller": "Pfan 1614 PC3",
+    "battery": "GoblinII 1S 580mah",
+    "vtx": "cheap 25mW analog vtx",
+    "soundMaxRpm": 64700,
+    "model": "vtx-slayer-one(3\")"
+}

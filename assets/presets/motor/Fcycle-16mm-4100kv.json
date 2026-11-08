@@ -1,0 +1,19 @@
+{
+    "version": 3,
+    "name": "Fcycle 16mm 41000kV",
+    "fileName": "Fcycle-16mm-4100kv",
+    "buildIn": false,
+    "description": "A high performance notchy 3mm propnut motor featuring high temperature motor wires",
+    "motorKV": 4100,
+    "motorR": 0.101,
+    "motorI0": 1,
+    "motorRth": 35,
+    "motorCth": 5.3,
+    "motorMaxT": 140,
+    "motorImbalance": {
+        "x": 18.5,
+        "y": 7.699999809265137,
+        "z": 6.400000095367432
+    },
+    "mass": 0.013
+}

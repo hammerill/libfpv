@@ -1,0 +1,12 @@
+{
+    "version": 3,
+    "name": "SHL 4s 680mah LiHV",
+    "fileName": "SHL-4s-680mah-LiHV",
+    "buildIn": false,
+    "description": "A lightweight powerful battery",
+    "maxVoltageSag": 1.37,
+    "batCellCount": 4,
+    "batCapacityCharged": 682,
+    "batCapacity": 652,
+    "mass": 0.062
+}

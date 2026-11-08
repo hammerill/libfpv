@@ -1,0 +1,23 @@
+{
+    "version": 3,
+    "name": "Pfan 1614 PC3",
+    "fileName": "Pfan-1614-PC3",
+    "buildIn": false,
+    "description": "A 40mm, 1.4-inch-pitch, three-blade whoop propeller weighing 0.24g and designed for 0802 motors.",
+    "bladeCount": 3,
+    "diameterInch": 1.57,
+    "propMaxRpm": 47900,
+    "propAudioPitch": 1,
+    "propAFactor": 2.00771484375e-10,
+    "propTorqueFactor": 0.0059,
+    "propInertia": 1.8e-8,
+    "propThrustFactor": {
+        "x": -0.00042,
+        "y": -0.01,
+        "z": 0.58
+    },
+    "propHarmonic1Amp": 0.002,
+    "propHarmonic2Amp": 0.01,
+    "mass": 0.00023999999393709004,
+    "durability": 32
+}

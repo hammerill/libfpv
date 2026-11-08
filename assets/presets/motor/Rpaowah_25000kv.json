@@ -1,0 +1,19 @@
+{
+    "version": 1,
+    "name": "R-Paowah 0802 Evie 25000kv",
+    "fileName": "Rpaowah_25000kv",
+    "buildIn": false,
+    "description": "Medium-level performance notchy motors for 35mm-45mm blades. Bent a motor? That's $15 down the drain!",
+    "motorKV": 23000,
+    "motorR": 0.155,
+    "motorI0": 1.55,
+    "motorRth": 110,
+    "motorCth": 0.125,
+    "motorMaxT": 150,
+    "motorImbalance": {
+        "x": 2,
+        "y": 1.125,
+        "z": 1.5
+    },
+    "mass": 0.001825000043027103
+}

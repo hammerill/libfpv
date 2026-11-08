@@ -1,0 +1,22 @@
+{
+    "version": 3,
+    "name": "SBanged 3.5x2.5x3",
+    "fileName": "sprop-bash-3.5x2.5x3",
+    "buildIn": false,
+    "description": "A 3.5x2.5x3 propeller designed for light 3.5\" freestyle basher builds featuring 3mm propeller shafts, delivering high speed and sharp maneuverability, but a bit more durable than your standard ultralight prop",
+    "bladeCount": 3,
+    "propMaxRpm": 36540.0,
+    "propAudioPitch": 1.0,
+    "propAFactor": 1.7219359271791746e-9,
+    "propTorqueFactor": 0.008999999612569809,
+    "propInertia": 9.999999974752428e-7,
+    "propThrustFactor": {
+        "x": -0.0012000000569969416,
+        "y": -0.09000000357627869,
+        "z": 5.880000114440918
+    },
+    "propHarmonic1Amp": 0.06499999761581421,
+    "propHarmonic2Amp": 0.30000001192092898,
+    "mass": 0.0017999999690800906,
+    "durability": 1.2000000476837159
+}

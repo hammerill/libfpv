@@ -1,0 +1,12 @@
+{
+    "version": 3,
+    "name": "SHL 4s 1100mah",
+    "fileName": "shl-4s-1100mah",
+    "buildIn": true,
+    "description": "A used and abused but dependable 4S 850mAh lithium-polymer pack, ideal for simulating real-world performance. Affordable and cheerful, with a touch of voltage sag under load—just like the budget packs many pilots start with.",
+    "maxVoltageSag": 1.149999976158142,
+    "batCellCount": 4,
+    "batCapacityCharged": 1100.0,
+    "batCapacity": 1100.0,
+    "mass": 0.12999999523162843
+}

@@ -1,0 +1,12 @@
+{
+    "version": 3,
+    "name": "GoblinII 1S 580mah",
+    "fileName": "goblinii-480",
+    "buildIn": false,
+    "description": "A high-performance 1S Tinywhoop cell for 70 to 80mm class of tiny whoops and toothpicks, sloppily attatched to the frame with a single rubber band protected by a DIY heat shrink lipo condom",
+    "maxVoltageSag": 0.55,
+    "batCellCount": 1,
+    "batCapacityCharged": 610,
+    "batCapacity": 580,
+    "mass": 0.015
+}
