@@ -1085,11 +1085,15 @@ void testDiffImport(const std::string &corpusDir) {
     loadWorld(makeLevel(Host(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1)), 100, 0));
     int files = 0;
     std::error_code ec;
-    for (auto &e : fs::directory_iterator(corpusDir, ec)) {
-        if (e.path().extension() != ".txt") continue;
+    // sorted: directory order differs between platforms (APFS, ext4, Node)
+    std::vector<fs::path> corpus;
+    for (auto &e : fs::directory_iterator(corpusDir, ec))
+        if (e.path().extension() == ".txt") corpus.push_back(e.path());
+    std::sort(corpus.begin(), corpus.end());
+    for (const fs::path &path : corpus) {
         files++;
-        std::string name = e.path().filename().string();
-        FILE *fp = std::fopen(e.path().string().c_str(), "rb");
+        std::string name = path.filename().string();
+        FILE *fp = std::fopen(path.string().c_str(), "rb");
         std::string text;
         char buf[4096];
         size_t n;
@@ -1192,6 +1196,14 @@ void testThreadedMode() {
     fpv_frame f{};
     f.struct_size = sizeof(f);
     float ch[8] = {0, 0, -1, 0, -1, -1, -1, -1};
+    // warm up disarmed before measuring: a fresh data folder's first boot
+    // (and, on the web, the catch-up after it) must not count as pacing
+    for (auto w0 = std::chrono::steady_clock::now();
+         std::chrono::steady_clock::now() - w0 < std::chrono::milliseconds(300);) {
+        fpv_input_set_channels(ch, 8);
+        fpv_drone_tick(d, 0.016f, &f);
+        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+    }
     auto t0 = std::chrono::steady_clock::now();
     double simStart = -1;
     while (std::chrono::steady_clock::now() - t0 < std::chrono::milliseconds(1500)) {
@@ -2418,9 +2430,12 @@ void testSimOptions() {
         CHECK(fpv_sim_get_options() == options, "options read back %u", fpv_sim_get_options());
         Session s;
         s.spawn(p);
-        s.arm();
+        // The pack's own voltage is read disarmed: armed on the ground with
+        // air mode, the PID loop spins the motors up unpredictably (up to
+        // full command), and that sag would hide whether charge was lost.
         s.run(0.5f);
         fresh = s.f.battery.cell_voltage;
+        s.arm();
         minCell = fresh;
         for (int i = 0; i < 12; i++) {
             fpv_drone_reset(s.drone, p, rot);
@@ -2430,6 +2445,7 @@ void testSimOptions() {
             s.run(0.5f);
         }
         fpv_drone_reset(s.drone, p, rot);
+        s.rc.ch[4] = -1.0f;  // disarm
         s.run(1.0f);
         after = s.f.battery.cell_voltage;
         s.destroy();
@@ -2636,16 +2652,18 @@ int main(int argc, char **argv) {
 #endif
     };
     int ran = 0;
+    const std::string dataRoot = g_dataDir;
     for (auto &t : tests) {
         if (!filter.empty() && ("," + filter + ",").find("," + std::string(t.name) + ",") == std::string::npos) continue;
-        if (!fpv_is_initialized() && std::string(t.name) != "threaded")
-            init(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1));
-        // every test starts from libfpv's default Betaflight configuration
+        // Every test starts from a fresh libfpv in a folder of its own: no
+        // test sees what an earlier one left behind (the quads' EEPROMs,
+        // settings, sim state), so the results do not depend on which tests
+        // ran before or in what order a platform lists the diff corpus.
+        fpv_global_terminate();
+        g_dataDir = (fs::path(dataRoot) / t.name).string();
+        if (std::string(t.name) != "threaded") init(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1));
         if (fpv_is_initialized()) {
-            char *o = nullptr;
-            fpv_cli_exec("defaults\nsave", &o);
-            fpv_free(o);
-            // and from a plain 200 m ground in the default convention
+            // a plain 200 m ground in the default convention
             loadWorld(makeLevel(Host(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1)), 100, 0));
 #if defined(LIBFPV_KAMIKAZE)
             // the other tests fly a bare quad and read Betaflight's own OSD
@@ -2667,7 +2685,7 @@ int main(int argc, char **argv) {
     }
     fpv_global_terminate();
     std::error_code ec;
-    fs::remove_all(g_dataDir, ec);
+    fs::remove_all(dataRoot, ec);
     std::printf("\n%d tests, %d checks, %d failures\n", ran, g_checks, g_failures);
     return g_failures ? 1 : 0;
 }
