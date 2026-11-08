@@ -135,6 +135,19 @@ This makes `libfpv.a` for the game's WebAssembly module, and
 [docs/WEB.md](docs/WEB.md) for porting a mod and for what differs in a
 browser.
 
+### Running the tests offline
+
+`tools/run-tests.sh` builds and runs the test suite with no network access.
+It runs natively by default; with `--web` it does the same Emscripten + Node
+run as CI. It can run only some tests, and with `--repeat` it reruns them to
+catch flaky ones:
+
+```sh
+tools/run-tests.sh                          # native, every test
+tools/run-tests.sh --web                    # as in CI (needs an installed emsdk)
+tools/run-tests.sh --repeat 20 sim_options  # one test, 20 times
+```
+
 ### Updating
 
 `git pull` alone is usually not enough. It does not move the submodules to
