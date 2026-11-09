@@ -544,8 +544,9 @@ FPV_API void fpv_set_view(fpv_view view);
  * ======================================================================== */
 
 enum fpv_sim_options {
-    /* The battery never runs empty: it still sags under load (the OSD
-     * voltage dips in a punch), but it does not lose its charge. */
+    /* The battery stops draining: it keeps the charge it has when the
+     * option is turned on (a drone spawned or repaired after it gets a full
+     * pack) and still sags under load (the OSD voltage dips in a punch). */
     FPV_SIM_NO_BATTERY_DRAIN = 1u << 0,
     /* Props and motors are never damaged: no broken props from hits,
      * prop-killing materials or fpv_drone_damage_props, no burned motors. */

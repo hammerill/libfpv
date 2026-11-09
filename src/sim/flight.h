@@ -79,8 +79,8 @@ public:
     // Adds `amount` (0..1) to a prop's damage, motor -1 = all. Simulation
     // thread; nothing with damage off.
     void damageProps(int motor, float amount);
-    // The player's simulation options (any thread): the battery keeps its
-    // charge (it still sags), props and motors take no damage.
+    // The player's simulation options (any thread): the battery keeps the
+    // charge it has (it still sags; a respawn brings a full one), props and motors take no damage.
     void setBatteryDrain(bool on) { m_batteryDrain = on; }
     void setDamage(bool on) { m_damage = on; }
     // Zeroes Betaflight's total armed time, the OSD flight timer.
@@ -159,7 +159,7 @@ private:
     Quat m_rot;
     float m_propDamage[4] = {0, 0, 0, 0};
     std::atomic<bool> m_batteryDrain{true}, m_damage{true};
-    void keepBattery();  // FPV_SIM_NO_BATTERY_DRAIN
+    void keepBattery(double capacity);  // FPV_SIM_NO_BATTERY_DRAIN
     void keepMotors();   // FPV_SIM_NO_DAMAGE
     double m_simTime = 0;
     double m_lastGroundContact = -1;

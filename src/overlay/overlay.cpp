@@ -849,7 +849,7 @@ void Overlay::tabDrone() {
     sectionTitle("Simulation");
     bool changed = ImGui::Checkbox("Battery drains", &L.settings.batteryDrain);
     ImGui::TextDisabled(L.settings.batteryDrain ? "The pack empties as you fly."
-                                                : "The pack never empties; its voltage still dips under load.");
+                                                : "The pack stays at its current charge (a respawn brings a full one); its voltage still dips under load.");
     changed |= ImGui::Checkbox("Props and motors take damage", &L.settings.damage);
     ImGui::TextDisabled(L.settings.damage ? "Hits, water, fire and bullets break props; overheated motors burn out."
                                           : "Props and motors are never damaged.");

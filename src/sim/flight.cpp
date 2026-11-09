@@ -226,12 +226,14 @@ void Flight::damageProps(int motor, float amount) {
         if (motor < 0 || motor == i) m_propDamage[i] = std::min(1.0f, m_propDamage[i] + amount);
 }
 
-// The pack is topped up before every step, so its voltage curve stays at
-// full charge; the sag (current times the internal resistance) still
-// follows the load.
-void Flight::keepBattery() {
+// The charge a step drew is put back after it, so the pack stays at the
+// level it had when drain was turned off (a respawn or repair still fits a
+// full one); the sag (current times the internal resistance) still follows
+// the load.
+void Flight::keepBattery(double capacity) {
     SimITL::SimState &ss = SimITL::Sim::getInstance().mSimState;
-    ss.batteryState.batCapacity = ss.stateInit.quadBatCapacityCharged;
+    ss.batteryState.batCapacity = capacity;
+    ss.batteryState.mAhDrawn = ss.stateInit.quadBatCapacityCharged - capacity;
 }
 
 // The windings never reach the burn-out temperature (they still warm up),
@@ -617,9 +619,11 @@ void Flight::step(float dt, const float channels[kChannelCount], bool radioLost)
     bfb_gps_update(m_pos.x, m_pos.z, m_pos.y, m_vel.x, m_vel.z, m_vel.y);
     bfb_baro_update(m_pos.y);
 
-    if (!m_batteryDrain) keepBattery();
+    const bool drain = m_batteryDrain;
+    const double charge = SimITL::Sim::getInstance().mSimState.batteryState.batCapacity;
     if (!m_damage) keepMotors();
     simitl_update(m_input);
+    if (!drain) keepBattery(charge);
     if (!m_damage) keepMotors();
     // after the update: arming inside it may have just moved home
     {

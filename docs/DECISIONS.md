@@ -526,12 +526,15 @@ Players can turn off two parts of the simulation in F8 > Drone (saved in
 `settings.json`, `fpv_sim_set_options` for the game): the battery's drain
 and the damage to props and motors. Both are on by default.
 
-- **No battery drain** tops the pack up to SimITL's charged capacity before
-  every step (`Flight::keepBattery`), so the voltage curve stays at full
-  charge. The sag is computed afterwards from the step's current (D27), so
-  the OSD voltage still dips in a punch and comes back at hover, as on a
-  fresh pack. The mAh counter stays near 0: it is Betaflight's reading of
-  the charge actually lost, and showing a made-up number would be worse.
+- **No battery drain** puts back the charge each step drew
+  (`Flight::keepBattery`), so the pack freezes at the level it had when
+  drain was turned off: a half-flown pack stays half-flown, and the
+  mAh counter holds its reading. A respawn or repair (SimITL's Repair
+  command, run outside the step) still fits a full pack, which then stays
+  full. Topping up to full every step was the first version, but it made
+  turning drain off mid-flight refill the pack, which players read as
+  a free charge. The sag is computed inside the step from its current
+  (D27), so the OSD voltage still dips in a punch and comes back at hover.
 - **No damage** ignores every source of prop damage in libfpv (strikes,
   `FPV_MATERIAL_KILLS_PROPS`, `fpv_drone_damage_props`) and keeps the
   windings 1 C under SimITL's burn-out temperature before and after each

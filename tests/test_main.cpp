@@ -2459,6 +2459,51 @@ void testSimOptions() {
     CHECK(std::fabs(fresh - after) < 0.02f, "no drain: same idle voltage (%.2f -> %.2f V/cell)", fresh, after);
     CHECK(fresh - minCell > 0.15f, "no drain: still sags in a punch (%.2f -> %.2f V/cell)", fresh, minCell);
 
+    // turning drain off keeps the charge the pack has; a respawn is full
+    {
+        fpv_sim_set_options(0);
+        Session s;
+        s.spawn(p);
+        s.arm();
+        for (int i = 0; i < 6; i++) {
+            fpv_drone_reset(s.drone, p, rot);
+            s.rc.ch[2] = 1.0f;
+            s.run(1.5f);
+            s.rc.ch[2] = -1.0f;
+            s.run(0.5f);
+        }
+        fpv_drone_reset(s.drone, p, rot);
+        s.rc.ch[4] = -1.0f;  // disarm
+        s.run(1.0f);
+        float drained = s.f.battery.cell_voltage, mah = s.f.battery.mah_drawn;
+        fpv_sim_set_options(FPV_SIM_NO_BATTERY_DRAIN);
+        s.rc.ch[4] = 1.0f;
+        s.arm();
+        for (int i = 0; i < 4; i++) {
+            fpv_drone_reset(s.drone, p, rot);
+            s.rc.ch[2] = 1.0f;
+            s.run(1.5f);
+            s.rc.ch[2] = -1.0f;
+            s.run(0.5f);
+        }
+        fpv_drone_reset(s.drone, p, rot);
+        s.rc.ch[4] = -1.0f;
+        s.run(1.0f);
+        std::printf("    drain turned off: %.2f -> %.2f V/cell, %.1f -> %.1f mAh\n", drained, s.f.battery.cell_voltage, mah,
+                    s.f.battery.mah_drawn);
+        CHECK(fresh - drained > 0.03f, "drained before (%.2f -> %.2f V/cell)", fresh, drained);
+        CHECK(std::fabs(s.f.battery.cell_voltage - drained) < 0.02f, "keeps the drained level (%.2f, %.2f V/cell)", drained,
+              s.f.battery.cell_voltage);
+        CHECK(std::fabs(s.f.battery.mah_drawn - mah) < 1.0f, "no more mAh drawn (%.1f -> %.1f)", mah, s.f.battery.mah_drawn);
+        s.destroy();
+        s.spawn(p);
+        s.run(0.5f);
+        CHECK(std::fabs(s.f.battery.cell_voltage - fresh) < 0.02f && s.f.battery.mah_drawn < 1.0f,
+              "a respawned drone has a full pack (%.2f V/cell, %.1f mAh)", s.f.battery.cell_voltage, s.f.battery.mah_drawn);
+        s.destroy();
+        fpv_sim_set_options(0);
+    }
+
     Session s;
     s.spawn(p);
     fpv_sim_set_options(FPV_SIM_NO_DAMAGE);
