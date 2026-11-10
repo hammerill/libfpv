@@ -2637,6 +2637,254 @@ void testHearing() {
     s.destroy();
 }
 
+
+// --- portals, pushes, cargo, game controls -----------------------------------------
+
+// Host quaternion of the rotation that takes the host axes (right, up,
+// forward) to r2, u2, f2 (host vectors, unit, same handedness).
+void quatFromAxes(const Host &h, const float r2[3], const float u2[3], const float f2[3], float q[4]) {
+    // M = [r2 u2 f2] * [R U F]^T
+    float m[3][3];
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++) m[i][j] = r2[i] * h.R[j] + u2[i] * h.U[j] + f2[i] * h.F[j];
+    float tr = m[0][0] + m[1][1] + m[2][2];
+    if (tr > 0) {
+        float s = std::sqrt(tr + 1.0f) * 2;
+        q[3] = 0.25f * s;
+        q[0] = (m[2][1] - m[1][2]) / s;
+        q[1] = (m[0][2] - m[2][0]) / s;
+        q[2] = (m[1][0] - m[0][1]) / s;
+    } else if (m[0][0] > m[1][1] && m[0][0] > m[2][2]) {
+        float s = std::sqrt(1.0f + m[0][0] - m[1][1] - m[2][2]) * 2;
+        q[3] = (m[2][1] - m[1][2]) / s;
+        q[0] = 0.25f * s;
+        q[1] = (m[0][1] + m[1][0]) / s;
+        q[2] = (m[0][2] + m[2][0]) / s;
+    } else if (m[1][1] > m[2][2]) {
+        float s = std::sqrt(1.0f + m[1][1] - m[0][0] - m[2][2]) * 2;
+        q[3] = (m[0][2] - m[2][0]) / s;
+        q[0] = (m[0][1] + m[1][0]) / s;
+        q[1] = 0.25f * s;
+        q[2] = (m[1][2] + m[2][1]) / s;
+    } else {
+        float s = std::sqrt(1.0f + m[2][2] - m[0][0] - m[1][1]) * 2;
+        q[3] = (m[1][0] - m[0][1]) / s;
+        q[0] = (m[0][2] + m[2][0]) / s;
+        q[1] = (m[1][2] + m[2][1]) / s;
+        q[2] = 0.25f * s;
+    }
+}
+
+// An opening on a wall: centre (right, up, forward) metres, facing `out`
+// (host unit vector), upright.
+fpv_portal makePortal(const Host &h, float r, float u, float f, const float out[3], float halfW, float halfH) {
+    fpv_portal p{};
+    h.pos(r, u, f, p.position);
+    float up[3] = {h.U[0], h.U[1], h.U[2]};
+    // right = k * (up x out), with k the host's handedness (R = k * U x F)
+    float uxf[3] = {h.U[1] * h.F[2] - h.U[2] * h.F[1], h.U[2] * h.F[0] - h.U[0] * h.F[2], h.U[0] * h.F[1] - h.U[1] * h.F[0]};
+    float k = h.R[0] * uxf[0] + h.R[1] * uxf[1] + h.R[2] * uxf[2];
+    float right[3] = {k * (up[1] * out[2] - up[2] * out[1]), k * (up[2] * out[0] - up[0] * out[2]),
+                      k * (up[0] * out[1] - up[1] * out[0])};
+    quatFromAxes(h, right, up, out, p.rotation);
+    p.half_width = halfW * h.upm;
+    p.half_height = halfH * h.upm;
+    return p;
+}
+
+// A drone thrown at an opening on a wall comes out of the linked one on
+// another wall, moving out of it; the wall around a too small opening stops it.
+void testPortals() {
+    Host h(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1));
+    World w = makeLevel(h, 100, 10);  // the wall across forward at 10 m
+    {
+        // a second wall: across right at 30 m
+        float a[3], b[3], c[3], d[3];
+        h.pos(30, -1, -50, a);
+        h.pos(30, -1, 50, b);
+        h.pos(30, 60, 50, c);
+        h.pos(30, 60, -50, d);
+        w.quad(a, b, c, d);
+    }
+    loadWorld(w);
+    float back[3] = {-h.F[0], -h.F[1], -h.F[2]}, left[3] = {-h.R[0], -h.R[1], -h.R[2]};
+    fpv_portal_link link{};
+    link.a = makePortal(h, 0, 3, 10, back, 0.8f, 1.4f);   // on the wall ahead, facing the drone
+    link.b = makePortal(h, 30, 3, 0, left, 0.8f, 1.4f);   // on the wall to the right, facing back left
+    CHECK(fpv_portals_set(&link, 1) == FPV_OK, "portals_set: %s", fpv_last_error());
+
+    // the lens sits ahead of the centre: with the centre 3 cm before the
+    // opening, the camera already looks out of the other one
+    Session c;
+    float p[3], v[3];
+    h.pos(0, 3, 9.97f, p);
+    c.spawn(p);
+    c.run(0.02f);
+    std::printf("    centre at fwd %.3f, camera at right %.2f fwd %.2f\n", h.fwd(c.f.position),
+                h.right(c.f.camera.position), h.fwd(c.f.camera.position));
+    CHECK(c.f.portal_passes == 0 && h.fwd(c.f.position) < 10, "the centre has not passed yet");
+    CHECK(h.right(c.f.camera.position) > 25 && h.dir(c.f.camera.forward, h.R) < -0.9f,
+          "the camera looks out of the right wall's opening, to the left");
+    c.destroy();
+
+    // thrown at the opening at 15 m/s
+    auto thrown = [&](Session &s, int &impactsBefore, float pos[3], float vel[3]) {
+        h.pos(0, 5, 0, p);
+        s.spawn(p);
+        for (int i = 0; i < 3; i++) v[i] = h.F[i] * 15 * h.upm;
+        s.run(0.02f);
+        fpv_drone_push(s.drone, v, 1);
+        impactsBefore = 0;
+        bool seen = false;
+        s.run(1.2f, [&](float) {
+            if (s.f.portal_passes == 0) impactsBefore += (int)s.f.impact_count;
+            else if (!seen) {
+                seen = true;
+                std::memcpy(pos, s.f.position, sizeof(float) * 3);
+                std::memcpy(vel, s.f.velocity, sizeof(float) * 3);
+            }
+        });
+    };
+    Session s;
+    int impacts;
+    float at[3] = {0, 0, 0}, vel[3] = {0, 0, 0};
+    thrown(s, impacts, at, vel);
+    std::printf("    out of the portal at right %.2f up %.2f fwd %.2f, velocity right %.2f up %.2f m/s, last %d\n",
+                h.right(at), h.up(at), h.fwd(at), h.dir(vel, h.R) / h.upm, h.dir(vel, h.U) / h.upm, s.f.last_portal);
+    CHECK(s.f.portal_passes == 1 && s.f.last_portal == 0, "one pass, into side a (%u, %d)", s.f.portal_passes,
+          s.f.last_portal);
+    CHECK(h.right(at) < 30 && h.right(at) > 29, "came out just in front of the right wall (%.2f)", h.right(at));
+    CHECK(std::fabs(h.fwd(at)) < 0.8f && std::fabs(h.up(at) - 3) < 1.4f, "within the exit (fwd %.2f, up %.2f)",
+          h.fwd(at), h.up(at));
+    CHECK(h.dir(vel, h.R) / h.upm < -11, "moving out of the exit at speed, to the left (%.2f m/s)",
+          h.dir(vel, h.R) / h.upm);
+    CHECK(std::fabs(h.dir(vel, h.F)) / h.upm < 1, "no forward speed left (%.2f m/s)", h.dir(vel, h.F) / h.upm);
+    CHECK(impacts == 0, "nothing hit on the way through (%d impacts)", impacts);
+    s.destroy();
+
+    // too narrow for the quad: the wall around it stops it
+    link.a.half_width = link.a.half_height = 0.03f * h.upm;
+    fpv_portals_set(&link, 1);
+    Session t;
+    thrown(t, impacts, at, vel);
+    CHECK(t.f.portal_passes == 0, "no pass through a 6 cm opening");
+    CHECK(impacts > 0 && h.fwd(t.f.position) < 10, "hit the wall instead (%d impacts, fwd %.2f)", impacts,
+          h.fwd(t.f.position));
+    t.destroy();
+    fpv_portals_set(nullptr, 0);
+}
+
+// fpv_drone_push sets or adds velocity at once.
+void testPush() {
+    Host h(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1));
+    Session s;
+    float p[3], v[3];
+    h.pos(0, 20, 0, p);
+    s.spawn(p);
+    s.run(0.05f);
+    for (int i = 0; i < 3; i++) v[i] = h.F[i] * 6;
+    CHECK(fpv_drone_push(s.drone, v, 1) == FPV_OK, "push: %s", fpv_last_error());
+    s.run(0.03f);
+    CHECK(std::fabs(h.dir(s.f.velocity, h.F) - 6) < 0.3f, "forward 6 m/s after a replacing push (%.2f)",
+          h.dir(s.f.velocity, h.F));
+    fpv_drone_push(s.drone, v, 0);
+    s.run(0.03f);
+    CHECK(std::fabs(h.dir(s.f.velocity, h.F) - 12) < 0.5f, "12 m/s after an added push (%.2f)",
+          h.dir(s.f.velocity, h.F));
+    s.destroy();
+}
+
+// Cargo: hangs under the quad (it rests on it), and its weight slows a climb.
+void testCargo() {
+    Host h(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1));
+    auto climb = [&](const fpv_cargo *cargo, float &rest) {
+        Session s;
+        float p[3];
+        h.pos(0, 1.5f, 0, p);  // picked up in the air, then it settles on the cargo
+        s.spawn(p);
+        if (cargo) CHECK(fpv_drone_set_cargo(s.drone, cargo) == FPV_OK, "set_cargo: %s", fpv_last_error());
+        s.run(1.5f);
+        rest = h.up(s.f.position);
+        s.arm();
+        float y0 = h.up(s.f.position);
+        s.rc.ch[2] = 1;
+        s.run(0.6f);
+        float gained = h.up(s.f.position) - y0;
+        s.destroy();
+        return gained;
+    };
+    float restBare, restCargo;
+    float bare = climb(nullptr, restBare);
+    fpv_cargo c;
+    fpv_cargo_defaults(&c);
+    c.mass = 1.0f;
+    h.pos(0, -0.4f, 0, c.offset);
+    c.radius = 0.25f;
+    float loaded = climb(&c, restCargo);
+    std::printf("    rest height %.2f m bare, %.2f m on its cargo; full-throttle climb in 0.6 s: %.2f m bare, %.2f m "
+                "with 1 kg\n", restBare, restCargo, bare, loaded);
+    CHECK(restCargo > restBare + 0.5f, "rests on the cargo's sphere (%.2f vs %.2f)", restCargo, restBare);
+    CHECK(loaded < bare * 0.8f, "the cargo's weight slows the climb (%.2f vs %.2f m)", loaded, bare);
+    CHECK(fpv_drone_set_cargo(nullptr, &c) != FPV_OK, "no drone, no cargo");
+}
+
+// Game controls from the keyboard: a button acts while held, a switch flips
+// on each press; presses are counted between polls; keys don't count while
+// the overlay is open.
+void testGameControls() {
+    fpv_control_desc c[2];
+    std::memset(c, 0, sizeof c);
+    c[0].struct_size = c[1].struct_size = sizeof(fpv_control_desc);
+    c[0].id = 1;
+    c[0].name = "test.fire";
+    c[0].label = "Fire";
+    c[0].kind = FPV_CONTROL_BUTTON;
+    c[0].key = 'G';
+    c[0].gamepad_button = FPV_GAMEPAD_NONE;
+    c[1] = c[0];
+    c[1].id = 2;
+    c[1].name = "test.grab";
+    c[1].label = "Grab";
+    c[1].kind = FPV_CONTROL_SWITCH;
+    c[1].key = 'H';
+    CHECK(fpv_controls_set(c, 2) == FPV_OK, "controls_set: %s", fpv_last_error());
+    c[1].id = 1;
+    CHECK(fpv_controls_set(c, 2) != FPV_OK, "duplicate ids refused");
+    c[1].id = 2;
+    fpv_controls_set(c, 2);
+    Host h(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1));
+    Session s;
+    float p[3];
+    h.pos(0, 0, 0, p);
+    s.spawn(p);
+    uint32_t n = 0;
+    auto key = [&](int k, int down) {
+        fpv_input_key(k, down);
+        s.run(0.02f);
+    };
+    key('G', 1);
+    CHECK(fpv_control_poll(1, &n) == 1 && n == 1, "fire held, one press (%u)", n);
+    CHECK(fpv_control_poll(1, &n) == 1 && n == 0, "still held, no new press (%u)", n);
+    key('G', 0);
+    key('G', 1);
+    key('G', 0);
+    CHECK(fpv_control_poll(1, &n) == 0 && n == 1, "a tap between two polls counts (%u)", n);
+    key('H', 1);
+    key('H', 0);
+    CHECK(fpv_control_poll(2, &n) == 1 && n == 1, "grab on after a press (%u)", n);
+    key('H', 1);
+    key('H', 0);
+    CHECK(fpv_control_poll(2, &n) == 0 && n == 0, "grab off after the next one (%u)", n);
+    fpv_overlay_set_open(1);
+    key('G', 1);
+    CHECK(fpv_control_poll(1, &n) == 0 && n == 0, "no game keys while the overlay is open");
+    key('G', 0);
+    fpv_overlay_set_open(0);
+    CHECK(fpv_control_poll(99, &n) == 0 && n == 0, "unknown control is off");
+    fpv_controls_set(nullptr, 0);
+    s.destroy();
+}
+
 int main(int argc, char **argv) {
     std::setvbuf(stdout, nullptr, _IONBF, 0);  // keep output if a test crashes
     std::string filter = argc > 1 ? argv[1] : "";
@@ -2686,6 +2934,10 @@ int main(int argc, char **argv) {
         {"pinned", testPinned},
         {"terminate_reinit", testTerminateReinit},
         {"threaded", testThreadedMode},
+        {"portals", testPortals},
+        {"push", testPush},
+        {"cargo", testCargo},
+        {"game_controls", testGameControls},
 #if defined(LIBFPV_KAMIKAZE)
         {"kamikaze_arming_block", testKamikazeArmingBlock},
         {"kamikaze_impact", testKamikazeImpact},

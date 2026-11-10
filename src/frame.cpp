@@ -68,22 +68,58 @@ static void refreshRaycastProxies(const FlightSnapshot &s) {
                                 {1, 1, 1},  {1, 1, -1}, {1, -1, 1},  {1, -1, -1}, {-1, 1, 1}, {-1, 1, -1},
                                 {-1, -1, 1}, {-1, -1, -1}};
     std::vector<Contact> planes;
+    // One ray of the host's; a hit inside a portal's opening goes on from
+    // the linked one, and what it finds there is brought back to this side
+    // (where it seems to be, seen through the opening).
     auto cast = [&](Vec3 d) {
         d = normalize(d);
-        float o[3], dh[3];
-        put3(o, cv.posToHost(s.pos));
-        put3(dh, cv.dirToHost(d));
-        fpv_raycast_hit hit{};
-        if (L.raycast(L.raycastUser, o, dh, cv.lenToHost(reach), &hit)) {
+        Vec3 o = s.pos;
+        float left = reach, travelled = 0;
+        PortalTransform back{Quat{}, {}, {}};  // from the far side to the drone's
+        bool through = false;
+        for (int hop = 0; hop < 3 && left > 0; hop++) {
+            float oh[3], dh[3];
+            put3(oh, cv.posToHost(o));
+            put3(dh, cv.dirToHost(d));
+            fpv_raycast_hit hit{};
+            if (!L.raycast(L.raycastUser, oh, dh, cv.lenToHost(left), &hit)) return;
             float t = cv.lenToInternal(hit.distance);
-            if (!(t >= 0) || t > reach) return;
+            if (!(t >= 0) || t > left) return;
+            Vec3 at = o + d * t;
+            int hole = L.portals.empty() ? -1 : portalHoleAt(L.portals, at);
+            if (hole >= 0) {
+                const PortalLink &link = L.portals[hole / 2];
+                const Portal &in = link.side(hole & 1), &out = link.side(1 - (hole & 1));
+                // only entering from the front of the opening
+                if (dot(d, rotate(in.rot, Vec3{0, 0, 1})) < 0) {
+                    PortalTransform x = portalTransform(in, out), inv = portalTransform(out, in);
+                    // through the surface point on the ray, then on from just past the far opening
+                    Vec3 l = in.toLocal(o);
+                    Vec3 dl = rotate(conj(in.rot), d);
+                    float tc = dl.z < -1e-6f ? -l.z / dl.z : t;  // where the ray meets the surface
+                    tc = std::clamp(tc, 0.0f, left);
+                    Vec3 cross = o + d * tc;
+                    back = through ? PortalTransform{normalize(back.rot * inv.rot), inv.fromPos, back.point(inv.toPos)}
+                                   : inv;
+                    through = true;
+                    o = x.point(cross) + x.dir(d) * 0.002f;
+                    d = x.dir(d);
+                    travelled += tc;
+                    left -= tc;
+                    continue;
+                }
+            }
             Contact c;
-            c.point = s.pos + d * t;
-            c.normal = normalize(cv.dirToInternal({hit.normal[0], hit.normal[1], hit.normal[2]}), -d);
-            if (dot(c.normal, d) > 0) c.normal = -c.normal;
+            Vec3 n = normalize(cv.dirToInternal({hit.normal[0], hit.normal[1], hit.normal[2]}), -d);
+            if (dot(n, d) > 0) n = -n;
+            c.point = through ? back.point(at) : at;
+            c.normal = through ? back.dir(n) : n;
             c.material = hit.material;
             c.objectId = hit.object_id;
+            c.throughPortal = through;
             planes.push_back(c);
+            (void)travelled;
+            return;
         }
     };
     for (Vec3 d : dirs) cast(d);
@@ -244,7 +280,15 @@ extern "C" FPV_API fpv_result fpv_drone_tick(fpv_drone *d, float frameDt, fpv_fr
     // Render one simulation step in the past, interpolating between the two
     // latest steps (frame-rate independent, no extrapolation jitter).
     float alpha = 1.0f;
-    if (L.runner.threaded() && curWall > prevWall && prev.active) {
+    // a jump (portal, teleport) between the two: show where it is now
+    bool jumped = prev.teleports != cur.teleports;
+    if (cur.teleports != L.seenTeleports) {
+        L.seenTeleports = cur.teleports;
+        L.chaseValid = false;
+        L.windProbe.reset();
+    }
+    if (jumped) prev = cur;
+    if (L.runner.threaded() && curWall > prevWall && prev.active && !jumped) {
         double renderTime = wallSeconds() - L.runner.stepSeconds();
         alpha = (float)std::clamp((renderTime - prevWall) / (curWall - prevWall), 0.0, 1.0);
     }
@@ -304,6 +348,23 @@ extern "C" FPV_API fpv_result fpv_drone_tick(fpv_drone *d, float frameDt, fpv_fr
     Vec3 camPos = pos + rotate(rot, p.camera.offset);
     Vec3 camFwd = rotate(rot, {0, std::sin(tilt), std::cos(tilt)});
     Vec3 camUp = rotate(rot, {0, std::cos(tilt), -std::sin(tilt)});
+    // The lens sits ahead of the centre: past an opening the centre has not
+    // crossed yet (or still behind one it came out of, flying backwards),
+    // it already sees the far side.
+    for (size_t i = 0; i < L.portals.size(); i++) {
+        bool moved = false;
+        for (int sd = 0; sd < 2 && !moved; sd++) {
+            const Portal &o = L.portals[i].side(sd);
+            Vec3 lc = o.toLocal(camPos), lb = o.toLocal(pos);
+            if (lb.z < 0 || lc.z >= 0 || lc.z < -kPortalHoleDepth || !o.insideOpening(lc)) continue;
+            PortalTransform x = portalTransform(o, L.portals[i].side(1 - sd));
+            camPos = x.point(camPos);
+            camFwd = x.dir(camFwd);
+            camUp = x.dir(camUp);
+            moved = true;
+        }
+        if (moved) break;
+    }
     float k1 = p.camera.k1, k2 = p.camera.k2, zoom = p.camera.zoom;
     bool lens = !(L.config.flags & FPV_INIT_NO_LENS_DISTORTION);
     if (!lens) k1 = k2 = 0, zoom = 1;
@@ -411,6 +472,8 @@ extern "C" FPV_API fpv_result fpv_drone_tick(fpv_drone *d, float frameDt, fpv_fr
 #endif
     for (int i = 0; i < kChannelCount; i++) f.channels[i] = cur.channels[i];
     put3(f.wind, cv.dirToHost(cur.wind) * cv.unitsPerMeter());
+    f.portal_passes = cur.portalPasses;
+    f.last_portal = cur.lastPortal;
 
     updatePresentation(f, pos, vel, cur.beeperSwitch);
     L.lastFrame = f;

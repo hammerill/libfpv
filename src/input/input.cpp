@@ -97,17 +97,22 @@ void InputManager::loadMappings() {
             m.guid = jm.value("guid", "");
             m.name = jm.value("name", "");
             m.complete = jm.value("complete", false);
+            auto readBinding = [](const json &jb) {
+                ChannelBinding b;
+                b.axis = jb.value("axis", -1);
+                b.button = jb.value("button", -1);
+                b.inverted = jb.value("inverted", false);
+                b.toggle = jb.value("toggle", false);
+                b.min = jb.value("min", -1.0f);
+                b.center = jb.value("center", 0.0f);
+                b.max = jb.value("max", 1.0f);
+                return b;
+            };
             auto &chs = jm.at("channels");
-            for (size_t i = 0; i < (size_t)kChannelCount && i < chs.size(); i++) {
-                ChannelBinding &b = m.channels[i];
-                b.axis = chs[i].value("axis", -1);
-                b.button = chs[i].value("button", -1);
-                b.inverted = chs[i].value("inverted", false);
-                b.toggle = chs[i].value("toggle", false);
-                b.min = chs[i].value("min", -1.0f);
-                b.center = chs[i].value("center", 0.0f);
-                b.max = chs[i].value("max", 1.0f);
-            }
+            for (size_t i = 0; i < (size_t)kChannelCount && i < chs.size(); i++) m.channels[i] = readBinding(chs[i]);
+            auto ctl = jm.find("controls");
+            if (ctl != jm.end() && ctl->is_object())
+                for (auto it = ctl->begin(); it != ctl->end(); ++it) m.controls[it.key()] = readBinding(it.value());
             if (!m.guid.empty()) m_mappings.push_back(m);
         }
     } catch (const std::exception &e) {
@@ -125,10 +130,15 @@ void InputManager::saveMappings() {
         jm["guid"] = m.guid;
         jm["name"] = m.name;
         jm["complete"] = m.complete;
+        auto binding = [](const ChannelBinding &b) {
+            return json{{"axis", b.axis},     {"button", b.button}, {"inverted", b.inverted}, {"toggle", b.toggle},
+                        {"min", b.min},       {"center", b.center}, {"max", b.max}};
+        };
         jm["channels"] = json::array();
-        for (auto &b : m.channels) {
-            jm["channels"].push_back({{"axis", b.axis}, {"button", b.button}, {"inverted", b.inverted},
-                                      {"toggle", b.toggle}, {"min", b.min}, {"center", b.center}, {"max", b.max}});
+        for (auto &b : m.channels) jm["channels"].push_back(binding(b));
+        if (!m.controls.empty()) {
+            jm["controls"] = json::object();
+            for (auto &kv : m.controls) jm["controls"][kv.first] = binding(kv.second);
         }
         j["devices"].push_back(jm);
     }
@@ -169,6 +179,122 @@ void InputManager::forgetAllMappings() {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_mappings.clear();
     saveMappings();
+}
+
+// --- game controls ------------------------------------------------------------
+
+void InputManager::setControls(const std::vector<ControlDesc> &controls) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    std::vector<ControlState> state(controls.size());
+    for (size_t i = 0; i < controls.size(); i++)
+        for (size_t j = 0; j < m_controls.size(); j++)
+            if (m_controls[j].id == controls[i].id && m_controls[j].name == controls[i].name) state[i] = m_controlState[j];
+    m_controls = controls;
+    m_controlState = std::move(state);
+}
+
+std::vector<ControlDesc> InputManager::controls() {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    std::vector<ControlDesc> out = m_controls;
+    for (ControlDesc &c : out) {
+        auto it = m_controlKeys.find(c.name);
+        if (it != m_controlKeys.end()) c.key = it->second;
+    }
+    return out;
+}
+
+void InputManager::setControlKey(const std::string &name, int key) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (key < 0) m_controlKeys.erase(name);  // back to the game's default
+    else m_controlKeys[name] = key;
+}
+
+bool InputManager::pollControl(uint32_t id, uint32_t &presses) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    presses = 0;
+    for (size_t i = 0; i < m_controls.size(); i++) {
+        if (m_controls[i].id != id) continue;
+        presses = m_controlState[i].presses;
+        m_controlState[i].presses = 0;
+        return m_controlState[i].on;
+    }
+    return false;
+}
+
+bool InputManager::controlOn(uint32_t id) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    for (size_t i = 0; i < m_controls.size(); i++)
+        if (m_controls[i].id == id) return m_controlState[i].on;
+    return false;
+}
+
+// Called with m_mutex held, at the simulation rate, so a short tap of a
+// button is never missed between two host frames. Every source counts at
+// once: the radio's binding, the key and the gamepad button.
+void InputManager::updateControls(const RawDevice *radio, const DeviceMapping *map) {
+    uint32_t padButtons = 0;
+    float padLT = 0, padRT = 0;
+    for (const RawDevice &d : m_devices) {
+        if (!d.isGamepad || &d == radio) continue;
+        padButtons |= d.padButtons;
+        padLT = std::max(padLT, d.pad[4]);
+        padRT = std::max(padRT, d.pad[5]);
+    }
+    for (size_t i = 0; i < m_controls.size(); i++) {
+        const ControlDesc &c = m_controls[i];
+        ControlState &st = m_controlState[i];
+        // the radio: a switch position (or a held button) is a level; a push
+        // button standing in for a switch (toggle) is a press
+        bool level = false, levelValid = false, push = false;
+        if (radio && map) {
+            auto it = map->controls.find(c.name);
+            if (it != map->controls.end()) {
+                const ChannelBinding &b = it->second;
+                bool known = true, raw = false;
+                if (b.axis >= 0 && b.axis < (int)radio->axes.size())
+                    raw = switchPositionOf(*map, b, radio->axes[b.axis]) > 0;
+                else if (b.button >= 0 && b.button < (int)radio->buttons.size())
+                    raw = (radio->buttons[b.button] != 0) != b.inverted;
+                else
+                    known = false;
+                if (known && b.toggle && c.kind == ControlKind::Switch) {
+                    push = raw && !st.pushPrev;
+                    st.pushPrev = raw;
+                } else if (known) {
+                    level = raw;
+                    levelValid = true;
+                }
+            }
+        }
+        int key = c.key;
+        auto ko = m_controlKeys.find(c.name);
+        if (ko != m_controlKeys.end()) key = ko->second;
+        bool keyDown = key > 0 && key < (int)m_keys.size() && m_keys[key];
+        bool padDown = false;
+        if (c.padButton == kPadLeftTrigger) padDown = padLT > 0.5f;
+        else if (c.padButton == kPadRightTrigger) padDown = padRT > 0.5f;
+        else if (c.padButton >= 0 && c.padButton < 32) padDown = (padButtons >> c.padButton) & 1u;
+
+        bool before = st.on;
+        if (c.kind == ControlKind::Button) {
+            st.on = (levelValid && level) || keyDown || padDown;
+        } else {
+            if (levelValid && !st.radioValid) {
+                before = level;  // the first reading of a switch is where it is, not a flip
+                st.on = level;
+            } else if (levelValid && level != st.radioPrev) {
+                st.on = level;
+            }
+            if (push) st.on = !st.on;
+            if (keyDown && !st.keyPrev) st.on = !st.on;
+            if (padDown && !st.padPrev) st.on = !st.on;
+        }
+        st.radioValid = levelValid;
+        st.radioPrev = level;
+        st.keyPrev = keyDown;
+        st.padPrev = padDown;
+        if (st.on && !before) st.presses++;
+    }
 }
 
 // --- mapping ---------------------------------------------------------------
@@ -349,6 +475,8 @@ void InputManager::update(double wallTime, float dt, float out[kChannelCount], b
     float ch[kChannelCount];
     setIdleChannels(ch);
 
+    const RawDevice *controlRadio = nullptr;  // the game controls' radio, if one flies
+    const DeviceMapping *controlMap = nullptr;
     // Host channels win while fresh.
     if (wallTime - m_hostTime < 0.5) {
         std::copy(m_host, m_host + kChannelCount, ch);
@@ -376,6 +504,8 @@ void InputManager::update(double wallTime, float dt, float out[kChannelCount], b
             }
         }
         if (radio) {
+            controlRadio = radio;
+            controlMap = radioMap;
             mapRadio(*radio, *radioMap, ch);
             st.source = InputSource::Radio;
             st.deviceName = radio->name;
@@ -412,6 +542,8 @@ void InputManager::update(double wallTime, float dt, float out[kChannelCount], b
         // presses while setting up do not flip toggles for the flight after
         m_toggleGuid.clear();
     }
+    // the wizard's presses are not the game's
+    if (!m_wizardActive) updateControls(controlRadio, controlMap);
     std::copy(ch, ch + kChannelCount, out);
     if (!radioLost) std::copy(ch, ch + kChannelCount, m_lastOut);
     m_status = st;

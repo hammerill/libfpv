@@ -280,7 +280,100 @@ void testPushButtons() {
     CHECK(w.mapping().channels[kAux2].button < 0 && !w.momentary(), "back clears the button");
 }
 
+
+// The game's controls on a radio set up already: positions and buttons the
+// setup uses are not offered, a button-kind control is kept after its
+// release, the rest of the setup is untouched, and a new full setup keeps
+// the ones that still fit.
+void testGameControls() {
+    // a set-up radio: beeper/turtle on the 3-pos axis 6 (middle, top)
+    DeviceMapping m;
+    m.guid = "fake";
+    m.complete = true;
+    for (int c = kRoll; c <= kYaw; c++) m.channels[c].axis = c;
+    m.channels[kAux1].axis = 4;
+    m.channels[kAux1].min = -1, m.channels[kAux1].max = 1;
+    m.channels[kAux3].axis = 6;
+    m.channels[kAux3].min = -1, m.channels[kAux3].max = 0;
+    m.channels[kAux4].axis = 6;
+    m.channels[kAux4].min = -1, m.channels[kAux4].max = 1;
+    std::vector<ControlDesc> controls(2);
+    controls[0].id = 1, controls[0].name = "game.fire", controls[0].label = "Fire", controls[0].kind = ControlKind::Button;
+    controls[1].id = 2, controls[1].name = "game.grab", controls[1].label = "Grab", controls[1].kind = ControlKind::Switch;
+
+    FakeRadio r;
+    RadioWizard w;
+    w.startControls(r.d, m, controls);
+    CHECK(w.controlsOnly() && w.step() == RadioWizard::Step::Rest, "controls setup starts at rest");
+    CHECK(step(w, r), "rest");
+    CHECK(w.step() == RadioWizard::Step::GameControl && w.currentControl() == &w.controlsBeingSetUp()[0],
+          "first control");
+    CHECK(std::string(w.title()) == "Fire", "titled with the control's label (%s)", w.title());
+    CHECK(w.momentary() && w.canSkip(), "a button control: momentary by default, optional");
+    r.d.axes[6] = 0;  // the beeper's position: taken
+    w.update(r.d);
+    CHECK(!w.detected(), "a position the radio setup uses is not offered");
+    r.d.axes[6] = -1;
+    w.update(r.d);
+    r.d.buttons[1] = 1;  // pressed and released before Next
+    w.update(r.d);
+    r.d.buttons[1] = 0;
+    CHECK(step(w, r), "fire on button 2");
+    CHECK(w.currentControl() && w.currentControl()->name == "game.grab" && !w.momentary(), "then grab, a switch");
+    r.d.buttons[1] = 1;
+    w.update(r.d);
+    CHECK(!w.detected(), "fire's button is not offered again");
+    r.d.buttons[1] = 0;
+    r.d.axes[8] = 1;
+    CHECK(step(w, r), "grab on axis 9");
+    r.d.axes[8] = -1;
+    CHECK(w.step() == RadioWizard::Step::Done, "done after the last control");
+
+    DeviceMapping merged = m;
+    RadioWizard::mergeControls(merged, w.mapping(), {"game.fire", "game.grab"}, false);
+    const ChannelBinding &fire = merged.controls["game.fire"], &grab = merged.controls["game.grab"];
+    CHECK(fire.button == 1 && !fire.toggle, "fire: button %d, toggle %d", fire.button, fire.toggle);
+    CHECK(grab.axis == 8 && switchPositionOf(merged, grab, 1) > 0 && switchPositionOf(merged, grab, -1) < 0,
+          "grab: axis %d follows the switch", grab.axis);
+    bool same = merged.complete;
+    for (int c = 0; c < kChannelCount; c++)
+        same = same && merged.channels[c].axis == m.channels[c].axis && merged.channels[c].button == m.channels[c].button;
+    CHECK(same, "the rest of the radio setup is untouched");
+    // the beeper's switch keeps its positions with a control elsewhere
+    CHECK(switchPosition(merged, kAux3, 0) == 1 && switchPosition(merged, kAux4, 1) == 1, "beeper / turtle intact");
+
+    // back walks the controls, then to rest
+    w.back();
+    CHECK(w.currentControl() && w.currentControl()->name == "game.grab", "back from done: the last control");
+    w.back();
+    CHECK(w.currentControl() && w.currentControl()->name == "game.fire", "back again: the first");
+    w.back();
+    CHECK(w.step() == RadioWizard::Step::Rest, "back from the first: rest");
+
+    // skipping clears; another game's control is never touched by a merge
+    merged.controls["other.thing"] = grab;
+    RadioWizard s;
+    s.startControls(r.d, merged, controls);
+    step(s, r);
+    s.skip();
+    s.skip();
+    CHECK(s.step() == RadioWizard::Step::Done, "both skipped");
+    DeviceMapping cleared = merged;
+    RadioWizard::mergeControls(cleared, s.mapping(), {"game.fire", "game.grab"}, false);
+    CHECK(!cleared.controls.count("game.fire") && !cleared.controls.count("game.grab"), "skipped controls unbound");
+    CHECK(cleared.controls.count("other.thing") == 1, "another game's control is kept");
+
+    // a new full setup keeps the controls that still fit
+    DeviceMapping fresh = m;
+    fresh.channels[kAux2].axis = 8;  // angle now where grab was
+    fresh.channels[kAux2].min = -1, fresh.channels[kAux2].max = 1;
+    RadioWizard::mergeControls(fresh, merged, RadioWizard::controlNames(merged), true);
+    CHECK(fresh.controls.count("game.fire") == 1, "fire kept");
+    CHECK(!fresh.controls.count("game.grab"), "grab dropped: angle took its position");
+}
+
 int main() {
+    testGameControls();
     testSharedThreePositionSwitch();
     testSkipOptionalSwitches();
     testPushButtons();

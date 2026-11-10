@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -54,24 +55,50 @@ struct DeviceMapping {
     std::string guid;
     std::string name;
     std::array<ChannelBinding, kChannelCount> channels{};
+    // The game's own controls (fpv_controls_set) on this radio, by the
+    // control's name. Every game's are kept: the mappings file is shared.
+    std::map<std::string, ChannelBinding> controls;
     bool complete = false;
 };
 
-// AUX channel `c` (bound to an axis) for the raw axis value: +1 when the
-// switch is nearer its "on" position than half the way to any other known
-// position of that axis (rest, or another switch's "on"), else -1.
-inline float switchPosition(const DeviceMapping &m, int c, float raw) {
-    const ChannelBinding &b = m.channels[c];
+// A switch binding `b` of mapping `m` (an AUX channel or a game control)
+// for the raw axis value: +1 when the switch is nearer its "on" position
+// than half the way to any other known position of that axis (rest, or
+// another switch's "on"), else -1.
+inline float switchPositionOf(const DeviceMapping &m, const ChannelBinding &b, float raw) {
     float on = b.switchOn();
     float nearest = std::fabs(b.switchOff() - on);
-    for (int o = kAux1; o < kChannelCount; o++) {
-        const ChannelBinding &ob = m.channels[o];
-        if (o == c || ob.axis != b.axis) continue;
+    auto other = [&](const ChannelBinding &ob) {
+        if (&ob == &b || ob.axis != b.axis) return;
         float d = std::fabs(ob.switchOn() - on);
         if (d > 1e-3f) nearest = std::min(nearest, d);
-    }
+    };
+    for (int o = kAux1; o < kChannelCount; o++) other(m.channels[o]);
+    for (auto &kv : m.controls) other(kv.second);
     return std::fabs(raw - on) < 0.5f * nearest ? 1.0f : -1.0f;
 }
+
+// AUX channel `c` (bound to an axis), see switchPositionOf.
+inline float switchPosition(const DeviceMapping &m, int c, float raw) { return switchPositionOf(m, m.channels[c], raw); }
+
+// --- game controls (fpv_controls_set) ------------------------------------------
+
+// A button acts while held (each press counts); a switch is on or off, and
+// a key, gamepad button or radio push button flips it.
+enum class ControlKind { Button = 0, Switch = 1 };
+
+// Gamepad buttons are SDL_GamepadButton indices; the triggers count as
+// buttons past half travel.
+constexpr int kPadLeftTrigger = 32, kPadRightTrigger = 33;
+
+struct ControlDesc {
+    uint32_t id = 0;
+    std::string name;   // key in radio_mappings.json and settings.json
+    std::string label;
+    ControlKind kind = ControlKind::Button;
+    int key = 0;         // keyboard key (fpv_key / ASCII), 0 = none
+    int padButton = -1;  // gamepad button, -1 = none
+};
 
 // Raw state of one connected device, produced by the backend.
 struct RawDevice {
@@ -170,12 +197,22 @@ public:
     // While the wizard is reading raw sticks, flight input is held at idle.
     void setWizardActive(bool active) { m_wizardActive = active; }
 
+    // Game controls (any thread). The key of each is the game's default
+    // unless setControlKey overrides it (the player's choice).
+    void setControls(const std::vector<ControlDesc> &controls);
+    std::vector<ControlDesc> controls();
+    void setControlKey(const std::string &name, int key);
+    // On/off now, and the presses (off to on) since the last poll.
+    bool pollControl(uint32_t id, uint32_t &presses);
+    bool controlOn(uint32_t id);
+
 private:
     void loadMappings();
     void saveMappings();
     bool mapRadio(const RawDevice &d, const DeviceMapping &m, float out[kChannelCount]);
     void mapGamepad(const RawDevice &d, float dt, float out[kChannelCount]);
     void mapKeyboard(float dt, bool radioDetected, float out[kChannelCount]);
+    void updateControls(const RawDevice *radio, const DeviceMapping *map);
 
     std::mutex m_mutex;
     std::string m_dataDir;
@@ -209,6 +246,17 @@ private:
     // toggle bindings of the active radio: pressed last update, and on/off
     std::array<bool, kChannelCount> m_togglePressed{}, m_toggleOn{};
     std::string m_toggleGuid;
+
+    struct ControlState {
+        bool on = false;
+        uint32_t presses = 0;
+        bool radioValid = false, radioPrev = false;  // the radio's level last update
+        bool pushPrev = false;  // a radio push button (toggle binding)
+        bool keyPrev = false, padPrev = false;
+    };
+    std::vector<ControlDesc> m_controls;
+    std::vector<ControlState> m_controlState;  // parallel to m_controls
+    std::map<std::string, int> m_controlKeys;  // the player's keys, by name
 
     InputStatus m_status;
     std::string m_activeGuid;

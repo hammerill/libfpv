@@ -78,9 +78,8 @@ private:
     RadioWizard m_wizard;
     std::string m_wizardHint;
     bool m_wizardSaved = false;
-#if defined(LIBFPV_KAMIKAZE)
-    DeviceMapping m_previousMapping;  // before a full setup: its bomb switches are kept
-#endif
+    // before a full setup: its game controls (and bomb switches) that still fit are kept
+    DeviceMapping m_previousMapping;
     std::vector<std::string> m_promptedRadios;
     using TabFn = void (Overlay::*)();
     TabFn m_requestTab = nullptr;  // the tab to bring to the front
@@ -91,6 +90,10 @@ private:
     int m_osdSelected = 0;
     int m_rateAxis = 0;
     bool m_rebindingToggle = false;
+    std::string m_rebindingControl;  // the game control whose key is being changed
+    void gameControlsSection();
+    void controlStates();  // live on/off of the game's controls
+    void startControlSetup(const RawDevice &dev, const std::vector<ControlDesc> &controls);
     bool m_ctrl = false;
     std::string m_status;
 };

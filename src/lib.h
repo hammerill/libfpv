@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -53,6 +54,8 @@ struct Settings {
     // only where the game supports them; distances in metres, < 0 = the game's
     bool pilotStandIn = true, pilotPose = true;
     float standInDistance = -1, standInReturnDistance = -1;
+    // the player's keys for game controls (fpv_controls_set), by name; 0 = no key
+    std::map<std::string, int> controlKeys;
 #if defined(LIBFPV_KAMIKAZE)
     // fpv_kamikaze_config, internal units (seconds, m/s, kg, metres)
     float kamikazeArmingDelay = 0.0f, kamikazeMinImpactSpeed = 0.25f;
@@ -131,6 +134,10 @@ struct Lib {
     Vec3 chasePos;
     bool chaseValid = false;
     std::vector<ImpactEvent> impactScratch;
+
+    // linked portals (fpv_portals_set), internal frame
+    std::vector<PortalLink> portals;
+    uint32_t seenTeleports = 0;  // the snapshot's count at the last tick
 
     // host buttons in the Fly tab (fpv_overlay_set_action)
     struct HostAction {

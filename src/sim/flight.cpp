@@ -102,6 +102,8 @@ void Flight::buildShape() {
         m_shape.push_back({m_payloadPos, std::max(0.005f, r), -1});
     }
 #endif
+    // the cargo collides as one sphere around its centre
+    if (m_cargo.radius > 0) m_shape.push_back({m_cargo.offset, m_cargo.radius, kCargoMotorIndex});
     m_mass = std::max(0.01f, m_preset.init.quadMass);
     const Vec3F &ii = m_preset.init.quadInvInertia;
     m_invInertiaBody = {std::fabs(ii.x), std::fabs(ii.y), std::fabs(ii.z)};
@@ -122,12 +124,8 @@ float Flight::shapeBottom() const {
 }
 
 void Flight::applyPreset(const DronePreset &presetIn) {
-#if defined(LIBFPV_KAMIKAZE)
     m_basePreset = presetIn;
-    const DronePreset preset = withPayload(presetIn);
-#else
-    const DronePreset &preset = presetIn;
-#endif
+    const DronePreset preset = withExtraMass(presetIn);
     // a drone switched in place keeps its lowest point where it was: a
     // bigger quad would otherwise start inside the ground, and the
     // penetration push would shove it sideways until it fell through
@@ -182,6 +180,8 @@ void Flight::spawn(const DronePreset &preset, Vec3 pos, Quat rot, Vec3 pilotPos)
     resetFlightTime();
     m_active = true;
     m_pilotPos = pilotPos;
+    m_portalPasses = 0;  // counted per drone
+    m_lastPortal = -1;
     teleport(pos, rot);
 }
 
@@ -199,6 +199,7 @@ void Flight::movePos(Vec3 d) {
 }
 
 void Flight::teleport(Vec3 pos, Quat rot) {
+    m_teleports++;
     m_pos = pos;
     m_posCarry = {};
     m_rot = normalize(rot);
@@ -256,57 +257,16 @@ void Flight::onDetonated() {
     stopMotors();
 }
 
-// The bare quad plus the payload: more mass, and more inertia from a point
-// mass hanging `drop` below the centre (parallel axis) plus its own solid
-// sphere. The centre of mass is not moved (SimITL has no offset for it).
-DronePreset Flight::withPayload(const DronePreset &bare) {
-    DronePreset p = bare;
-    float m = m_payloadKg >= 0 ? m_payloadKg : bare.payloadMass >= 0 ? bare.payloadMass : kAutoPayloadRatio * bare.init.quadMass;
-    if (!m_warhead.installed()) m = 0;  // no bomb, no extra weight
-    float drop = m_payloadDropM >= 0 ? m_payloadDropM
-                 : bare.payloadDrop >= 0 ? bare.payloadDrop
-                                         : 0.5f * bare.collision.bodyRadius;  // strapped under the frame
-    m_payloadMass = std::max(0.0f, m);
-    m_payloadPos = {0, -drop, 0};
-    if (m_payloadMass <= 0) return p;
-    p.init.quadMass = bare.init.quadMass + m_payloadMass;
-    float own = 0.4f * m_payloadMass * kPayloadRadius * kPayloadRadius;
-    auto add = [](float inv, float extra) {
-        float i = 1.0f / std::max(1e-6f, std::fabs(inv));
-        return std::copysign(1.0f / (i + extra), inv);
-    };
-    Vec3F &ii = p.init.quadInvInertia;
-    ii.x = add(ii.x, m_payloadMass * drop * drop + own);  // pitch
-    ii.y = add(ii.y, own);                               // yaw: on the axis
-    ii.z = add(ii.z, m_payloadMass * drop * drop + own);  // roll
-    return p;
-}
-
 void Flight::setPayload(float massKg, float dropM) {
     m_payloadKg = massKg;
     m_payloadDropM = dropM;
-    refreshPayload();
+    refreshMass();
 }
 
 void Flight::setBombInstalled(bool on) {
     if (m_warhead.installed() == on) return;
     m_warhead.setInstalled(on, m_simTime);
-    refreshPayload();
-}
-
-void Flight::refreshPayload() {
-    if (!m_bfReady) return;
-    // patch the live physics (no reinit: keeps the flight, battery and motors)
-    float dir[4];  // synced from Betaflight (syncPropDirection), not the preset
-    std::memcpy(dir, m_preset.init.quadMotorDir, sizeof dir);
-    m_preset = withPayload(m_basePreset);
-    std::memcpy(m_preset.init.quadMotorDir, dir, sizeof dir);
-    StateInit &live = SimITL::Sim::getInstance().mSimState.stateInit;
-    live.quadMass = m_preset.init.quadMass;
-    live.quadInvInertia = m_preset.init.quadInvInertia;
-    float bottom = shapeBottom();
-    buildShape();
-    if (m_active) m_pos.y += bottom - shapeBottom();  // a warhead hanging lower lifts it
+    refreshMass();
 }
 
 bool Flight::detonate(bool evenIfSafe) {
@@ -315,6 +275,115 @@ bool Flight::detonate(bool evenIfSafe) {
     return true;
 }
 #endif
+
+// The bare quad plus what it carries (the cargo, fpv_drone_set_cargo, and any
+// payload the build adds). More mass, and more inertia from point
+// masses away from the centre (parallel axis) plus their own solid spheres.
+// The centre of mass is not moved (SimITL has no offset for it).
+DronePreset Flight::withExtraMass(const DronePreset &bare) {
+    DronePreset p = bare;
+    float extraMass = 0;
+    Vec3 extraI{};  // about pitch (X), yaw (Y), roll (Z)
+    auto addPoint = [&](float m, Vec3 at, float radius) {
+        if (!(m > 0)) return;
+        float own = 0.4f * m * radius * radius;
+        extraMass += m;
+        extraI.x += m * (at.y * at.y + at.z * at.z) + own;
+        extraI.y += m * (at.x * at.x + at.z * at.z) + own;
+        extraI.z += m * (at.x * at.x + at.y * at.y) + own;
+    };
+#if defined(LIBFPV_KAMIKAZE)
+    float m = m_payloadKg >= 0 ? m_payloadKg : bare.payloadMass >= 0 ? bare.payloadMass : kAutoPayloadRatio * bare.init.quadMass;
+    if (!m_warhead.installed()) m = 0;  // no bomb, no extra weight
+    float drop = m_payloadDropM >= 0 ? m_payloadDropM
+                 : bare.payloadDrop >= 0 ? bare.payloadDrop
+                                         : 0.5f * bare.collision.bodyRadius;  // strapped under the frame
+    m_payloadMass = std::max(0.0f, m);
+    m_payloadPos = {0, -drop, 0};
+    addPoint(m_payloadMass, m_payloadPos, kPayloadRadius);
+#endif
+    addPoint(m_cargo.mass, m_cargo.offset, std::max(m_cargo.radius, 0.02f));
+    if (extraMass <= 0) return p;
+    p.init.quadMass = bare.init.quadMass + extraMass;
+    auto add = [](float inv, float extra) {
+        float i = 1.0f / std::max(1e-6f, std::fabs(inv));
+        return std::copysign(1.0f / (i + extra), inv);
+    };
+    Vec3F &ii = p.init.quadInvInertia;
+    ii.x = add(ii.x, extraI.x);
+    ii.y = add(ii.y, extraI.y);
+    ii.z = add(ii.z, extraI.z);
+    return p;
+}
+
+void Flight::refreshMass() {
+    if (!m_bfReady) return;
+    // patch the live physics (no reinit: keeps the flight, battery and motors)
+    float dir[4];  // synced from Betaflight (syncPropDirection), not the preset
+    std::memcpy(dir, m_preset.init.quadMotorDir, sizeof dir);
+    m_preset = withExtraMass(m_basePreset);
+    std::memcpy(m_preset.init.quadMotorDir, dir, sizeof dir);
+    StateInit &live = SimITL::Sim::getInstance().mSimState.stateInit;
+    live.quadMass = m_preset.init.quadMass;
+    live.quadInvInertia = m_preset.init.quadInvInertia;
+    float bottom = shapeBottom();
+    buildShape();
+    if (m_active) m_pos.y += bottom - shapeBottom();  // something hanging lower lifts it
+}
+
+void Flight::setCargo(const Cargo &cargo) {
+    m_cargo = cargo;
+    if (!(m_cargo.mass > 0)) m_cargo.mass = 0;
+    if (!(m_cargo.radius > 0)) m_cargo.radius = 0;
+    // picked up off the ground, not out of it: no lift (unlike a strapped payload)
+    Vec3 pos = m_pos;
+    refreshMass();
+    m_pos = pos;
+}
+
+void Flight::push(Vec3 velocity, bool replace) {
+    if (!m_active || !finite(velocity)) return;
+    m_vel = replace ? velocity : m_vel + velocity;
+}
+
+void Flight::setPortals(std::vector<PortalLink> links) {
+    std::lock_guard<std::mutex> lock(m_portalMutex);
+    m_portalsIn = std::move(links);
+    m_portalsChanged = true;
+}
+
+void Flight::dropPortalHoleContacts(size_t first) {
+    if (m_portals.empty()) return;
+    auto end = std::remove_if(m_contacts.begin() + (std::ptrdiff_t)first, m_contacts.end(), [&](const Contact &c) {
+        return !c.throughPortal && portalHoleAt(m_portals, c.point) >= 0;
+    });
+    m_contacts.erase(end, m_contacts.end());
+}
+
+// The centre went from in front of an opening to behind it, through the
+// opening: the drone leaves the linked one, pose, velocity and spin turned
+// with it. Betaflight gets the new attitude from the next step's state.
+void Flight::passPortals(Vec3 before) {
+    for (size_t i = 0; i < m_portals.size(); i++) {
+        for (int s = 0; s < 2; s++) {
+            const Portal &in = m_portals[i].side(s);
+            Vec3 a = in.toLocal(before), b = in.toLocal(m_pos);
+            if (!(a.z > 0 && b.z <= 0)) continue;
+            float t = a.z / (a.z - b.z);
+            if (!in.insideOpening(a + (b - a) * t)) continue;
+            PortalTransform x = portalTransform(in, m_portals[i].side(1 - s));
+            m_pos = x.point(m_pos);
+            m_posCarry = {};
+            m_rot = x.orient(m_rot);
+            m_vel = x.dir(m_vel);
+            m_angVel = x.dir(m_angVel);
+            m_teleports++;
+            m_portalPasses++;
+            m_lastPortal = (int)(i * 2 + s);
+            return;  // one pass per step
+        }
+    }
+}
 
 Mat3 Flight::worldInvInertia() const {
     Mat3 r = toMat3(m_rot);
@@ -359,6 +428,7 @@ void Flight::resolveContacts(float dt) {
         m_contacts.clear();
         Vec3 centre = m_pos + rot * s.local;
         m_world->sphereContacts(centre, s.radius, m_simTime, m_contacts);
+        dropPortalHoleContacts(0);
         for (const Contact &c : m_contacts) items.push_back({c, s.motor, s.radius});
     }
     if (items.empty()) return;
@@ -457,6 +527,7 @@ void Flight::propStrikes(float dt) {
         Vec3 hub = m_pos + rot * Vec3{lp.x, lp.y, lp.z};
         m_contacts.clear();
         m_world->sphereContacts(hub, m_preset.collision.propRadius, m_simTime, m_contacts);
+        dropPortalHoleContacts(0);
         for (const Contact &c : m_contacts) {
             if (std::fabs(dot(c.point - hub, up)) > kPropDiscHalfThickness) continue;
             Material mat = m_world->material(c.material);
@@ -579,6 +650,13 @@ void Flight::step(float dt, const float channels[kChannelCount], bool radioLost)
     std::unique_lock<std::mutex> worldLock(m_world->mutex());
 
     m_simTime += dt;
+    {
+        std::lock_guard<std::mutex> lock(m_portalMutex);
+        if (m_portalsChanged) {
+            m_portals = m_portalsIn;
+            m_portalsChanged = false;
+        }
+    }
     // --- inputs for SimITL ----------------------------------------------
     for (int i = 0; i < kChannelCount; i++) m_input.rcData[i] = std::clamp(channels[i], -1.0f, 1.0f);
     for (int i = kChannelCount; i < 16; i++) m_input.rcData[i] = -1.0f;  // unused channels
@@ -664,7 +742,9 @@ void Flight::step(float dt, const float channels[kChannelCount], bool radioLost)
         float h = dt / (float)sub;
         resolveContacts(h);
         for (int k = 0; k < sub; k++) {
+            Vec3 before = m_pos;
             movePos(m_vel * h);
+            if (!m_portals.empty()) passPortals(before);
             resolveContacts(h);
         }
         propStrikes(dt);
@@ -687,6 +767,9 @@ void Flight::step(float dt, const float channels[kChannelCount], bool radioLost)
     m_snap.vel = m_vel;
     m_snap.angVel = m_angVel;
     m_snap.wind = wind;
+    m_snap.teleports = m_teleports;
+    m_snap.portalPasses = m_portalPasses;
+    m_snap.lastPortal = m_lastPortal;
     bool anyBurned = false, anyBroken = false;
     for (int i = 0; i < 4; i++) {
         MotorSnapshot &m = m_snap.motors[i];

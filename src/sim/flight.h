@@ -15,6 +15,7 @@
 #include "fpv_math.h"
 #include "input/input.h"
 #include "network/packets.h"
+#include "sim/portal.h"
 #include "world/collision.h"
 #include "world/wind.h"
 #if defined(LIBFPV_KAMIKAZE)
@@ -55,11 +56,25 @@ struct FlightSnapshot {
     std::array<uint8_t, 16 * 30> osd{};
     uint32_t osdRevision = 0;
     std::array<float, kChannelCount> channels{};
+    // Counts the jumps (portal passes, teleports): no interpolation across one.
+    uint32_t teleports = 0;
+    int lastPortal = -1;  // link * 2 + the side entered, of the last portal pass
+    uint32_t portalPasses = 0;
 #if defined(LIBFPV_KAMIKAZE)
     WarheadSnapshot warhead;
     float payloadMass = 0, totalMass = 0;  // kg
 #endif
 };
+
+// Something the drone carries (fpv_drone_set_cargo), body frame.
+struct Cargo {
+    float mass = 0;   // kg, 0 = none
+    Vec3 offset;      // its centre, metres from the drone's centre
+    float radius = 0; // collision sphere, 0 = none
+};
+
+// Impacts of the cargo's sphere report this motor index.
+constexpr int kCargoMotorIndex = -2;
 
 class Flight {
 public:
@@ -75,6 +90,12 @@ public:
     void despawn();
     bool active() const { return m_active; }
     void teleport(Vec3 pos, Quat rot);
+    // Velocity change (simulation thread): added, or set with `replace`.
+    void push(Vec3 velocity, bool replace);
+    // Linked portals (any thread); used from the next step.
+    void setPortals(std::vector<PortalLink> links);
+    // The drone's cargo (simulation thread): mass and inertia at once, also in flight.
+    void setCargo(const Cargo &cargo);
     void repair();
     // Adds `amount` (0..1) to a prop's damage, motor -1 = all. Simulation
     // thread; nothing with damage off.
@@ -140,6 +161,11 @@ private:
     void updateVideo();
     Vec3 updateWind(float dt);
     void recordImpact(const Contact &c, float speed, float impulse, int motor);
+    // drops the contacts in a portal's hole from m_contacts (from `first` on)
+    void dropPortalHoleContacts(size_t first);
+    void passPortals(Vec3 before);  // a crossing since `before` takes the drone through
+    DronePreset withExtraMass(const DronePreset &bare);
+    void refreshMass();  // re-applies cargo and payload to the live physics
     Mat3 worldInvInertia() const;
 
     CollisionWorld *m_world = nullptr;
@@ -180,6 +206,14 @@ private:
     std::vector<Contact> m_contacts;
     std::vector<ImpactEvent> m_impacts;
     FlightSnapshot m_snap;
+    std::mutex m_portalMutex;
+    std::vector<PortalLink> m_portalsIn;
+    bool m_portalsChanged = false;
+    std::vector<PortalLink> m_portals;  // simulation thread
+    uint32_t m_teleports = 0, m_portalPasses = 0;
+    int m_lastPortal = -1;
+    Cargo m_cargo;
+    DronePreset m_basePreset;  // without the cargo and payload
     float m_mass = 0.5f;
     Vec3 m_invInertiaBody{550, 310, 550};
     uint32_t m_videoTick = 0;
@@ -189,9 +223,6 @@ private:
     Warhead m_warhead;
     Vec3 m_impactVel;  // velocity before the current contacts resolved
     void onDetonated();
-    DronePreset withPayload(const DronePreset &bare);
-    void refreshPayload();  // re-applies the payload to the live physics
-    DronePreset m_basePreset;                     // without the payload
     float m_payloadKg = -1, m_payloadDropM = -1;  // requested
     float m_payloadMass = 0;                      // effective
     Vec3 m_payloadPos;                            // body frame

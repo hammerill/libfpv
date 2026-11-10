@@ -65,6 +65,9 @@ struct Contact {
     Vec3 surfaceAngVel;  // angular velocity of the surface
     uint8_t material = 0;
     uint32_t objectId = 0;
+    // A raycast hit seen through a portal, brought back to this side: it is
+    // where it seems, even inside a portal's hole.
+    bool throughPortal = false;
 };
 
 struct RigidTransform {

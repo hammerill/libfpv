@@ -240,9 +240,20 @@ void Overlay::text(const char *utf8) {
     END_CTX;
 }
 
-bool Overlay::capturingKey() const { return m_rebindingToggle; }
+bool Overlay::capturingKey() const { return m_rebindingToggle || !m_rebindingControl.empty(); }
 
 void Overlay::key(int k, bool down) {
+    if (!m_rebindingControl.empty() && down) {
+        // Esc cancels, Delete or Backspace leave the control without a key
+        if (k != FPV_KEY_ESCAPE) {
+            int key = (k == FPV_KEY_DELETE || k == FPV_KEY_BACKSPACE) ? 0 : k;
+            lib().settings.controlKeys[m_rebindingControl] = key;
+            lib().input.setControlKey(m_rebindingControl, key);
+            saveSettings();
+        }
+        m_rebindingControl.clear();
+        return;
+    }
     if (m_rebindingToggle && down) {
         if (k != FPV_KEY_ESCAPE) {
             lib().settings.overlayToggleKey = k;
@@ -491,6 +502,10 @@ void Overlay::wizardUi(const std::vector<RawDevice> &devs) {
                                   "remembers it. It explodes while pressed.");
             else
 #endif
+            if (m_wizard.currentControl() && m_wizard.currentControl()->kind == ControlKind::Button)
+                ImGui::SetTooltip("For a push button or a spring-loaded switch: press it once and let go, the wizard "
+                                  "remembers it. It acts while pressed.");
+            else
                 ImGui::SetTooltip("For a push button or a spring-loaded switch, which only reads as flipped while "
                                   "held: press it once and let go, the wizard remembers it. In flight each press "
                                   "turns this switch on or off.");
@@ -500,8 +515,26 @@ void Overlay::wizardUi(const std::vector<RawDevice> &devs) {
         if (!m_wizardSaved) {
             // persisted once; flight input switches to the mapped radio
             DeviceMapping m = m_wizard.mapping();
+            if (m_wizard.controlsOnly()) {
+                // only the controls set up here change, whatever else is set up now
+                DeviceMapping cur;
+                if (L.input.getMapping(m.guid, cur)) {
+                    std::vector<std::string> names;
+                    for (const ControlDesc &c : m_wizard.controlsBeingSetUp()) names.push_back(c.name);
+                    RadioWizard::mergeControls(cur, m, names, false);
+                    m = cur;
+                }
+            } else {
+                // a new full setup keeps the game controls (of every game) that still fit
 #if defined(LIBFPV_KAMIKAZE)
-            if (m_wizard.bombSwitchesOnly()) {
+                if (!m_wizard.bombSwitchesOnly())
+#endif
+                    RadioWizard::mergeControls(m, m_previousMapping, RadioWizard::controlNames(m_previousMapping),
+                                               true);
+            }
+#if defined(LIBFPV_KAMIKAZE)
+            if (m_wizard.controlsOnly()) {
+            } else if (m_wizard.bombSwitchesOnly()) {
                 // only AUX7 / AUX8 change, whatever else is set up now
                 DeviceMapping cur;
                 if (L.input.getMapping(m.guid, cur)) {
@@ -517,10 +550,17 @@ void Overlay::wizardUi(const std::vector<RawDevice> &devs) {
             L.input.setWizardActive(false);
             m_wizardSaved = true;
         }
-        channelBars(L.lastFrame.channels);
+        if (m_wizard.controlsOnly()) controlStates();
+        else channelBars(L.lastFrame.channels);
         if (ImGui::Button("Finish")) m_wizard.cancel();
         ImGui::SameLine();
         if (ImGui::Button("Start over")) {
+            if (m_wizard.controlsOnly()) {
+                DeviceMapping cur;
+                L.input.getMapping(dev->guid, cur);
+                std::vector<ControlDesc> controls = m_wizard.controlsBeingSetUp();
+                m_wizard.startControls(*dev, cur, controls);
+            } else
 #if defined(LIBFPV_KAMIKAZE)
             if (m_wizard.bombSwitchesOnly()) {
                 DeviceMapping cur;
@@ -602,11 +642,9 @@ void Overlay::tabRadio() {
         else if (d.isGamepad) ImGui::TextDisabled("(gamepad: default layout, degraded)");
         else ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "(not set up)");
         if (ImGui::Button(mapped ? "Set up again" : "Set up")) {
-#if defined(LIBFPV_KAMIKAZE)
-            // the bomb switches have their own setup (Kamikaze tab): keep them
+            // the game controls (and the bomb switches) have their own setup: keep them
             m_previousMapping = DeviceMapping{};
             L.input.getMapping(d.guid, m_previousMapping);
-#endif
             m_wizard.start(d);
             m_wizardHint.clear();
             m_wizardSaved = false;
@@ -615,12 +653,134 @@ void Overlay::tabRadio() {
         if (mapped) {
             ImGui::SameLine();
             if (ImGui::Button("Forget")) L.input.forgetMapping(d.guid);
+            std::vector<ControlDesc> controls = L.input.controls();
+            if (!controls.empty()) {
+                ImGui::SameLine();
+                if (ImGui::Button("Set up game controls")) startControlSetup(d, controls);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Put this game's own controls on switches or buttons of your radio. The sticks "
+                                      "and flight modes stay as they are.");
+            }
         }
         ImGui::PopID();
         ImGui::Separator();
     }
     sectionTitle("Channels Betaflight receives");
     channelBars(L.lastFrame.channels);
+    if (!L.input.controls().empty()) {
+        sectionTitle("Game controls");
+        controlStates();
+    }
+}
+
+void Overlay::startControlSetup(const RawDevice &dev, const std::vector<ControlDesc> &controls) {
+    Lib &L = lib();
+    DeviceMapping cur;
+    if (!L.input.getMapping(dev.guid, cur) || !cur.complete) return;
+    m_wizard.startControls(dev, cur, controls);
+    m_wizardHint.clear();
+    m_wizardSaved = false;
+    L.input.setWizardActive(true);
+    m_requestTab = &Overlay::tabRadio;
+}
+
+namespace {
+
+const char *padButtonName(int b) {
+    static const char *names[] = {"A / Cross",   "B / Circle",     "X / Square",   "Y / Triangle", "Back",
+                                  "Guide",       "Start",          "Left stick",   "Right stick",  "Left shoulder",
+                                  "Right shoulder", "D-pad up",    "D-pad down",   "D-pad left",   "D-pad right"};
+    if (b >= 0 && b < (int)(sizeof names / sizeof names[0])) return names[b];
+    if (b == kPadLeftTrigger) return "Left trigger";
+    if (b == kPadRightTrigger) return "Right trigger";
+    return "-";
+}
+
+std::string radioBindingText(const ChannelBinding &b) {
+    std::string t;
+    if (b.button >= 0) t = "button " + std::to_string(b.button + 1);
+    else if (b.axis >= 0) t = "switch on axis " + std::to_string(b.axis + 1);
+    else return "-";
+    if (b.toggle) t += " (each press flips it)";
+    return t;
+}
+
+}  // namespace
+
+void Overlay::controlStates() {
+    Lib &L = lib();
+    for (const ControlDesc &c : L.input.controls()) {
+        bool on = L.input.controlOn(c.id);
+        ImGui::TextColored(on ? ImVec4(0.5f, 1, 0.5f, 1) : ImVec4(0.6f, 0.6f, 0.6f, 1), "%s %s",
+                           on ? "[ON] " : "[off]", c.label.c_str());
+    }
+}
+
+// The game's own controls (fpv_controls_set): keys, gamepad buttons and the
+// radio's switches.
+void Overlay::gameControlsSection() {
+    Lib &L = lib();
+    std::vector<ControlDesc> controls = L.input.controls();
+    if (controls.empty()) return;
+    sectionTitle("Game controls");
+    InputStatus st = L.input.status();
+    DeviceMapping radio;
+    const RawDevice *radioDev = nullptr;
+    std::vector<RawDevice> devs = L.input.devicesSnapshot();
+    for (const RawDevice &d : devs) {
+        DeviceMapping m;
+        if (L.input.getMapping(d.guid, m) && m.complete) {
+            radio = m;
+            radioDev = &d;
+            break;
+        }
+    }
+    ImGui::TextDisabled("Keys and gamepad buttons always work; the radio's while it is set up (Radio tab).");
+    if (ImGui::BeginTable("gamecontrols", 5, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg)) {
+        ImGui::TableSetupColumn("Control");
+        ImGui::TableSetupColumn("Key");
+        ImGui::TableSetupColumn("Gamepad");
+        ImGui::TableSetupColumn(radioDev ? "Radio" : "Radio (none set up)");
+        ImGui::TableSetupColumn("");
+        ImGui::TableHeadersRow();
+        for (const ControlDesc &c : controls) {
+            ImGui::PushID(c.name.c_str());
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            bool on = L.input.controlOn(c.id);
+            ImGui::TextColored(on ? ImVec4(0.5f, 1, 0.5f, 1) : ImVec4(1, 1, 1, 1), "%s", c.label.c_str());
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip(c.kind == ControlKind::Button ? "Acts while held." : "On or off: each press flips it.");
+            ImGui::TableNextColumn();
+            if (m_rebindingControl == c.name) {
+                ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "press a key (Esc cancels, Delete = none)");
+            } else {
+                ImGui::TextUnformatted(c.key > 0 ? keyName(c.key) : "-");
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Change")) m_rebindingControl = c.name;
+            }
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(padButtonName(c.padButton));
+            ImGui::TableNextColumn();
+            auto it = radio.controls.find(c.name);
+            ImGui::TextUnformatted(it != radio.controls.end() ? radioBindingText(it->second).c_str() : "-");
+            ImGui::TableNextColumn();
+            if (radioDev) {
+                if (ImGui::SmallButton("Set")) startControlSetup(*radioDev, {c});
+                if (it != radio.controls.end()) {
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("Clear")) {
+                        radio.controls.erase(c.name);
+                        L.input.setMapping(radio);
+                    }
+                }
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+    if (radioDev && ImGui::Button("Set up all on the radio")) startControlSetup(*radioDev, controls);
+    (void)st;
 }
 
 #if defined(LIBFPV_KAMIKAZE)
@@ -1234,6 +1394,7 @@ void Overlay::tabControls() {
     ImGui::BulletText("Right stick: pitch and roll (self-level mode)");
     ImGui::BulletText("A / Cross: arm / disarm, B / Circle: beeper, Y / Triangle: turtle mode on / off");
     ImGui::TextWrapped("For real FPV flying use a radio in USB joystick mode: see the Radio tab.");
+    gameControlsSection();
 }
 
 void Overlay::tabConfigurator() {

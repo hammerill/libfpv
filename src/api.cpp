@@ -84,6 +84,11 @@ void loadSettings() {
         s.pilotPose = j.value("pilotPose", s.pilotPose);
         s.standInDistance = j.value("standInDistance", s.standInDistance);
         s.standInReturnDistance = j.value("standInReturnDistance", s.standInReturnDistance);
+        s.controlKeys.clear();
+        auto keys = j.find("controlKeys");
+        if (keys != j.end() && keys->is_object())
+            for (auto it = keys->begin(); it != keys->end(); ++it)
+                if (it.value().is_number_integer()) s.controlKeys[it.key()] = it.value().get<int>();
 #if defined(LIBFPV_KAMIKAZE)
         s.kamikazeArmingDelay = std::clamp(j.value("kamikazeArmingDelay", s.kamikazeArmingDelay), 0.0f, 600.0f);
         s.kamikazeMinImpactSpeed = std::clamp(j.value("kamikazeMinImpactSpeed", s.kamikazeMinImpactSpeed), 0.1f, 30.0f);
@@ -141,6 +146,7 @@ void saveSettings() {
               {"pilotPose", s.pilotPose},
               {"standInDistance", s.standInDistance},
               {"standInReturnDistance", s.standInReturnDistance}};
+    if (!s.controlKeys.empty()) j["controlKeys"] = s.controlKeys;
 #if defined(LIBFPV_KAMIKAZE)
     j["kamikazeArmingDelay"] = s.kamikazeArmingDelay;
     j["kamikazeMinImpactSpeed"] = s.kamikazeMinImpactSpeed;
@@ -444,6 +450,7 @@ fpv_result resetEverything() {
     int toggleKey = L.settings.overlayToggleKey;
     L.settings = Settings{};
     L.settings.overlayToggleKey = toggleKey;
+    for (const ControlDesc &c : L.input.controls()) L.input.setControlKey(c.name, -1);  // the game's keys again
     L.input.setKeyboardHover(L.settings.keyboardHover);
     L.input.setKeyboardThrottleExpo(L.settings.keyboardThrottleExpo);
     L.input.setKeyboardYawExpo(L.settings.keyboardYawExpo);
@@ -670,6 +677,7 @@ FPV_API fpv_result fpv_global_init(const fpv_global_config *cfgIn) {
     for (auto &e : errors) FPV_LOGW("preset ignored: %s", e.c_str());
     if (L.presets.empty()) L.presets.push_back(builtinDefaultPreset());
     loadSettings();
+    for (auto &kv : L.settings.controlKeys) L.input.setControlKey(kv.first, kv.second);
     L.input.setKeyboardHover(L.settings.keyboardHover);
     L.input.setKeyboardThrottleExpo(L.settings.keyboardThrottleExpo);
     L.input.setKeyboardYawExpo(L.settings.keyboardYawExpo);
@@ -915,6 +923,7 @@ FPV_API fpv_result fpv_drone_create(const fpv_drone_desc *descIn, fpv_drone **ou
     const DronePreset preset = currentPreset();
     L.runner.call([&] {
         activateEepromFor(preset);
+        L.flight.setCargo({});  // a new drone carries nothing
         L.flight.spawn(preset, {0, 0, 0}, rot, pilot);
         L.flight.teleport(pos + rotate(rot, Vec3{0, L.flight.restHeight() + 0.002f, 0}), rot);
     });
@@ -1031,6 +1040,105 @@ FPV_API fpv_result fpv_pilot_get_config(fpv_pilot_config *c) {
     out.stand_in_return_distance = L.conv.lenToHost(std::min(stop, start));
     memcpy(c, &out, out.struct_size);
     return FPV_OK;
+}
+
+FPV_API fpv_result fpv_drone_push(fpv_drone *d, const float velocity[3], int replace) {
+    REQUIRE_DRONE(d);
+    if (!velocity) return setError(FPV_ERROR_INVALID_ARGUMENT, "velocity is NULL");
+    Vec3 v = L.conv.dirToInternal({velocity[0], velocity[1], velocity[2]}) / L.conv.unitsPerMeter();
+    if (!finite(v)) return setError(FPV_ERROR_INVALID_ARGUMENT, "velocity is not finite");
+    L.runner.call([&] { L.flight.push(v, replace != 0); });
+    return FPV_OK;
+}
+
+FPV_API void fpv_cargo_defaults(fpv_cargo *c) {
+    if (!c) return;
+    std::memset(c, 0, sizeof(*c));
+    c->struct_size = sizeof(*c);
+}
+
+FPV_API fpv_result fpv_drone_set_cargo(fpv_drone *d, const fpv_cargo *in) {
+    REQUIRE_DRONE(d);
+    Cargo cargo;
+    if (in) {
+        if (in->struct_size < offsetof(fpv_cargo, radius) + sizeof(float))
+            return setError(FPV_ERROR_ABI_MISMATCH, "set cargo->struct_size = sizeof(fpv_cargo)");
+        if (!std::isfinite(in->mass) || in->mass < 0 || in->mass > 50)
+            return setError(FPV_ERROR_INVALID_ARGUMENT, "cargo mass must be 0..50 kg");
+        Vec3 off = L.conv.dirToInternal({in->offset[0], in->offset[1], in->offset[2]}) / L.conv.unitsPerMeter();
+        float r = L.conv.lenToInternal(in->radius);
+        if (!finite(off) || !std::isfinite(r) || r < 0 || r > 5 || length(off) > 10)
+            return setError(FPV_ERROR_INVALID_ARGUMENT, "cargo offset within 10 m and radius 0..5 m");
+        cargo.mass = in->mass;
+        cargo.offset = off;
+        cargo.radius = r;
+    }
+    L.runner.call([&] { L.flight.setCargo(cargo); });
+    return FPV_OK;
+}
+
+FPV_API fpv_result fpv_portals_set(const fpv_portal_link *links, uint32_t count) {
+    REQUIRE_INIT();
+    if (count && !links) return setError(FPV_ERROR_INVALID_ARGUMENT, "links is NULL");
+    if (count > FPV_MAX_PORTAL_LINKS) return setError(FPV_ERROR_INVALID_ARGUMENT, "at most FPV_MAX_PORTAL_LINKS links");
+    std::vector<PortalLink> out;
+    auto conv = [&](const fpv_portal &h, Portal &p) {
+        p.pos = L.conv.posToInternal({h.position[0], h.position[1], h.position[2]});
+        Quat q{h.rotation[0], h.rotation[1], h.rotation[2], h.rotation[3]};
+        if (!(qdot(q, q) > 1e-12f)) return false;
+        p.rot = normalize(L.conv.rotToInternal(q));
+        p.halfWidth = L.conv.lenToInternal(h.half_width);
+        p.halfHeight = L.conv.lenToInternal(h.half_height);
+        return finite(p.pos) && p.halfWidth > 0 && p.halfHeight > 0 && std::isfinite(p.halfWidth) &&
+               std::isfinite(p.halfHeight);
+    };
+    for (uint32_t i = 0; i < count; i++) {
+        PortalLink link;
+        if (!conv(links[i].a, link.a) || !conv(links[i].b, link.b))
+            return setError(FPV_ERROR_INVALID_ARGUMENT, "portal link %u: a rotation, a position and positive sizes", i);
+        out.push_back(link);
+    }
+    L.portals = out;
+    L.flight.setPortals(std::move(out));
+    return FPV_OK;
+}
+
+FPV_API fpv_result fpv_controls_set(const fpv_control_desc *controls, uint32_t count) {
+    REQUIRE_INIT();
+    if (count && !controls) return setError(FPV_ERROR_INVALID_ARGUMENT, "controls is NULL");
+    std::vector<ControlDesc> out;
+    if (count) {
+        uint32_t stride = controls[0].struct_size;
+        if (stride < offsetof(fpv_control_desc, gamepad_button) + sizeof(int32_t))
+            return setError(FPV_ERROR_ABI_MISMATCH, "set struct_size = sizeof(fpv_control_desc) in every control");
+        const char *base = reinterpret_cast<const char *>(controls);
+        for (uint32_t i = 0; i < count; i++) {
+            const fpv_control_desc &c = *reinterpret_cast<const fpv_control_desc *>(base + (size_t)i * stride);
+            if (!c.id || !c.name || !c.name[0])
+                return setError(FPV_ERROR_INVALID_ARGUMENT, "control %u: a non-zero id and a name", i);
+            for (const ControlDesc &o : out)
+                if (o.id == c.id || o.name == c.name)
+                    return setError(FPV_ERROR_INVALID_ARGUMENT, "control %u: id and name must be unique", i);
+            ControlDesc d;
+            d.id = c.id;
+            d.name = c.name;
+            d.label = c.label && c.label[0] ? c.label : c.name;
+            d.kind = c.kind == FPV_CONTROL_SWITCH ? ControlKind::Switch : ControlKind::Button;
+            d.key = c.key > 0 && c.key < 512 ? c.key : 0;
+            d.padButton = c.gamepad_button;
+            out.push_back(d);
+        }
+    }
+    L.input.setControls(out);
+    return FPV_OK;
+}
+
+FPV_API int fpv_control_poll(uint32_t id, uint32_t *presses) {
+    Lib &L = lib();
+    uint32_t p = 0;
+    bool on = L.input.pollControl(id, p);
+    if (presses) *presses = p;
+    return on ? 1 : 0;
 }
 
 FPV_API fpv_result fpv_drone_set_preset(fpv_drone *d, const char *preset) {

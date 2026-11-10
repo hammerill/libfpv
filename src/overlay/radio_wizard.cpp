@@ -14,6 +14,8 @@ constexpr float kMoveThreshold = 0.35f;  // raw units (-1..1) a stick must move 
 void RadioWizard::start(const RawDevice &dev) {
     m_active = true;
     m_bombOnly = false;
+    m_controls.clear();
+    m_controlIndex = 0;
     m_step = Step::Rest;
     m_mapping = DeviceMapping{};
     m_mapping.guid = dev.guid;
@@ -64,6 +66,67 @@ void RadioWizard::mergeBombSwitches(DeviceMapping &into, const DeviceMapping &fr
 }
 #endif
 
+void RadioWizard::startControls(const RawDevice &dev, const DeviceMapping &current,
+                                const std::vector<ControlDesc> &controls) {
+    start(dev);
+    m_mapping = current;
+    m_mapping.guid = dev.guid;
+    m_mapping.name = dev.name;
+    m_controls = controls;
+    for (const ControlDesc &c : m_controls) m_mapping.controls.erase(c.name);
+}
+
+const ControlDesc *RadioWizard::currentControl() const {
+    if (m_step != Step::GameControl || m_controlIndex >= m_controls.size()) return nullptr;
+    return &m_controls[m_controlIndex];
+}
+
+void RadioWizard::enterControl() {
+    m_candidate = -1;
+    const ControlDesc &c = m_controls[m_controlIndex];
+    m_controlTitle = c.label;
+    // a button usually is one on the radio: it is kept after the release
+    m_momentary = c.kind == ControlKind::Button;
+    if (c.kind == ControlKind::Button)
+        m_controlText = "Optional: press the button (or flip the switch) that should do \"" + c.label +
+                        "\", or Skip. It acts while held; a momentary switch or a push button works best. A "
+                        "position of a 3-position switch that no other mode uses works too.";
+    else
+        m_controlText = "Optional: flip the switch that should turn \"" + c.label +
+                        "\" on to its ON position, or Skip. A push button works too: tick the box below, and "
+                        "each press turns it on or off.";
+}
+
+void RadioWizard::mergeControls(DeviceMapping &into, const DeviceMapping &from, const std::vector<std::string> &names,
+                                bool onlyIfFree) {
+    for (const std::string &name : names) {
+        into.controls.erase(name);
+        auto it = from.controls.find(name);
+        if (it == from.controls.end()) continue;
+        const ChannelBinding &b = it->second;
+        if (b.axis < 0 && b.button < 0) continue;
+        bool free = true;
+        if (onlyIfFree) {
+            auto clash = [&](const ChannelBinding &ob, bool stick) {
+                if (b.button >= 0 && ob.button == b.button) return true;
+                return b.axis >= 0 && ob.axis == b.axis &&
+                       (stick || std::fabs(ob.switchOn() - b.switchOn()) < kMoveThreshold);
+            };
+            for (int o = 0; o < kChannelCount; o++)
+                if (clash(into.channels[o], o < kAux1)) free = false;
+            for (auto &kv : into.controls)
+                if (clash(kv.second, false)) free = false;
+        }
+        if (free) into.controls[name] = b;
+    }
+}
+
+std::vector<std::string> RadioWizard::controlNames(const DeviceMapping &m) {
+    std::vector<std::string> out;
+    for (auto &kv : m.controls) out.push_back(kv.first);
+    return out;
+}
+
 int RadioWizard::channelForStep(Step s) const {
     switch (s) {
     case Step::Throttle: return kThrottle;
@@ -94,6 +157,8 @@ RadioWizard::Step RadioWizard::lastSwitch() const {
 bool RadioWizard::axisUsed(int axis) const {
     for (auto &b : m_mapping.channels)
         if (b.axis == axis) return true;
+    for (auto &kv : m_mapping.controls)
+        if (kv.second.axis == axis) return true;
     return false;
 }
 
@@ -111,6 +176,8 @@ bool RadioWizard::positionFree(int axis, float value) const {
         const ChannelBinding &b = m_mapping.channels[c];
         if (b.axis == axis && std::fabs(value - b.switchOn()) < kMoveThreshold) return false;
     }
+    for (auto &kv : m_mapping.controls)
+        if (kv.second.axis == axis && std::fabs(value - kv.second.switchOn()) < kMoveThreshold) return false;
     return true;
 }
 
@@ -123,6 +190,8 @@ int RadioWizard::sharedWith(int axis) const {
 bool RadioWizard::buttonUsed(int button) const {
     for (auto &b : m_mapping.channels)
         if (b.button == button) return true;
+    for (auto &kv : m_mapping.controls)
+        if (kv.second.button == button) return true;
     return false;
 }
 
@@ -167,7 +236,7 @@ void RadioWizard::update(const RawDevice &dev) {
         }
         return;
     }
-    if (channelForStep(m_step) >= 0) {
+    if (channelForStep(m_step) >= 0 || m_step == Step::GameControl) {
         bool sw = m_step >= Step::ArmSwitch;
         int prev = m_candidate;
         float prevValue = m_candidateValue;
@@ -206,6 +275,12 @@ bool RadioWizard::next(std::string &hint) {
             return true;
         }
 #endif
+        if (controlsOnly()) {
+            m_step = Step::GameControl;
+            m_controlIndex = 0;
+            enterControl();
+            return true;
+        }
         m_step = Step::Throttle;
         return true;
     case Step::Calibrate: {
@@ -233,20 +308,23 @@ bool RadioWizard::next(std::string &hint) {
         break;
     }
     int ch = channelForStep(m_step);
-    if (ch < 0) return false;
+    if (ch < 0 && m_step != Step::GameControl) return false;
     if (m_candidate < 0) {
         hint = m_step >= Step::ArmSwitch ? (m_momentary ? "Press the button first (the wizard has not seen it yet)."
                                                         : "Flip the switch first (the wizard has not seen it move yet).")
                                          : "Move the stick as shown and hold it there.";
         return false;
     }
-    ChannelBinding &b = m_mapping.channels[ch];
+    const ControlDesc *control = currentControl();
+    ChannelBinding &b = control ? m_mapping.controls[control->name] : m_mapping.channels[ch];
     b = ChannelBinding{};
 #if defined(LIBFPV_KAMIKAZE)
     b.toggle = m_momentary && m_step != Step::ExplodeSwitch;
 #else
     b.toggle = m_momentary;
 #endif
+    // a game button acts while held: a push button is just that
+    if (control && control->kind == ControlKind::Button) b.toggle = false;
     if (m_candidate >= 1000) {
         b.button = m_candidate - 1000;
         // the switch is "on" in its current (flipped) position
@@ -271,6 +349,14 @@ bool RadioWizard::next(std::string &hint) {
     }
     m_candidate = -1;
     m_momentary = false;
+    if (control) {
+        if (++m_controlIndex < m_controls.size()) {
+            enterControl();
+        } else {
+            m_step = Step::Done;  // `complete` stays as the radio's setup had it
+        }
+        return true;
+    }
     switch (m_step) {
     case Step::Throttle: m_step = Step::Yaw; break;
     case Step::Yaw: m_step = Step::Pitch; break;
@@ -295,6 +381,14 @@ bool RadioWizard::next(std::string &hint) {
 
 void RadioWizard::skip() {
     if (!canSkip()) return;
+    if (const ControlDesc *c = currentControl()) {
+        m_mapping.controls.erase(c->name);
+        m_candidate = -1;
+        m_momentary = false;
+        if (++m_controlIndex < m_controls.size()) enterControl();
+        else m_step = Step::Done;
+        return;
+    }
     m_mapping.channels[channelForStep(m_step)] = ChannelBinding{};
     m_candidate = -1;
     m_momentary = false;
@@ -308,6 +402,20 @@ void RadioWizard::skip() {
 
 void RadioWizard::back() {
     if (m_step <= Step::Rest) return;
+    if (controlsOnly()) {
+        // Done -> the last control, a control -> the one before, the first -> Rest
+        if (m_step == Step::Done) m_controlIndex = m_controls.size();
+        if (m_controlIndex == 0) {
+            m_step = Step::Rest;
+            m_candidate = -1;
+            return;
+        }
+        m_controlIndex--;
+        m_step = Step::GameControl;
+        m_mapping.controls.erase(m_controls[m_controlIndex].name);
+        enterControl();
+        return;
+    }
 #if defined(LIBFPV_KAMIKAZE)
     if (m_bombOnly && m_step == Step::BombArmSwitch) {
         m_step = Step::Rest;
@@ -342,6 +450,7 @@ const char *RadioWizard::title() const {
     case Step::BombArmSwitch: return "Bomb arm switch";
     case Step::ExplodeSwitch: return "Explode switch";
 #endif
+    case Step::GameControl: return m_controlTitle.c_str();
     case Step::Done: return "All set";
     }
     return "";
@@ -351,6 +460,9 @@ const char *RadioWizard::instruction() const {
     switch (m_step) {
     case Step::PickDevice: return "Select the radio you want to fly with.";
     case Step::Rest:
+        if (controlsOnly())
+            return "Put every switch in its OFF position, then press Next. Only the game's own controls are set up "
+                   "here; the rest of your radio setup stays as it is.";
 #if defined(LIBFPV_KAMIKAZE)
         if (m_bombOnly)
             return "Put every switch in its OFF position (the bomb switches too), then press Next. Only the bomb arm "
@@ -391,7 +503,10 @@ const char *RadioWizard::instruction() const {
         return "Optional: flip a switch (a momentary one is best) that should EXPLODE the bomb on command, or Skip. "
                "It only works while the bomb is armed and live.";
 #endif
+    case Step::GameControl: return m_controlText.c_str();
     case Step::Done:
+        if (controlsOnly())
+            return "The game's controls are set; the rest of your radio setup is unchanged. Try them below.";
 #if defined(LIBFPV_KAMIKAZE)
         if (m_bombOnly)
             return "The bomb switches are set; the rest of your radio setup is unchanged. Check the bars below.";
@@ -410,6 +525,7 @@ std::string RadioWizard::detectedLabel() const {
     std::string label = "axis " + std::to_string(m_candidate + 1);
     if (m_step >= Step::ArmSwitch) {
         int other = sharedWith(m_candidate);
+        if (other < 0 && axisUsed(m_candidate)) return label + ", same switch as another control in another position";
         if (other >= 0) label += ", same switch as AUX" + std::to_string(other - kAux1 + 1) + " in another position";
         return label;
     }
@@ -418,6 +534,8 @@ std::string RadioWizard::detectedLabel() const {
 
 float RadioWizard::progress() const {
     if (m_step == Step::Done) return 1;
+    if (controlsOnly())
+        return m_step == Step::Rest ? 0.0f : (float)(m_controlIndex + 1) / (float)(m_controls.size() + 1);
 #if defined(LIBFPV_KAMIKAZE)
     if (m_bombOnly) return m_step == Step::Rest ? 0.0f : m_step == Step::BombArmSwitch ? 1 / 3.0f : 2 / 3.0f;
 #endif

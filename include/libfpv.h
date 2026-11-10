@@ -358,6 +358,29 @@ FPV_API fpv_result fpv_drone_set_pilot_position(fpv_drone *drone, const float po
 /* Switches the physical preset (frame, motors, props, battery, camera). */
 FPV_API fpv_result fpv_drone_set_preset(fpv_drone *drone, const char *preset);
 
+/* Changes the drone's velocity at once, host units / s: a launch pad, a
+ * bouncy surface, a blast of air the game simulates itself. `replace`
+ * non-zero sets the velocity to `velocity`; zero adds `velocity` to it.
+ * The attitude and spin are kept, and Betaflight flies on from there. */
+FPV_API fpv_result fpv_drone_push(fpv_drone *drone, const float velocity[3], int replace);
+
+/* Cargo: something the drone carries (a crate hooked under it, a parcel).
+ * It is rigidly attached: its mass and inertia add to the quad's (the centre
+ * of mass stays where it is), and a sphere around it collides with the
+ * world. Its impacts report motor_index FPV_IMPACT_CARGO. The game draws it
+ * at frame.position + frame.rotation * offset. */
+typedef struct fpv_cargo {
+    uint32_t struct_size;
+    float mass;       /* kg; 0 = nothing carried */
+    float offset[3];  /* its centre, drone-local host coords and units (e.g. below the frame) */
+    float radius;     /* host units, the collision sphere; 0 = it collides with nothing */
+} fpv_cargo;
+
+FPV_API void fpv_cargo_defaults(fpv_cargo *cargo);
+/* Picks up, changes or (NULL, or mass 0) drops the cargo. Applies at once,
+ * also in flight. A new drone (fpv_drone_create) carries nothing. */
+FPV_API fpv_result fpv_drone_set_cargo(fpv_drone *drone, const fpv_cargo *cargo);
+
 typedef struct fpv_camera {
     float position[3];
     float rotation[4];      /* local forward = view direction, local up = screen up */
@@ -450,8 +473,10 @@ typedef struct fpv_impact {
     float impulse;           /* N*s */
     uint8_t material;
     uint32_t object_id;      /* 0 = static world or raycast */
-    int32_t motor_index;     /* -1 = frame, 0..3 = a propeller hit */
+    int32_t motor_index;     /* -1 = frame, 0..3 = a propeller hit, FPV_IMPACT_CARGO = the cargo */
 } fpv_impact;
+
+#define FPV_IMPACT_CARGO (-2)
 
 #define FPV_MAX_IMPACTS 16
 #define FPV_OSD_ROWS 16
@@ -514,6 +539,13 @@ typedef struct fpv_frame {
     /* The air's velocity at the drone (wind, gusts, rotor downwash, blasts),
      * host units / s; zero in still air or with wind off. */
     float wind[3];
+
+    /* Portals (fpv_portals_set): how many times the drone went through one
+     * since it was created, and the last: link index * 2 + the side it
+     * entered (0 = a, 1 = b), -1 = none yet. A change of portal_passes is
+     * the moment for the game's own "through a portal" effects. */
+    uint32_t portal_passes;
+    int32_t last_portal;
 } fpv_frame;
 
 /* Advances presentation by frame_dt seconds of host time and fills `frame`.
@@ -535,6 +567,44 @@ typedef enum fpv_view {
 } fpv_view;
 
 FPV_API void fpv_set_view(fpv_view view);
+
+/* ===========================================================================
+ * Portals
+ *
+ * Two linked openings in the world that are one, as in a game with portals
+ * or seamless teleporters. When the drone's centre crosses an opening from
+ * its front, the drone comes out of the linked opening's front, with its
+ * attitude, velocity and spin turned with it (decided on the simulation
+ * thread, at its rate). The surface around an opening does not stop the
+ * drone inside it, but its frame still hits the edge, so a wide quad
+ * through a narrow opening clips the rim. Rays of the raycast callback that
+ * hit inside an opening are cast on from the linked one, so the world
+ * beyond is solid too.
+ *
+ * frame.camera looks through the opening the lens has already passed (the
+ * camera sits ahead of the centre): it can be on the far side of the link
+ * before the drone is. The frame is not interpolated across a pass.
+ * See docs/INTEGRATION.md#portals.
+ * ======================================================================== */
+
+typedef struct fpv_portal {
+    float position[3];  /* centre of the opening, on the surface, host coords */
+    /* local forward = out of the surface (the side the drone enters from),
+     * local up = the opening's up, local right = its width */
+    float rotation[4];
+    float half_width;   /* host units */
+    float half_height;
+} fpv_portal;
+
+typedef struct fpv_portal_link {
+    fpv_portal a, b;
+} fpv_portal_link;
+
+/* Replaces every link (NULL or 0 = none). Only linked openings exist here:
+ * an opening without a partner is a wall. Cheap; call it whenever a portal
+ * opens, moves or closes. At most FPV_MAX_PORTAL_LINKS. */
+#define FPV_MAX_PORTAL_LINKS 16
+FPV_API fpv_result fpv_portals_set(const fpv_portal_link *links, uint32_t count);
 
 /* ===========================================================================
  * Simulation options
@@ -944,6 +1014,62 @@ typedef enum fpv_key {
 } fpv_key;
 
 FPV_API void fpv_input_key(int key, int down);
+
+/* ---------------------------------------------------------------------------
+ * Game controls
+ *
+ * The game's own actions for the pilot (open a door, fire, grab, change the
+ * camera), on the radio as on the keyboard and gamepad. The game declares
+ * them once; the player puts them on switches or buttons of their radio in
+ * F8 > Radio > "Set up game controls" (or one by one in F8 > Controls),
+ * next to the flight modes and without touching them, and can change the
+ * keys there. They never reach Betaflight. The radio bindings are saved in
+ * radio_mappings.json by `name`, so every game keeps its own, and keys in
+ * settings.json. See docs/INTEGRATION.md#game-controls.
+ * ------------------------------------------------------------------------ */
+
+typedef enum fpv_control_kind {
+    /* Acts while held: a momentary switch or a button. Each press counts. */
+    FPV_CONTROL_BUTTON = 0,
+    /* On or off: a 2- or 3-position switch, or a key or button whose each
+     * press flips it. */
+    FPV_CONTROL_SWITCH = 1
+} fpv_control_kind;
+
+/* Gamepad buttons (SDL_GamepadButton). The default gamepad layout flies
+ * with SOUTH (arm), EAST (beeper) and NORTH (turtle): use the others. */
+enum fpv_gamepad_button {
+    FPV_GAMEPAD_NONE = -1,
+    FPV_GAMEPAD_SOUTH = 0, FPV_GAMEPAD_EAST, FPV_GAMEPAD_WEST, FPV_GAMEPAD_NORTH,
+    FPV_GAMEPAD_BACK, FPV_GAMEPAD_GUIDE, FPV_GAMEPAD_START,
+    FPV_GAMEPAD_LEFT_STICK, FPV_GAMEPAD_RIGHT_STICK, FPV_GAMEPAD_LEFT_SHOULDER, FPV_GAMEPAD_RIGHT_SHOULDER,
+    FPV_GAMEPAD_DPAD_UP, FPV_GAMEPAD_DPAD_DOWN, FPV_GAMEPAD_DPAD_LEFT, FPV_GAMEPAD_DPAD_RIGHT,
+    FPV_GAMEPAD_LEFT_TRIGGER = 32,  /* pressed past half travel */
+    FPV_GAMEPAD_RIGHT_TRIGGER = 33
+};
+
+typedef struct fpv_control_desc {
+    uint32_t struct_size;  /* of each element: the array's stride */
+    uint32_t id;           /* the game's own, non-zero, unique */
+    /* Stable key for the saved bindings, unique across games: prefix it
+     * with the game ("portal2.fire_blue"). Renaming it loses the bindings. */
+    const char *name;
+    const char *label;     /* shown to the player ("Fire blue portal") */
+    uint32_t kind;         /* fpv_control_kind */
+    int32_t key;           /* default key (fpv_key or an uppercase ASCII letter/digit), 0 = none */
+    int32_t gamepad_button;/* fpv_gamepad_button, FPV_GAMEPAD_NONE = none */
+} fpv_control_desc;
+
+/* Replaces the game's controls (count 0 = none). Strings are copied. Call
+ * it after fpv_global_init. A control keeps its state across calls if its
+ * id and name stay. */
+FPV_API fpv_result fpv_controls_set(const fpv_control_desc *controls, uint32_t count);
+/* Whether control `id` is on now (held, or switched on), and in `presses`
+ * (optional) how many times it went from off to on since the last poll:
+ * read it every frame and act on presses, so a tap shorter than a frame is
+ * never lost. The first reading of a radio switch is where it is, not a
+ * press. Keys only count while the overlay is closed. */
+FPV_API int fpv_control_poll(uint32_t id, uint32_t *presses);
 
 /* ===========================================================================
  * Overlay (Dear ImGui, rendered by the host)

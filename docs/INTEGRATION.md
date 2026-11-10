@@ -543,6 +543,117 @@ and other elements, the post-flight stats and the OSD disable switch
 cover it as they do on a real quad. With the flag, the game draws its own,
 from `fpv_kamikaze_get_state`.
 
+## Game controls
+
+Most games give the pilot something to do besides flying: open a door, fire,
+grab, change the camera. Put those on `fpv_controls_set` rather than reading
+keys yourself. The pilot then gets them on the radio as well as on the
+keyboard and gamepad, which is the point: a real FPV pilot keeps both hands
+on the sticks.
+
+```c
+fpv_control_desc c[2] = {0};
+c[0].struct_size = sizeof c[0];
+c[0].id = 1;
+c[0].name = "portal2.fire_blue";      /* stable and unique across games */
+c[0].label = "Fire blue portal";
+c[0].kind = FPV_CONTROL_BUTTON;       /* acts while held, each press counts */
+c[0].key = 'Q';
+c[0].gamepad_button = FPV_GAMEPAD_LEFT_TRIGGER;
+c[1] = c[0];
+c[1].id = 2;
+c[1].name = "portal2.grab";
+c[1].label = "Grab";
+c[1].kind = FPV_CONTROL_SWITCH;       /* on or off; a key press flips it */
+c[1].key = 'G';
+c[1].gamepad_button = FPV_GAMEPAD_LEFT_SHOULDER;
+fpv_controls_set(c, 2);               /* once, after fpv_global_init */
+
+/* every frame */
+uint32_t presses;
+fpv_control_poll(1, &presses);
+for (uint32_t i = 0; i < presses; i++) fire_blue();
+bool grab = fpv_control_poll(2, NULL);
+```
+
+- **Act on presses, not on the state, for one-shot actions.** The state is
+  read at the simulation's 1 kHz, so a tap shorter than a game frame still
+  counts once in `presses`.
+- The player binds them in F8 > Radio > "Set up game controls" (all of them,
+  one after the other, each one optional) or one by one in F8 > Controls,
+  where the keys can be changed too. The setup only offers switch positions
+  and buttons that the flight modes and the other controls don't use. Several
+  controls can share a 3-position switch, one per position, as the flight
+  modes do.
+- A `SWITCH` control on a radio switch follows the switch; on a key, a
+  gamepad button or a radio push button, each press flips it. The first
+  reading of a radio switch is where it is, not a press, so a switch left on
+  doesn't fire anything when the game starts.
+- The bindings are saved in `radio_mappings.json` under each radio, by
+  `name`. A new full radio setup keeps the ones that still fit. Every game's
+  controls stay in the file, so pick names that can't clash
+  (`"<game>.<action>"`) and never rename them.
+- Keys only count while the overlay is closed. Choose default keys that the
+  keyboard fallback doesn't fly with (W A S D, the arrows, Enter, B, T) and
+  that the standard libfpv keys don't use (F, Y, F7, F8), and gamepad buttons
+  other than SOUTH, EAST and NORTH.
+- They never reach Betaflight: they are not AUX channels, and the
+  Configurator's Modes tab doesn't see them.
+
+## Portals
+
+For a game with portals or seamless teleporters (two openings that are one),
+give libfpv the linked pairs. The simulation then takes the drone through at
+its own rate, so a fast drone never stops on the surface around the opening
+or shows the wall behind it for a frame.
+
+```c
+fpv_portal_link l;
+l.a.position = ...;    /* centre of the opening, on the surface */
+l.a.rotation = ...;    /* local forward out of the surface, local up = the opening's up */
+l.a.half_width = 32;   /* host units */
+l.a.half_height = 56;
+l.b = ...;
+fpv_portals_set(&l, 1);   /* whenever a portal opens, moves or closes; NULL, 0 = none */
+```
+
+- Pass only linked pairs. An opening without a partner is just a wall.
+- The drone goes through when its centre crosses an opening from the front.
+  Its attitude, velocity and spin turn with it, so a drone that dives into a
+  floor portal comes out of a wall one flying horizontally, as anything does
+  in a portal game. Betaflight gets the new attitude at once.
+- The surface around an opening doesn't stop the drone inside it, but its
+  frame still hits the rim: a quad wider than the opening can't get through.
+- Rays of the raycast callback that hit inside an opening are cast on from
+  the linked one, so the world beyond the opening is solid while the drone is
+  half way through. The callback needs nothing special. It can (and should)
+  keep reporting the wall around the opening as solid.
+- `frame.camera` looks through an opening the lens has already passed: the
+  lens sits a few centimetres ahead of the centre, so the camera can be on
+  the far side before the drone is. Render from `frame.camera` as usual. The
+  frame isn't interpolated across a pass.
+- `frame.portal_passes` counts the passes of the current drone, and
+  `frame.last_portal` says which (link × 2 + the side entered). Play the
+  game's own sound or effect when the count changes.
+
+## Pushes and cargo
+
+- `fpv_drone_push(drone, velocity, replace)` changes the drone's velocity at
+  once: a launch pad (replace it with the launch velocity), a bouncy
+  surface, a gust the game simulates itself (add to it). Attitude and spin
+  are kept, and Betaflight flies on from there.
+- `fpv_drone_set_cargo(drone, &cargo)` hangs something under the drone: its
+  mass and inertia add to the quad's, and a sphere of `radius` around
+  `offset` (drone-local) collides with the world. Pass the cargo's true
+  offset from the drone at the moment of the pickup. libfpv doesn't move the
+  drone, so a sphere placed inside the ground would push it the wrong way.
+  Hide or disable the game's own object while it is carried, draw it at
+  `frame.position + frame.rotation * offset`, and give it back to the game
+  (with the drone's velocity) when it is dropped (`NULL`, or mass 0). Its
+  impacts come with `motor_index` `FPV_IMPACT_CARGO`. A new drone carries
+  nothing. With 1 kg under a 5" freestyle quad, a full-throttle climb is
+  about a third of the bare quad's.
+
 ## Lessons from real integrations
 
 These notes come from integrating libfpv into GTA IV

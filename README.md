@@ -50,7 +50,12 @@ engine or mod loader.
 - **Input.** Radios and gamepads are read through an embedded, hidden SDL3,
   with a radio setup wizard (arm, angle, beeper, turtle, air mode and OSD
   disable switches).
-  Keyboard and gamepad fallbacks are included.
+  Keyboard and gamepad fallbacks are included. The game's own actions (fire,
+  grab, open) can go on radio switches and buttons too, next to the flight
+  modes.
+- **Portals, pushes and cargo.** Linked portals the drone flies through with
+  its momentum, launch pads and bounces, and things carried under the drone
+  with their weight.
 - **Presentation.** The OSD uses Betaflight's MAX7456 fonts (analog or HD
   look). A Dear ImGui overlay opens on F8, and synthesized motor and beeper
   sound comes through `fpv_audio_read`, heard onboard or from the pilot:

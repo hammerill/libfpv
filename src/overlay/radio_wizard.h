@@ -31,6 +31,7 @@ public:
         BombArmSwitch,
         ExplodeSwitch,
 #endif
+        GameControl,  // the game's controls, one after the other (startControls)
         Done
     };
     // The full setup: sticks, then AUX1..6. Never the bomb switches.
@@ -47,6 +48,22 @@ public:
     // button `into` uses already is left out (after a new full setup).
     static void mergeBombSwitches(DeviceMapping &into, const DeviceMapping &from, bool onlyIfFree);
 #endif
+    // Only the game's controls (fpv_controls_set), each one optional, on a
+    // radio set up already: the other bindings of `current` stay, and the
+    // new ones avoid the positions and buttons they use. Merge the result
+    // with mergeControls.
+    void startControls(const RawDevice &dev, const DeviceMapping &current, const std::vector<ControlDesc> &controls);
+    bool controlsOnly() const { return !m_controls.empty(); }
+    const std::vector<ControlDesc> &controlsBeingSetUp() const { return m_controls; }
+    // The control being set up (GameControl step), or nullptr.
+    const ControlDesc *currentControl() const;
+    // Copies the controls named in `names` from `from` into `into` (a name
+    // `from` has no binding for is removed from `into`). With `onlyIfFree`,
+    // a binding whose axis position or button `into` uses already is left out.
+    static void mergeControls(DeviceMapping &into, const DeviceMapping &from, const std::vector<std::string> &names,
+                              bool onlyIfFree);
+    // Every control name bound in `m`.
+    static std::vector<std::string> controlNames(const DeviceMapping &m);
     void cancel() { m_active = false; }
     bool active() const { return m_active; }
     Step step() const { return m_step; }
@@ -61,7 +78,9 @@ public:
 
     const char *title() const;
     const char *instruction() const;
-    bool canSkip() const { return m_step >= Step::AngleSwitch && m_step <= lastSwitch(); }
+    bool canSkip() const {
+        return (m_step >= Step::AngleSwitch && m_step <= lastSwitch()) || m_step == Step::GameControl;
+    }
     // Live detection feedback for the UI.
     bool detected() const { return m_candidate >= 0; }
     std::string detectedLabel() const;  // e.g. "stick 3, reversed"
@@ -73,7 +92,9 @@ public:
     // pressed rather than held. Detection keeps what it saw after the
     // release, and the channel toggles on each press (the explode switch
     // stays on while pressed).
-    bool isSwitchStep() const { return m_step >= Step::ArmSwitch && m_step <= lastSwitch(); }
+    bool isSwitchStep() const {
+        return (m_step >= Step::ArmSwitch && m_step <= lastSwitch()) || m_step == Step::GameControl;
+    }
     bool momentary() const { return m_momentary; }
     void setMomentary(bool on);
 
@@ -102,6 +123,10 @@ private:
     int m_candidate = -1;  // axis index, or 1000 + button
     float m_candidateValue = 0;
     bool m_momentary = false;  // the current switch step is a push button
+    std::vector<ControlDesc> m_controls;  // startControls: the ones to set up
+    size_t m_controlIndex = 0;
+    std::string m_controlTitle, m_controlText;  // title() / instruction() of a control step
+    void enterControl();  // m_controlIndex: its texts, a fresh detection
 };
 
 }  // namespace fpv
