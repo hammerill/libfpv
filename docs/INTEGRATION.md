@@ -337,7 +337,7 @@ drone view.
 
 ### The player's choices: `fpv_pilot_set_support`
 
-The stand-in ([Spawning](#spawning-flights-and-the-world-around-the-drone))
+The stand-in ([Standing in](#standing-in-for-the-drone))
 and the pose are the game's code, but whether they happen is the player's
 choice, the same in every game (F8 > Fly > Pilot, both on by default).
 Once after `fpv_global_init`, say what the game does and its own stand-in
@@ -657,10 +657,11 @@ fpv_portals_set(&l, 1);   /* whenever a portal opens, moves or closes; NULL, 0 =
 ## Lessons from real integrations
 
 These notes come from integrating libfpv into GTA IV
-([gtaiv-fpv](https://github.com/hammerill/gtaiv-fpv): a native ASI mod on
-a closed, 32-bit D3D9 engine with no source). They apply to most game mods.
-Engine-specific details (addresses, natives) are in that repository's
-`MODLOG.md`. The case study at the end summarises them.
+([gtaiv-fpv](https://github.com/hammerill/gtaiv-fpv)) and GTA San Andreas
+([gtasa-fpv](https://github.com/hammerill/gtasa-fpv)). Both are native ASI
+mods on closed, 32-bit D3D9 engines with no source. The notes apply to most
+game mods. Engine-specific details (addresses, natives) are in each
+repository's `MODLOG.md`. The case studies at the end summarise them.
 
 A game repository's `MODLOG.md` is a historical log: it records what was
 tried and learned at the time, and it may be outdated. When it disagrees
@@ -700,6 +701,13 @@ engine quirks), not for how to use libfpv.
 - **Don't write to stdout.** Pass `cfg.log` and send libfpv's log to the
   mod's log file. One log file with both the mod's and libfpv's lines
   is the easiest to debug.
+- **Other mods have hooked the same places.** In a modded GTA SA, CLEO, a
+  widescreen fix and a limit adjuster had already redirected calls the mod
+  needed. When you redirect a call, send it on to whatever it calls now,
+  not to the original function. Before you detour a function, check that
+  its first bytes are the ones you expect. If they aren't, install nothing
+  and log it, so a different exe or another mod's patch never leaves a
+  hook half-installed.
 
 ### Coordinates and the camera
 
@@ -718,6 +726,29 @@ engine quirks), not for how to use libfpv.
   order, and handle the knife-edge singularity (put everything in heading
   when roll is ±90°). Test inverted, knife-edge and past-vertical
   attitudes.
+- **Better: set the camera inside the game's own camera update.** Code
+  that runs after the 3D scene can't change the frame being drawn, and a
+  camera the engine recomputes every frame drops what you wrote. An
+  earlier GTA SA drone mod couldn't roll its camera for these reasons, so
+  it put the player in an RC vehicle. gtasa-fpv steps libfpv from inside
+  `CCamera::Process`, at its last call (`CDraw::SetFOV`). There it writes
+  the camera matrix and the near plane, and the game then builds the
+  frustum and copies it to the renderer itself. That gives full roll and
+  no frame of lag. No Euler angles are needed: write the axes straight
+  from `frame.camera`.
+- **Check the matrix's axes as well.** The "right" row of SA's camera
+  matrix is up × forward, which points to the screen's left. Writing
+  screen right there mirrored the image.
+- **The game's FOV may not be vertical.** SA turns its FOV into a view
+  window whose vertical half-tangent is `scale · tan(fov/2)`. The scale
+  depends on the aspect ratio and on widescreen fixes. Read the scale back
+  from the render camera every frame, and convert libfpv's vertical FOV
+  with it.
+- **Sometimes the game skips its camera code.** During a replay, or with a
+  photo mod that freezes the world, SA doesn't run its camera update, so a
+  hook inside it never runs. If the hook didn't run this frame, apply the
+  camera yourself after the game's update, with the same steps that update
+  takes.
 - **Choose the near plane per frame for the FPV view.** The lens sits a few
   centimetres above the ground. With a fixed near plane of 0.2 m, the road
   under the camera was clipped away and the screen showed whatever was left
@@ -765,6 +796,10 @@ answer libfpv's rays with the engine's own line test.
   around the spawn to check it works.
 - Seen in GTA IV, not yet explained: `frame.altitude` is often -1 once the
   drone is more than a few metres up. Don't build gameplay on it yet.
+- A game's line test may see characters only roughly. SA's line test hits
+  only a ped's torso and head, and a drone 0.45 m up flew between a ped's
+  legs. That's acceptable for flying, but don't expect hits on arms or
+  legs.
 
 ### Impacts and game effects
 
@@ -778,6 +813,11 @@ hit. What worked in GTA IV:
   applied. If it starts on every contact, a 2 m/s graze just before the
   real hit uses up the cooldown, and the real hit does nothing.
 - Never apply effects to the player character.
+- **Hurt peds through the game's own damage event, not by writing their
+  health.** Name the player as the attacker and use a weapon type that
+  fits (GTA SA: `CWeapon::GenerateDamageEvent` with "rammed by car"). The
+  game's own reactions then follow: the victim flinches, peds run away or
+  fight back, and the wanted level rises.
 
 ### Drawing the OSD and the overlay (D3D9 and other hooked renderers)
 
@@ -804,6 +844,19 @@ hit. What worked in GTA IV:
 - Hide the game's own HUD and minimap while flying (every frame, if that
   is how the engine does it). Whatever stays on screen in FPV must go too
   while `FPV_DRONE_OSD_DISABLED` is set ([OSD disable switch](#osd-disable-switch)).
+- **Draw the drone model with the game's own transforms.** In the chase,
+  LOS and pilot views the drone is an object in the world. gtasa-fpv draws
+  it with fixed-function triangles right after the 3D scene. It uses the
+  view and projection transforms the game left on the device, so the model
+  sits in the world and is hidden behind walls by the depth buffer. It
+  writes RGB only: also writing alpha made the model glow through SA's
+  post-processing. And it tints the model with the frame's ambient and
+  directional light, so it doesn't stay bright at night.
+- **The pilot's radio needs no asset.** No model in GTA SA is an RC
+  transmitter. A procedural low-poly one (body, grips, gimbals, sticks,
+  switches, antenna, about 17 × 11 × 5 cm), drawn the same way between the
+  character's hand bones and facing its head, looks like a radio at any
+  distance. Nothing extra has to ship.
 
 ### Input
 
@@ -833,6 +886,26 @@ hit. What worked in GTA IV:
   other own keys, it can follow the label (the key marked Y on any layout).
 - Back to the pilot with the drone left in the world is **F**, and F7 goes
   back to that drone ([The F key](#the-f-key-back-to-the-pilot-the-drone-left-flying)).
+- **Return control only after the key is released.** F is also SA's "get
+  in a vehicle" key. When the mod gave CJ his controls back in the same
+  frame, the game saw F go down and he climbed into a nearby car. Hold the
+  character's controls until the key is up. By then the game's previous
+  and current key states agree, so it sees no press. Do this for any
+  libfpv key the game also uses.
+- **The Esc that closes the overlay must not reach the game.** The overlay
+  closes on Esc by itself. SA opened its pause menu on that same press.
+  Clear the game's Esc state while the overlay is open and until Esc is
+  released.
+- **Stop the game re-centring the mouse while the overlay is open.** SA
+  moves the cursor to the screen centre every frame for its mouse look, so
+  the overlay's cursor snapped back. Skip that call while the overlay is
+  open.
+- **Use your own bit to lock the player's controls.** SA's
+  `CPad::DisablePlayerControls` is a bit field: scripts and cutscenes set
+  their own bits. Set and clear only yours, so you never undo a script's
+  lock. Watch for side effects, too. SA's replay stops on any frame in
+  which player controls are disabled, so leave them alone during a
+  replay.
 - The radio mapping (`radio_mappings.json`) is per data folder. A player
   who already set up the radio for another libfpv game can copy that file
   into the new game's data folder.
@@ -868,11 +941,152 @@ hit. What worked in GTA IV:
   nobody at home). The player can turn the stand-in and the pose off and
   change the distances, so read them from `fpv_pilot_get_config`
   ([The player's choices](#the-players-choices-fpv_pilot_set_support)).
+  [Standing in for the drone](#standing-in-for-the-drone) shows how GTA San
+  Andreas does it.
 - "Return the character to where the drone is" (move here): ray down from
   the drone, load the area, put the character 1 m above the ground facing
   the drone's heading, and put the game camera behind it.
+- **The pilot position is the feet.** A character's position is often its
+  pelvis (about 1 m up in the GTAs). Pass the feet to
+  `fpv_drone_set_pilot_position`, or the LOS camera and the ear end up at
+  2.6 m instead of 1.6 m.
+- **Respawn where the pilot can see it.** By default, R and a respawn put
+  the drone back at the launch point. After the player has used the pilot
+  view (F), the character may have walked or driven away. gtasa-fpv then
+  respawns the drone in front of where the character is now.
+- **Flights in a replay or a frozen world.** A drone launched while a
+  replay plays or a photo mod freezes the world only watches: it starts
+  under the game's camera, leaves the character alone, and the flight ends
+  when that scene does. Check the game's own state (its time scale, its
+  user pause), not a particular mod. The game's clock stops or jumps
+  there, so time anything during such a flight with real time.
 - Auto-pause (default 0.5 s) covers pause menus and loading screens. Loading
   a save while flying is not handled yet.
+
+### Standing in for the drone
+
+GTA IV moves an invisible character along with the drone so the world
+streams in around it. gtasa-fpv goes further: the world treats the drone
+as the player. Peds turn to look at it, police chase and shoot at it,
+pickups on its path are collected, and the map loads around it, while the
+pilot still stands at home. This was the mod's most reworked part. Here is
+what it needed (the distances and the on/off switch come from
+`fpv_pilot_get_config`):
+
+- **If the engine asks one function where the player is, hook it.** SA's
+  streaming, population and much of its AI go through `FindPlayerCoors`
+  and `FindPlayerCentreOfWorld*`, which are real functions there (inlined
+  in GTA IV). Detoured to return the drone, they move the streaming and
+  the population with nothing else changed. This is the light stand-in.
+- **Some code reads the character itself.** Pickups test the player ped's
+  own position, peds' look-at IK aims at its head bone, and gunfire aims
+  at its spine. For those, the character goes to the drone:
+  - Make it invisible and collision-less. The game shows the player again
+    by itself, so clear those bits every frame.
+  - Skip its own control and physics update (no gravity, no tasks).
+  - Ignore all damage to it (SA: detour the ped damage response).
+- **Put the point the AI aims at on the drone, not the root.** With the
+  head on the drone, police bullets went half a metre below it. With the
+  spine (SA's aim bone) on the drone, they go at the drone and miss only by
+  the shooter's own aim. Measure the bone's offset from the root every
+  time. Until the bones are in place (the offset is over 1.5 m), use the
+  root.
+- **Move it without the engine's teleport.** SA's `CPed::Teleport` clears
+  the ped's tasks, which knocked it out of its pose on every call. Set the
+  matrix position instead, and take it out of the world's sectors and put
+  it back in only every 2 m.
+- **Load the collision, not just the scene.** SA's `CStreaming::LoadScene`
+  loads models but not collision, and collision streams around the
+  player's position, which is now the drone. When the character comes
+  home, load the collision there (`CColStore::EnsureCollisionIsInMemory`)
+  before putting it down. Otherwise it falls through the ground.
+- **Draw the pilot at home while the character is at the drone.** For the
+  frame's render passes, move the character home and make it visible, then
+  move it back to the drone for the world's update. (Super Mario 64 does
+  the same for Mario's own update and camera.) SA swaps it home before the
+  render list is built and back after the effects pass. It stays filed in
+  the drone's world sector, which is always scanned for drawing. Watch out
+  for what runs between those two points:
+  - Bone matrices are in world space and are rebuilt only when the
+    character is drawn. Rebuild them after each swap. Otherwise AI code
+    reads the home bones, and the character flickered at a distance on
+    frames where its animations were skipped.
+  - The renderer decides visibility at home. If it judged the character
+    off screen, SA updated only the root of the skeleton. Force full
+    animation updates.
+  - SA's peds aim and fire between the render passes
+    (`ProcessPedsAfterPreRender`). Every cop faced the drone but fired at
+    the pilot's home spot. Move the character back to the drone around
+    that call.
+- **The pose has to work with the engine's animations.** A borrowed
+  animation that doesn't move every bone leaves the others at identity:
+  CJ's jaw twisted. Keep those bones as the idle animation left them.
+  Hold your own reference on a streamed animation block. Otherwise the
+  streaming frees it after a death or a long trip, and the next launch
+  reads freed memory. To end the pose, blend back to the character's
+  idle animation. SA has no animation of anyone holding an RC transmitter,
+  but a punter reading a betting slip (`otb.ifp`, `betslp_loop`: head
+  down, both hands at the waist) looks like a pilot.
+- **Flying from a car: get out, stand in on foot, draw the character
+  seated.** With only the "where is the player" functions moved, a
+  driver didn't pick up pickups, and peds didn't look at the drone. So the
+  driver gets out at once, as the game's warp-out-of-car script command
+  does, and stands in as if on foot. At the end, it is warped back behind
+  the wheel, and also before "move here", so the car comes along. At home
+  it is drawn in its seat: its matrix relative to the car and the
+  animation it sat with were saved when it got out. Use only the light
+  stand-in when the character is on a mission (scripts check that the
+  player stays in the car) or a passenger (there is no seat to warp it
+  back into). The car needs care:
+  - Keep the car radio playing. SA turns it off in the frame the player
+    stops driving.
+  - Keep the car from being deleted. The population removes cars far from
+    the player, even the one it was driving. Mark the car as a mission
+    car until the stand-in ends, then restore its old status.
+  - Hold the car in place once the drone is far away (100 m), because the
+    collision under it streams out and it would sink. Closer than that,
+    leave it free, so a truck can still push it.
+  - Set the car down after a hold. An empty car isn't simulated: it hangs
+    in place with its wheels marked off the ground. When the hold ended,
+    its first physics step threw it off a roof, onto its side or onto its
+    roof. Placing it on its wheels (`PlaceOnRoadProperly`), then pinning
+    it there with zero speed for 500 ms of game time while the wheels find
+    the ground, fixed it every time.
+  - Right after the warp back in, the ped's position catches up with the
+    car only on the next frame. Measure anything from the car instead (a
+    respawn in front of the pilot, for example).
+- **The price:** with the stand-in on, the population follows the drone,
+  so the pilot's surroundings empty out ([Audio](#audio)). Players who
+  want a living world around the pilot turn the stand-in off.
+- **Log every change of state.** Log when the stand-in starts and ends,
+  and why (on a mission, a passenger, didn't get out); when the car is
+  held, released and set down (with its up vector); and the first hits on
+  the stand-in that were ignored. Most of the bugs above showed up in
+  those lines first.
+
+### The game's weapons against the drone
+
+- **The drone isn't in the game's collision, so bullets fly through it.**
+  Hook the game's per-bullet function and test each shot's path against
+  the drone. In SA, `CWeapon::DoBulletImpact` receives every instant-hit
+  bullet and shotgun pellet, from the muzzle to where it stopped, even
+  when it hits nothing. A shot through a body sphere of about 6 cm breaks
+  all four props. A shot through a prop's
+  disc breaks that prop. A shot stops at whatever it hit, so a bullet into
+  a wall never reaches a drone behind it.
+- **Turn shots aimed at the stand-in onto the drone.** The AI aims at the
+  stand-in's bone, which is near the drone but not on it. Rotate any
+  non-player shot that passed within 1.5 m of that bone about its muzzle
+  onto the drone, so it misses the drone by as much as it missed the
+  bone. SA gives a helicopter gunner's shots the helicopter as their
+  owner.
+- What else damages the props in SA: water above a prop (the water level
+  at its position), fires from the game's fire manager (on the ground, or
+  following a burning car), a new explosion within its radius, and a
+  turning helicopter rotor's disc.
+- To debug the AI's aim, log each shot that passes within 2 m of the drone
+  and where it passed relative to the drone. A bias (all shots below it,
+  say) means the aim point is wrong.
 
 ### Audio
 
@@ -898,7 +1112,16 @@ output device. Stop and join it before deleting the drone.
   LOS and pilot views the game's camera is already there. Back to the
   game's camera as soon as the flag goes. Most engines position sounds
   relative to one listener or camera; redirect that, not the render camera.
-  - With a stand-in ([Spawning](#spawning-flights-and-the-world-around-the-drone)),
+  - **If the engine has no single listener, redirect its camera reads.**
+    SA positions every sound relative to `TheCamera`, and its vehicle, ped
+    and weather sounds are updated from many places, so there is no single
+    call to wrap. gtasa-fpv points every operand in the audio code that
+    reads the camera's position or matrix (85 of them, found by
+    disassembling that code) at a fake camera placed at
+    `frame.los_camera`. Check every site's bytes first and patch all of
+    them or none. Undo the patches when the flag goes off and when the mod
+    unloads.
+  - With a stand-in ([Standing in](#standing-in-for-the-drone)),
     the world's population and streaming follow the drone, so once it is far
     the pilot's surroundings empty out and get quiet (the drone and the
     world around it are heard far off, correctly). That is the price of the
@@ -942,7 +1165,14 @@ scrapes don't play a sound on every contact frame).
   consecutive frames of a recording, and compare the count with and without
   the change.
 - A file the test harness creates to start the autotest must be deleted
-  afterwards, so a normal game start doesn't run it.
+  afterwards, so a normal game start doesn't run it. A hot reload of the
+  mod's core can run it again too.
+- Many games pause while their window doesn't have focus (GTA SA does).
+  Bring the window to the front before a test, or the test only starts
+  when someone clicks the game.
+- Make test targets stay put. Traffic that follows the road network moves
+  itself back onto the road, so the autotest marks its target car as
+  abandoned. When the test needs a car that isn't there, it spawns one.
 
 ### Case study: GTA IV (1.2.0.59)
 
@@ -957,3 +1187,18 @@ scrapes don't play a sound on every contact frame).
 | Drawing | ScriptHook's D3D9 device hook. Fixed-function triangles, and the fisheye through a 64×36 grid. |
 | Audio | `waveOut`. |
 | Streaming | The player character used as an invisible anchor. |
+
+### Case study: GTA San Andreas (1.0 US)
+
+| Hook | How gtasa-fpv does it |
+|---|---|
+| Loader | Modloader loads a small `.asi` from `modloader/FPV Drone/`. It owns the log and hot-reloads the core DLL. The game loop is entered by redirecting `Idle`'s call to `CGame::Process`, chained after CLEO. |
+| Script access | None: calls into the exe at fixed addresses, checked against the community `gta_sa.pdb`. Every detour checks the prologue bytes first. |
+| Coordinates | X east, Y north, Z up, metres (as GTA IV). |
+| Camera | Written inside `CCamera::Process` at its `SetFOV` call: the camera matrix (its "right" is screen left), the near plane from frustum probes, and an FOV converted through the view window's scale. Replays and frozen worlds apply it after `CGame::Process`. |
+| Collision | `CWorld::ProcessLineOfSight` with every entity type in one call, ignoring the player ped. |
+| Effects | `CWeapon::GenerateDamageEvent` for peds, damage and a push for vehicles. Bullets through the drone come from a `DoBulletImpact` detour. Sounds are frontend events and `ReportCollision` (the drone as plastic). |
+| Drawing | The D3D9 device from RenderWare. The OSD, overlay and fisheye go as in GTA IV. The drone model and the pilot's radio are fixed-function triangles with the game's transforms and light. |
+| Audio | `waveOut`. The game's own sounds move to the pilot when the drone is heard from there, by re-pointing the audio code's camera operands. |
+| Wind | The weather's wind and direction, helicopter rotors and explosions ([Wind](#case-study-gta-san-andreas)). |
+| Streaming | `FindPlayerCoors` and `FindPlayerCentreOfWorld*` detoured to the drone, and CJ himself at the drone (out of his car if he was driving), drawn at home ([Standing in](#standing-in-for-the-drone)). |

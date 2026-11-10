@@ -18,6 +18,10 @@
 
 *([reVC-mac-fpv](https://github.com/hammerill/reVC-mac-fpv))*
 
+<p><a href="https://github.com/hammerill/portal-2-fpv"><img src="https://raw.githubusercontent.com/hammerill/portal-2-fpv/main/portal-2-fpv.gif" alt="Portal 2 FPV" width=512></a></p>
+
+*([portal-2-fpv](https://github.com/hammerill/portal-2-fpv))*
+
 A drop-in FPV quadcopter for any game. libfpv runs real Betaflight firmware
 (through [SimITL](https://github.com/AJ92/SimITL)) on its own 1 kHz
 simulation thread, reads the player's radio or gamepad, and gives the game
