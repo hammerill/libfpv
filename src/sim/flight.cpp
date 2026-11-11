@@ -25,6 +25,9 @@ constexpr float kContactPatchRatio = 0.5f;
 constexpr float kPropDiscHalfThickness = 0.012f;
 constexpr float kPropNutHeight = 0.006f;     // motor top above the prop disc
 constexpr float kMaxSpeed = 120.0f;          // m/s, sanity clamp
+constexpr float kWinchSpeed = 0.5f;          // m/s, the cargo line reeled in or out
+constexpr float kCargoDragCoef = 1.0f;       // the hanging cargo's drag coefficient (on pi r^2)
+constexpr float kCargoRestitution = 0.15f;
 constexpr float kMaxAngularSpeed = 100.0f;   // rad/s, SimITL's own clamp
 #if defined(LIBFPV_KAMIKAZE)
 constexpr float kPayloadRadius = 0.035f;     // the warhead's size (its own inertia)
@@ -102,8 +105,8 @@ void Flight::buildShape() {
         m_shape.push_back({m_payloadPos, std::max(0.005f, r), -1});
     }
 #endif
-    // the cargo collides as one sphere around its centre
-    if (m_cargo.radius > 0) m_shape.push_back({m_cargo.offset, m_cargo.radius, kCargoMotorIndex});
+    // the cargo collides as one sphere around its centre (on a line: on its own)
+    if (m_cargo.radius > 0 && !hanging()) m_shape.push_back({m_cargo.offset, m_cargo.radius, kCargoMotorIndex});
     m_mass = std::max(0.01f, m_preset.init.quadMass);
     const Vec3F &ii = m_preset.init.quadInvInertia;
     m_invInertiaBody = {std::fabs(ii.x), std::fabs(ii.y), std::fabs(ii.z)};
@@ -200,6 +203,10 @@ void Flight::movePos(Vec3 d) {
 
 void Flight::teleport(Vec3 pos, Quat rot) {
     m_teleports++;
+    if (hanging()) {
+        m_cargoPos = pos + (m_cargoPos - m_pos);
+        m_cargoVel = {};
+    }
     m_pos = pos;
     m_posCarry = {};
     m_rot = normalize(rot);
@@ -302,7 +309,8 @@ DronePreset Flight::withExtraMass(const DronePreset &bare) {
     m_payloadPos = {0, -drop, 0};
     addPoint(m_payloadMass, m_payloadPos, kPayloadRadius);
 #endif
-    addPoint(m_cargo.mass, m_cargo.offset, std::max(m_cargo.radius, 0.02f));
+    // on a line only its pull reaches the quad (stepCargo), not its mass
+    if (!hanging()) addPoint(m_cargo.mass, m_cargo.offset, std::max(m_cargo.radius, 0.02f));
     if (extraMass <= 0) return p;
     p.init.quadMass = bare.init.quadMass + extraMass;
     auto add = [](float inv, float extra) {
@@ -332,13 +340,113 @@ void Flight::refreshMass() {
 }
 
 void Flight::setCargo(const Cargo &cargo) {
+    bool wasHanging = hanging();
     m_cargo = cargo;
     if (!(m_cargo.mass > 0)) m_cargo.mass = 0;
     if (!(m_cargo.radius > 0)) m_cargo.radius = 0;
+    if (!(m_cargo.line > 0)) m_cargo.line = 0;
+    if (hanging() && !wasHanging) {
+        // picked up where it is: the line as long as it is far, reeled in from there
+        m_cargoPos = m_pos + toMat3(m_rot) * m_cargo.offset;
+        m_cargoVel = m_vel;
+        m_lineNow = std::max(m_cargo.line, length(m_cargoPos - hookPoint()));
+        m_lineTaut = false;
+    }
     // picked up off the ground, not out of it: no lift (unlike a strapped payload)
     Vec3 pos = m_pos;
     refreshMass();
     m_pos = pos;
+}
+
+Vec3 Flight::hookPoint() const { return m_pos + toMat3(m_rot) * Vec3{0, -m_preset.collision.bodyRadius, 0}; }
+
+// A cargo on a line is a body of its own: it falls, drags in the air, rests
+// on and slides along the world, and the line, when taut, holds it within
+// its length of the hook. The line's pull goes through the quad's centre of
+// mass (an impulse, split by the two masses), so the quad keeps its own
+// inertia and the flight controller its authority: the pilot feels the
+// weight and the swing, as with a real slung load. The winch reels the line
+// to the requested length at kWinchSpeed.
+void Flight::stepCargo(float dt) {
+    const float r = std::max(0.02f, m_cargo.radius);
+    const float invMc = 1.0f / m_cargo.mass;
+    const float area = 3.14159265f * r * r;
+    int sub = std::clamp((int)std::ceil(length(m_cargoVel) * dt / (0.5f * r)), 1, 16);
+    float h = dt / (float)sub;
+    Vec3 wind{m_input.windVelocity.x, m_input.windVelocity.y, m_input.windVelocity.z};
+    for (int k = 0; k < sub; k++) {
+        m_cargoVel.y -= 9.81f * h;
+        Vec3 rel = m_cargoVel - wind;
+        float drag = 0.5f * 1.225f * kCargoDragCoef * area * invMc * length(rel) * h;
+        m_cargoVel -= rel * std::min(1.0f, drag);
+        m_cargoPos += m_cargoVel * h;
+        m_contacts.clear();
+        if (m_cargo.radius > 0) m_world->sphereContacts(m_cargoPos, m_cargo.radius, m_simTime, m_contacts);
+        dropPortalHoleContacts(0);
+        Vec3 push{};
+        for (const Contact &c : m_contacts) {
+            float need = c.depth - dot(push, c.normal);
+            if (need > 0) push += c.normal * need;
+            Vec3 v = m_cargoVel - c.surfaceVel;
+            float vn = dot(v, c.normal);
+            if (vn >= 0) continue;
+            Material mat = m_world->material(c.material);
+            if (-vn > kImpactReportSpeed)
+                recordImpact(c, -vn, -vn * m_cargo.mass, kCargoMotorIndex);
+            float e = -vn > kRestingSpeed ? kCargoRestitution : 0.0f;
+            v -= c.normal * (vn * (1 + e));
+            // Coulomb friction from the normal impulse just taken
+            Vec3 vt = v - c.normal * dot(v, c.normal);
+            float vtLen = length(vt);
+            if (vtLen > 1e-5f) v -= vt * std::min(1.0f, mat.friction * -vn / vtLen);
+            m_cargoVel = v + c.surfaceVel;
+        }
+        m_cargoPos += push;
+    }
+
+    // the winch, then the line
+    m_lineNow = m_lineNow > m_cargo.line ? std::max(m_cargo.line, m_lineNow - kWinchSpeed * dt)
+                                         : std::min(m_cargo.line, m_lineNow + kWinchSpeed * dt);
+    Vec3 hook = hookPoint();
+    Vec3 d = m_cargoPos - hook;
+    float len = length(d);
+    m_lineTaut = false;
+    if (len > m_lineNow && len > 1e-5f) {
+        Vec3 n = d / len;
+        float invMd = 1.0f / m_mass;
+        float w = invMd + invMc;
+        float stretch = len - m_lineNow;
+        m_cargoPos -= n * (stretch * invMc / w);
+        movePos(n * (stretch * invMd / w));
+        float vrel = dot(m_cargoVel - m_vel, n);
+        if (vrel > 0) {
+            float j = vrel / w;
+            m_cargoVel -= n * (j * invMc);
+            m_vel += n * (j * invMd);
+        }
+        m_lineTaut = true;
+    }
+    // the cargo and the quad don't go through each other (the quad lands on it)
+    Vec3 dc = m_cargoPos - m_pos;
+    float lc = length(dc), minD = m_cargo.radius + m_preset.collision.bodyRadius;
+    if (m_cargo.radius > 0 && lc < minD) {
+        Vec3 n = lc > 1e-5f ? dc / lc : Vec3{0, -1, 0};
+        float invMd = 1.0f / m_mass;
+        float w = invMd + invMc;
+        float overlap = minD - lc;
+        m_cargoPos += n * (overlap * invMc / w);
+        movePos(-n * (overlap * invMd / w));
+        float vrel = dot(m_cargoVel - m_vel, n);
+        if (vrel < 0) {
+            float j = -vrel / w;
+            m_cargoVel += n * (j * invMc);
+            m_vel -= n * (j * invMd);
+        }
+    }
+    if (!finite(m_cargoPos) || !finite(m_cargoVel)) {
+        m_cargoPos = hook - Vec3{0, m_lineNow, 0};
+        m_cargoVel = m_vel;
+    }
 }
 
 void Flight::push(Vec3 velocity, bool replace) {
@@ -380,6 +488,11 @@ void Flight::passPortals(Vec3 before) {
             m_teleports++;
             m_portalPasses++;
             m_lastPortal = (int)(i * 2 + s);
+            if (hanging()) {
+                // the cargo comes along on its line, where it was relative to the drone
+                m_cargoPos = x.point(m_cargoPos);
+                m_cargoVel = x.dir(m_cargoVel);
+            }
             return;  // one pass per step
         }
     }
@@ -391,7 +504,7 @@ Mat3 Flight::worldInvInertia() const {
 }
 
 void Flight::recordImpact(const Contact &c, float speed, float impulse, int motor) {
-    int slot = motor + 1;
+    int slot = motor == kCargoMotorIndex ? 5 : motor + 1;
     if (m_simTime - m_lastMotorStrike[slot] < 0.05) return;  // debounce per sphere
     m_lastMotorStrike[slot] = m_simTime;
     if (m_impacts.size() >= 64) m_impacts.erase(m_impacts.begin());
@@ -748,6 +861,7 @@ void Flight::step(float dt, const float channels[kChannelCount], bool radioLost)
             resolveContacts(h);
         }
         propStrikes(dt);
+        if (hanging()) stepCargo(dt);
     }
 #if defined(LIBFPV_KAMIKAZE)
     if (m_active && m_warhead.update(dt, m_simTime, m_input.rcData, bfb_is_armed(), m_pos, m_vel)) onDetonated();
@@ -770,6 +884,16 @@ void Flight::step(float dt, const float channels[kChannelCount], bool radioLost)
     m_snap.teleports = m_teleports;
     m_snap.portalPasses = m_portalPasses;
     m_snap.lastPortal = m_lastPortal;
+    m_snap.cargo = m_active && m_cargo.mass > 0;
+    m_snap.cargoHanging = m_snap.cargo && hanging();
+    m_snap.cargoLineTaut = m_snap.cargoHanging && m_lineTaut;
+    if (m_snap.cargoHanging) {
+        m_snap.cargoPos = m_cargoPos;
+        m_snap.cargoVel = m_cargoVel;
+    } else if (m_snap.cargo) {
+        m_snap.cargoPos = m_pos + toMat3(m_rot) * m_cargo.offset;
+        m_snap.cargoVel = m_vel + cross(m_angVel, m_snap.cargoPos - m_pos);
+    }
     bool anyBurned = false, anyBroken = false;
     for (int i = 0; i < 4; i++) {
         MotorSnapshot &m = m_snap.motors[i];

@@ -1072,6 +1072,12 @@ FPV_API fpv_result fpv_drone_set_cargo(fpv_drone *d, const fpv_cargo *in) {
         cargo.mass = in->mass;
         cargo.offset = off;
         cargo.radius = r;
+        if (in->struct_size >= offsetof(fpv_cargo, line_length) + sizeof(float)) {
+            float line = L.conv.lenToInternal(in->line_length);
+            if (!std::isfinite(line) || line < 0 || line > 10)
+                return setError(FPV_ERROR_INVALID_ARGUMENT, "cargo line_length must be 0..10 m");
+            cargo.line = line;
+        }
     }
     L.runner.call([&] { L.flight.setCargo(cargo); });
     return FPV_OK;
@@ -1123,7 +1129,9 @@ FPV_API fpv_result fpv_controls_set(const fpv_control_desc *controls, uint32_t c
             d.id = c.id;
             d.name = c.name;
             d.label = c.label && c.label[0] ? c.label : c.name;
-            d.kind = c.kind == FPV_CONTROL_SWITCH ? ControlKind::Switch : ControlKind::Button;
+            d.kind = c.kind == FPV_CONTROL_SWITCH ? ControlKind::Switch
+                     : c.kind == FPV_CONTROL_HOLD ? ControlKind::Hold
+                                                  : ControlKind::Instant;
             d.key = c.key > 0 && c.key < 512 ? c.key : 0;
             d.padButton = c.gamepad_button;
             out.push_back(d);

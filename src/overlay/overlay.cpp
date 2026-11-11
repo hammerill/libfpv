@@ -502,13 +502,31 @@ void Overlay::wizardUi(const std::vector<RawDevice> &devs) {
                                   "remembers it. It explodes while pressed.");
             else
 #endif
-            if (m_wizard.currentControl() && m_wizard.currentControl()->kind == ControlKind::Button)
-                ImGui::SetTooltip("For a push button or a spring-loaded switch: press it once and let go, the wizard "
-                                  "remembers it. It acts while pressed.");
+            if (m_wizard.currentControl() && m_wizard.currentControl()->kind == ControlKind::Instant)
+                ImGui::SetTooltip("Ticked, for a push button or a spring-loaded switch: press it once and let go, "
+                                  "the wizard remembers it. Each press does it once.\n"
+                                  "Unticked, for a 2- or 3-position switch: each flip does it once, to ON and back "
+                                  "to OFF, so you never flip it back for nothing.");
+            else if (m_wizard.currentControl() && m_wizard.currentControl()->kind == ControlKind::Hold)
+                ImGui::SetTooltip("Ticked, for a push button or a spring-loaded switch: press it once and let go, "
+                                  "the wizard remembers it. It acts while pressed.\n"
+                                  "Unticked, for a 2- or 3-position switch: it acts while the switch is ON.");
             else
                 ImGui::SetTooltip("For a push button or a spring-loaded switch, which only reads as flipped while "
                                   "held: press it once and let go, the wizard remembers it. In flight each press "
                                   "turns this switch on or off.");
+        }
+        // what the box means for this control, right now
+        if (const ControlDesc *c = m_wizard.currentControl()) {
+            const char *what = nullptr;
+            if (c->kind == ControlKind::Instant)
+                what = momentary ? "A button: each press does it once."
+                                 : "A switch: each flip does it once, to ON and back to OFF.";
+            else if (c->kind == ControlKind::Hold)
+                what = momentary ? "A button: it acts while you hold it." : "A switch: it acts while the switch is ON.";
+            else
+                what = momentary ? "A button: each press turns it on or off." : "A switch: it is on while the switch is ON.";
+            ImGui::TextDisabled("%s", what);
         }
     }
     if (m_wizard.step() == RadioWizard::Step::Done) {
@@ -696,12 +714,13 @@ const char *padButtonName(int b) {
     return "-";
 }
 
-std::string radioBindingText(const ChannelBinding &b) {
+std::string radioBindingText(const ChannelBinding &b, ControlKind kind) {
     std::string t;
     if (b.button >= 0) t = "button " + std::to_string(b.button + 1);
     else if (b.axis >= 0) t = "switch on axis " + std::to_string(b.axis + 1);
     else return "-";
     if (b.toggle) t += " (each press flips it)";
+    else if (b.isSwitch && kind == ControlKind::Instant) t += " (each flip, both ways)";
     return t;
 }
 
@@ -750,7 +769,9 @@ void Overlay::gameControlsSection() {
             bool on = L.input.controlOn(c.id);
             ImGui::TextColored(on ? ImVec4(0.5f, 1, 0.5f, 1) : ImVec4(1, 1, 1, 1), "%s", c.label.c_str());
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip(c.kind == ControlKind::Button ? "Acts while held." : "On or off: each press flips it.");
+                ImGui::SetTooltip(c.kind == ControlKind::Instant ? "Happens once per press (on a radio switch: per flip, either way)."
+                                  : c.kind == ControlKind::Hold  ? "Acts while held."
+                                                                 : "On or off: each press flips it.");
             ImGui::TableNextColumn();
             if (m_rebindingControl == c.name) {
                 ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "press a key (Esc cancels, Delete = none)");
@@ -763,7 +784,7 @@ void Overlay::gameControlsSection() {
             ImGui::TextUnformatted(padButtonName(c.padButton));
             ImGui::TableNextColumn();
             auto it = radio.controls.find(c.name);
-            ImGui::TextUnformatted(it != radio.controls.end() ? radioBindingText(it->second).c_str() : "-");
+            ImGui::TextUnformatted(it != radio.controls.end() ? radioBindingText(it->second, c.kind).c_str() : "-");
             ImGui::TableNextColumn();
             if (radioDev) {
                 if (ImGui::SmallButton("Set")) startControlSetup(*radioDev, {c});

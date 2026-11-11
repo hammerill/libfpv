@@ -52,6 +52,10 @@ struct FlightSnapshot {
     uint32_t armingDisableFlags = 0;
     float altitude = -1;
     Vec3 wind;  // the air's velocity at the drone
+    bool cargo = false;          // something is carried
+    bool cargoHanging = false;   // on a line
+    bool cargoLineTaut = false;  // the line pulls (it lifts or drags the cargo)
+    Vec3 cargoPos, cargoVel;     // its centre, world
     float videoNoise = 0, videoBreakup = 0, videoSignal = 1;
     std::array<uint8_t, 16 * 30> osd{};
     uint32_t osdRevision = 0;
@@ -69,8 +73,9 @@ struct FlightSnapshot {
 // Something the drone carries (fpv_drone_set_cargo), body frame.
 struct Cargo {
     float mass = 0;   // kg, 0 = none
-    Vec3 offset;      // its centre, metres from the drone's centre
+    Vec3 offset;      // its centre, metres from the drone's centre (on a line: where it is at the pickup)
     float radius = 0; // collision sphere, 0 = none
+    float line = 0;   // > 0: hangs on a line this long (m) from under the frame, reeled in to it
 };
 
 // Impacts of the cargo's sphere report this motor index.
@@ -164,6 +169,9 @@ private:
     // drops the contacts in a portal's hole from m_contacts (from `first` on)
     void dropPortalHoleContacts(size_t first);
     void passPortals(Vec3 before);  // a crossing since `before` takes the drone through
+    bool hanging() const { return m_cargo.mass > 0 && m_cargo.line > 0; }
+    Vec3 hookPoint() const;  // where the line hangs from (world)
+    void stepCargo(float dt);  // a hanging cargo: its own flight, then the line
     DronePreset withExtraMass(const DronePreset &bare);
     void refreshMass();  // re-applies cargo and payload to the live physics
     Mat3 worldInvInertia() const;
@@ -189,7 +197,7 @@ private:
     void keepMotors();   // FPV_SIM_NO_DAMAGE
     double m_simTime = 0;
     double m_lastGroundContact = -1;
-    double m_lastMotorStrike[5] = {-1, -1, -1, -1, -1};
+    double m_lastMotorStrike[6] = {-1, -1, -1, -1, -1, -1};  // frame, motors 0..3, cargo
     Vec3 m_pilotPos;
     std::mutex m_homeMutex;
     bool m_hasHome = false;
@@ -213,6 +221,10 @@ private:
     uint32_t m_teleports = 0, m_portalPasses = 0;
     int m_lastPortal = -1;
     Cargo m_cargo;
+    // a hanging cargo's own body (world, simulation thread)
+    Vec3 m_cargoPos, m_cargoVel;
+    float m_lineNow = 0;  // the line's length now (the winch reels it to m_cargo.line)
+    bool m_lineTaut = false;
     DronePreset m_basePreset;  // without the cargo and payload
     float m_mass = 0.5f;
     Vec3 m_invInertiaBody{550, 310, 550};

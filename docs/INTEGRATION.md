@@ -357,6 +357,9 @@ bool standIn = pc.features & FPV_PILOT_STAND_IN;  // distances: pc.stand_in_dist
 bool pose = pc.features & FPV_PILOT_POSE;
 ```
 
+- Declare `FPV_PILOT_STAND_IN` in every game with a character and
+  implement it fully ([Standing in](#standing-in-for-the-drone)): it is on
+  by default for the player.
 - Stand-in off: the character is not carried with the drone. It stays at
   the piloting spot as itself, whatever the distance (the world may then
   load less far from it, and that's the player's call).
@@ -557,7 +560,7 @@ c[0].struct_size = sizeof c[0];
 c[0].id = 1;
 c[0].name = "portal2.fire_blue";      /* stable and unique across games */
 c[0].label = "Fire blue portal";
-c[0].kind = FPV_CONTROL_BUTTON;       /* acts while held, each press counts */
+c[0].kind = FPV_CONTROL_INSTANT;      /* once per press (the default) */
 c[0].key = 'Q';
 c[0].gamepad_button = FPV_GAMEPAD_LEFT_TRIGGER;
 c[1] = c[0];
@@ -585,10 +588,20 @@ bool grab = fpv_control_poll(2, NULL);
   and buttons that the flight modes and the other controls don't use. Several
   controls can share a 3-position switch, one per position, as the flight
   modes do.
+- **Say what kind each action is.** `INSTANT` (the default) is an action
+  that happens at the moment of the press, and holding does nothing more:
+  fire, use, jump, take a photo. `HOLD` acts for as long as it is held: a
+  winch, a boost, zoom. `SWITCH` is on or off: a light, a mode.
+- The player picks a button or a switch for each in the setup ("It's a
+  button" box). An `INSTANT` control on a radio push button does it on each
+  press. On a 2- or 3-position switch it does it on each flip, to ON and
+  back to OFF, so the pilot never flips a switch back for nothing:
+  `presses` counts both flips. A `HOLD` control on a switch acts while it
+  is ON.
 - A `SWITCH` control on a radio switch follows the switch; on a key, a
   gamepad button or a radio push button, each press flips it. The first
   reading of a radio switch is where it is, not a press, so a switch left on
-  doesn't fire anything when the game starts.
+  doesn't fire anything when the game starts (for every kind).
 - The bindings are saved in `radio_mappings.json` under each radio, by
   `name`. A new full radio setup keeps the ones that still fit. Every game's
   controls stay in the file, so pick names that can't clash
@@ -642,17 +655,30 @@ fpv_portals_set(&l, 1);   /* whenever a portal opens, moves or closes; NULL, 0 =
   once: a launch pad (replace it with the launch velocity), a bouncy
   surface, a gust the game simulates itself (add to it). Attitude and spin
   are kept, and Betaflight flies on from there.
-- `fpv_drone_set_cargo(drone, &cargo)` hangs something under the drone: its
-  mass and inertia add to the quad's, and a sphere of `radius` around
-  `offset` (drone-local) collides with the world. Pass the cargo's true
-  offset from the drone at the moment of the pickup. libfpv doesn't move the
-  drone, so a sphere placed inside the ground would push it the wrong way.
-  Hide or disable the game's own object while it is carried, draw it at
-  `frame.position + frame.rotation * offset`, and give it back to the game
-  (with the drone's velocity) when it is dropped (`NULL`, or mass 0). Its
-  impacts come with `motor_index` `FPV_IMPACT_CARGO`. A new drone carries
-  nothing. With 1 kg under a 5" freestyle quad, a full-throttle climb is
-  about a third of the bare quad's.
+- `fpv_drone_set_cargo(drone, &cargo)` picks something up. Two ways:
+  - **On a line** (`line_length > 0`), for picking things up off the
+    ground: the cargo hangs from under the frame on a winch line, a body of
+    its own that falls, swings, rests and slides on the world (a sphere of
+    `radius`). Pass where it is at the pickup as `offset` (drone-local): the
+    line starts that long and the winch reels it to `line_length` at
+    0.5 m/s, dragging or lifting the cargo to the quad. Only the line's pull
+    reaches the quad, through its centre of mass, so the pilot feels the
+    weight and the swing while the flight controller keeps its authority.
+    Draw the object at `frame.cargo_position` (`frame.cargo_flags` has
+    `FPV_CARGO_LINE_TAUT` while it is lifted or dragged), and give it back
+    to the game with `frame.cargo_velocity` when it is dropped. Leave the
+    game object out of your raycast callback's results: libfpv probes the
+    world around the cargo as it does around the drone.
+  - **Rigid** (`line_length` 0): strapped to the frame. Its mass and
+    inertia add to the quad's, and its sphere at `offset` collides as part
+    of the quad. Keep it small and close to the centre: a big sphere or a
+    long offset adds enough inertia to make the quad unflyable, and a
+    sphere that starts inside the ground pushes the quad the wrong way
+    (libfpv doesn't move the drone). Portal 2 FPV first carried cubes this
+    way and the quad went out of control at the pickup; the line fixed it.
+  Its impacts come with `motor_index` `FPV_IMPACT_CARGO`. A new drone
+  carries nothing. With 1 kg rigidly under a 5" freestyle quad, a
+  full-throttle climb is about a third of the bare quad's.
 
 ## Lessons from real integrations
 
@@ -965,6 +991,32 @@ hit. What worked in GTA IV:
 
 ### Standing in for the drone
 
+**Implement the stand-in in every game with a character, on by default,
+whether or not it was asked for.** It is what turns a drone flying through
+a game into playing the game as the drone. For the game, the main
+character *is* the drone while it stands in:
+
+- **Enemies react to the drone.** Never make the character ignored by the
+  AI (no notarget, no "invisible to enemies" flag): they spot, chase, aim
+  at and shoot the drone, and the pilot dodges with standard moves.
+- **Everything aims at the drone's exact position, in all three axes**:
+  height too, not just the ground under it. Find the point the game aims
+  at (an eye, a bone, a body target) and put it on the drone's centre.
+- **Damage to the character is damage to the drone.** Turn what the game
+  takes from the character into broken props (`fpv_drone_damage_props`),
+  and keep the character from dying of it.
+- **The world is the drone's**: streaming, LODs, culling, visibility and
+  areas, triggers (doors that open for the player, pickups, checkpoints).
+  If the engine decides what to load or send from the player's eye, the
+  eye goes on the drone.
+- **The character itself stays out of the way**: invisible, without
+  collision with the drone or the world, without its own physics, so only
+  its game-facing role moves with the drone.
+- The player can turn it off in F8 > Fly > Pilot
+  (`fpv_pilot_get_config`); then the character stays home as itself.
+
+The rest of this section is how real integrations did it.
+
 GTA IV moves an invisible character along with the drone so the world
 streams in around it. gtasa-fpv goes further: the world treats the drone
 as the player. Peds turn to look at it, police chase and shoot at it,
@@ -1187,6 +1239,30 @@ scrapes don't play a sound on every contact frame).
 | Drawing | ScriptHook's D3D9 device hook. Fixed-function triangles, and the fisheye through a 64×36 grid. |
 | Audio | `waveOut`. |
 | Streaming | The player character used as an invisible anchor. |
+
+### Case study: Portal 2
+
+- Chell is the stand-in beyond 2 m (chambers are small; doors open a few
+  metres before she reaches them). She is moved with the drone every
+  server tick (VScript `SetOrigin`), noclip (`m_MoveType`), not drawn
+  (`DisableDraw`), feet 12 units above the drone so a landed drone doesn't
+  press floor buttons.
+- Her eye is the drone's centre: her view offset points down from her feet
+  to it. Writing `m_vecViewOffset` alone didn't last (the player's movement
+  resets it every tick from the game's view vectors), so the view vectors'
+  eye height is patched while she stands in. Check that what you write
+  survives a frame before trusting it. Source aims at a player between 70 % and 100 % of the way from
+  the feet to the eye (`CBasePlayer::BodyTarget`), so turrets shoot within
+  4 units of the drone in X, Y and Z, and the server's PVS (what it sends
+  the client) is the drone's. With the eye 76 units above the drone it sat
+  inside ceilings, and objects near the drone flickered out.
+- Her health is held at 100000 while she stands in; what she loses each
+  tick breaks the drone's props, and is topped up again.
+- An early version made her notarget and immune: turrets ignored the drone,
+  which took the game out of it. Don't.
+- Going home lands a tick later: until her position catches up, she counts
+  as home, or the stand-in restarts at once with the drone as her spot.
+  On a moving floor (the arrival elevator), keep the spot relative to it.
 
 ### Case study: GTA San Andreas (1.0 US)
 

@@ -2828,6 +2828,85 @@ void testCargo() {
     CHECK(fpv_drone_set_cargo(nullptr, &c) != FPV_OK, "no drone, no cargo");
 }
 
+// Cargo on a line: picked up off the ground next to the quad, it rests there
+// with the line slack, the winch reels it in, a climb lifts it (the line
+// taut, the climb slower than bare) without the quad tumbling, it swings
+// back under the quad, and a drop lets it go.
+void testCargoOnLine() {
+    Host h(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1));
+    float bare;  // the same climb without cargo
+    {
+        Session b;
+        float bp[3];
+        h.pos(0, 0.5f, 0, bp);
+        b.spawn(bp);
+        b.run(3.2f);
+        b.arm();
+        float y = h.up(b.f.position);
+        b.rc.ch[2] = 1;
+        b.run(0.8f);
+        bare = h.up(b.f.position) - y;
+        b.destroy();
+    }
+    Session s;
+    float p[3];
+    h.pos(0, 0.5f, 0, p);
+    s.spawn(p);
+    s.run(1.0f);  // settled on the ground
+    float drone0[3];
+    std::memcpy(drone0, s.f.position, sizeof drone0);
+    fpv_cargo c;
+    fpv_cargo_defaults(&c);
+    c.mass = 0.35f;
+    c.radius = 0.15f * h.upm;
+    float cube[3];
+    h.pos(0, 0.15f, 0.6f, cube);  // resting on the ground 0.6 m ahead
+    for (int i = 0; i < 3; i++) c.offset[i] = cube[i] - drone0[i];
+    c.line_length = 0.25f * h.upm;
+    CHECK(fpv_drone_set_cargo(s.drone, &c) == FPV_OK, "set_cargo on a line: %s", fpv_last_error());
+    s.run(0.2f);
+    CHECK((s.f.cargo_flags & (FPV_CARGO_CARRIED | FPV_CARGO_ON_LINE)) == (FPV_CARGO_CARRIED | FPV_CARGO_ON_LINE),
+          "carried on a line (flags %x)", s.f.cargo_flags);
+    CHECK(std::fabs(h.up(s.f.cargo_position) - 0.15f) < 0.05f, "resting on the ground (%.2f m)",
+          h.up(s.f.cargo_position));
+    s.run(2.0f);  // the winch reels it in: dragged to under the quad
+    float gap[3];
+    for (int i = 0; i < 3; i++) gap[i] = s.f.cargo_position[i] - s.f.position[i];
+    float horiz = std::hypot(h.right(gap), h.fwd(gap));
+    CHECK(horiz < 0.3f, "reeled in under the quad (%.2f m off)", horiz);
+
+    s.arm();
+    float y0 = h.up(s.f.position);
+    s.rc.ch[2] = 1;
+    float minUp = 1;
+    s.run(0.8f, [&](float) {
+        float up[3], q[4];
+        std::memcpy(q, s.f.rotation, sizeof q);
+        // the quad's up axis: rotation of (0,1,0) in this frame
+        up[1] = 1 - 2 * (q[0] * q[0] + q[2] * q[2]);
+        minUp = std::min(minUp, up[1]);
+    });
+    float gained = h.up(s.f.position) - y0;
+    float cargoUp = h.up(s.f.cargo_position);
+    std::printf("    climb with 0.35 kg on the line in 0.8 s: %.2f m, cargo at %.2f m, quad's up >= %.2f\n", gained,
+                cargoUp, minUp);
+    CHECK(gained > 1.0f, "it climbs (%.2f m)", gained);
+    CHECK(gained < bare * 0.95f, "slower than bare: the cargo weighs (%.2f vs %.2f m)", gained, bare);
+    CHECK(cargoUp > 0.6f, "the cargo is lifted (%.2f m)", cargoUp);
+    CHECK(s.f.cargo_flags & FPV_CARGO_LINE_TAUT, "the line is taut while lifting");
+    CHECK(minUp > 0.9f, "the quad stays level, no tumbling (up %.2f)", minUp);
+    for (int i = 0; i < 3; i++) gap[i] = s.f.position[i] - s.f.cargo_position[i];
+    float dist = std::sqrt(gap[0] * gap[0] + gap[1] * gap[1] + gap[2] * gap[2]) / h.upm;
+    CHECK(dist < 0.25f + 0.2f + 0.05f, "within its line of the hook (%.2f m)", dist);
+    s.rc.ch[2] = -1;
+    CHECK(fpv_drone_set_cargo(s.drone, nullptr) == FPV_OK, "drop");
+    s.run(0.05f);
+    CHECK(s.f.cargo_flags == 0, "nothing carried after the drop");
+    c.line_length = -1;
+    CHECK(fpv_drone_set_cargo(s.drone, &c) != FPV_OK, "a negative line is refused");
+    s.destroy();
+}
+
 // Game controls from the keyboard: a button acts while held, a switch flips
 // on each press; presses are counted between polls; keys don't count while
 // the overlay is open.
@@ -2838,7 +2917,7 @@ void testGameControls() {
     c[0].id = 1;
     c[0].name = "test.fire";
     c[0].label = "Fire";
-    c[0].kind = FPV_CONTROL_BUTTON;
+    c[0].kind = FPV_CONTROL_INSTANT;
     c[0].key = 'G';
     c[0].gamepad_button = FPV_GAMEPAD_NONE;
     c[1] = c[0];
@@ -2937,6 +3016,7 @@ int main(int argc, char **argv) {
         {"portals", testPortals},
         {"push", testPush},
         {"cargo", testCargo},
+        {"cargo_on_line", testCargoOnLine},
         {"game_controls", testGameControls},
 #if defined(LIBFPV_KAMIKAZE)
         {"kamikaze_arming_block", testKamikazeArmingBlock},

@@ -298,7 +298,7 @@ void testGameControls() {
     m.channels[kAux4].axis = 6;
     m.channels[kAux4].min = -1, m.channels[kAux4].max = 1;
     std::vector<ControlDesc> controls(2);
-    controls[0].id = 1, controls[0].name = "game.fire", controls[0].label = "Fire", controls[0].kind = ControlKind::Button;
+    controls[0].id = 1, controls[0].name = "game.fire", controls[0].label = "Fire", controls[0].kind = ControlKind::Instant;
     controls[1].id = 2, controls[1].name = "game.grab", controls[1].label = "Grab", controls[1].kind = ControlKind::Switch;
 
     FakeRadio r;
@@ -332,7 +332,8 @@ void testGameControls() {
     DeviceMapping merged = m;
     RadioWizard::mergeControls(merged, w.mapping(), {"game.fire", "game.grab"}, false);
     const ChannelBinding &fire = merged.controls["game.fire"], &grab = merged.controls["game.grab"];
-    CHECK(fire.button == 1 && !fire.toggle, "fire: button %d, toggle %d", fire.button, fire.toggle);
+    CHECK(fire.button == 1 && !fire.toggle && !fire.isSwitch, "fire: button %d, toggle %d, switch %d", fire.button,
+          fire.toggle, fire.isSwitch);
     CHECK(grab.axis == 8 && switchPositionOf(merged, grab, 1) > 0 && switchPositionOf(merged, grab, -1) < 0,
           "grab: axis %d follows the switch", grab.axis);
     bool same = merged.complete;
@@ -372,8 +373,121 @@ void testGameControls() {
     CHECK(!fresh.controls.count("game.grab"), "grab dropped: angle took its position");
 }
 
+// An instant control (fire) on a radio switch, the setup's "It's a button"
+// box unticked: each flip does it once, to ON and back to OFF; on a button,
+// only the press; a switch already ON at the start is no press. A hold
+// control on a switch acts while ON, without the flip back.
+void testInstantOnSwitch() {
+    DeviceMapping m;
+    m.guid = "fake";
+    m.complete = true;
+    for (int c = kRoll; c <= kYaw; c++) m.channels[c].axis = c;
+    m.channels[kAux1].axis = 4;
+    m.channels[kAux1].min = -1, m.channels[kAux1].max = 1;
+    std::vector<ControlDesc> controls(2);
+    controls[0].id = 1, controls[0].name = "game.fire", controls[0].label = "Fire", controls[0].kind = ControlKind::Instant;
+    controls[1].id = 2, controls[1].name = "game.winch", controls[1].label = "Winch", controls[1].kind = ControlKind::Hold;
+    FakeRadio r;
+    r.d.axes.push_back(-1);  // a tenth axis
+    RadioWizard w;
+    w.startControls(r.d, m, controls);
+    CHECK(step(w, r), "rest");
+    CHECK(w.momentary(), "an instant control: a button by default");
+    w.setMomentary(false);
+    r.d.axes[8] = 1;
+    CHECK(step(w, r), "fire on the switch of axis 9");
+    r.d.axes[8] = -1;
+    CHECK(w.momentary(), "a hold control: a button by default");
+    w.setMomentary(false);
+    r.d.axes[9] = 1;
+    CHECK(step(w, r), "winch on the switch of axis 10");
+    r.d.axes[9] = -1;
+    const ChannelBinding &fire = w.mapping().controls.at("game.fire");
+    const ChannelBinding &winch = w.mapping().controls.at("game.winch");
+    CHECK(fire.axis == 8 && fire.isSwitch && !fire.toggle, "fire: a switch (axis %d, switch %d)", fire.axis,
+          fire.isSwitch);
+    CHECK(winch.axis == 9 && winch.isSwitch && !winch.toggle, "winch: a switch");
+
+    auto run = [](ControlKind kind, bool bothWays, std::initializer_list<int> levels) {
+        ControlState st;
+        uint32_t presses = 0;
+        for (int l : levels) {
+            ControlReading rd;
+            rd.levelValid = true;
+            rd.level = l != 0;
+            rd.bothWays = bothWays;
+            updateControlState(kind, st, rd);
+            presses += st.presses;
+            st.presses = 0;
+        }
+        return presses;
+    };
+    CHECK(run(ControlKind::Instant, true, {0, 1, 1, 0, 0, 1, 0}) == 4, "instant on a switch: each flip is a press");
+    CHECK(run(ControlKind::Instant, true, {1, 1, 0, 1}) == 2, "a switch ON at the start is no press, its flips are");
+    CHECK(run(ControlKind::Instant, false, {0, 1, 1, 0, 0, 1, 0}) == 2, "instant on a button: presses only");
+    CHECK(run(ControlKind::Hold, false, {0, 1, 1, 0}) == 1, "hold: the press, not the release");
+    ControlState st;
+    ControlReading on;
+    on.levelValid = on.level = true;
+    updateControlState(ControlKind::Hold, st, on);
+    CHECK(st.on, "hold: on while the switch is ON");
+    ControlReading key;
+    key.key = true;
+    ControlState k;
+    updateControlState(ControlKind::Instant, k, key);
+    updateControlState(ControlKind::Instant, k, ControlReading{});
+    CHECK(k.presses == 1, "a key: one press per press");
+}
+
+// A game control's switch held ON fires nothing by itself: a one-report
+// spike to OFF (a few ms) is ignored, and jitter between the thresholds never
+// flips it; a real flip, held, does.
+void testSwitchThresholds() {
+    DeviceMapping m;
+    ChannelBinding b;
+    b.axis = 5;
+    b.min = -1, b.max = 1;  // on at +1, off (rest) at -1: spacing 2
+    m.controls["game.fire"] = b;
+    const ChannelBinding &fb = m.controls["game.fire"];
+    CHECK(switchOnWithHysteresis(m, fb, 0.0f, true), "on: stays on at the middle");
+    CHECK(!switchOnWithHysteresis(m, fb, 0.0f, false), "off: stays off at the middle");
+    CHECK(!switchOnWithHysteresis(m, fb, -0.4f, true), "on: off past its threshold");
+    CHECK(switchOnWithHysteresis(m, fb, 0.4f, false), "off: on past its threshold");
+
+    // 1 kHz: ON for 0.1 s, a 4 ms spike to OFF, ON again, then a real flip
+    ControlState st;
+    uint32_t presses = 0;
+    bool on = false;
+    auto feed = [&](float raw, float seconds) {
+        for (int i = 0; i < (int)std::lround(seconds * 1000); i++) {
+            ControlReading rd;
+            rd.levelValid = true;
+            rd.level = debounceControl(st, switchOnWithHysteresis(m, fb, raw, st.rawOn), 0.001f);
+            rd.bothWays = true;
+            updateControlState(ControlKind::Instant, st, rd);
+            presses += st.presses;
+            st.presses = 0;
+            on = st.on;
+        }
+    };
+    feed(1.0f, 0.1f);
+    CHECK(presses == 0 && on, "held ON from the start: no press");
+    feed(-1.0f, 0.004f);
+    feed(1.0f, 0.1f);
+    CHECK(presses == 0, "a 4 ms spike to OFF fires nothing (%u)", presses);
+    for (int i = 0; i < 50; i++) feed(i % 2 ? 0.1f : -0.1f, 0.01f);  // noise around the middle
+    feed(1.0f, 0.05f);
+    CHECK(presses == 0, "jitter around the middle fires nothing (%u)", presses);
+    feed(-1.0f, 0.1f);
+    CHECK(presses == 1 && !on, "a real flip to OFF fires once (%u)", presses);
+    feed(1.0f, 0.1f);
+    CHECK(presses == 2 && on, "and back to ON once more (%u)", presses);
+}
+
 int main() {
     testGameControls();
+    testSwitchThresholds();
+    testInstantOnSwitch();
     testSharedThreePositionSwitch();
     testSkipOptionalSwitches();
     testPushButtons();

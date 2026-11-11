@@ -103,6 +103,7 @@ void InputManager::loadMappings() {
                 b.button = jb.value("button", -1);
                 b.inverted = jb.value("inverted", false);
                 b.toggle = jb.value("toggle", false);
+                b.isSwitch = jb.value("switch", false);
                 b.min = jb.value("min", -1.0f);
                 b.center = jb.value("center", 0.0f);
                 b.max = jb.value("max", 1.0f);
@@ -131,7 +132,7 @@ void InputManager::saveMappings() {
         jm["name"] = m.name;
         jm["complete"] = m.complete;
         auto binding = [](const ChannelBinding &b) {
-            return json{{"axis", b.axis},     {"button", b.button}, {"inverted", b.inverted}, {"toggle", b.toggle},
+            return json{{"axis", b.axis},     {"button", b.button}, {"inverted", b.inverted}, {"toggle", b.toggle}, {"switch", b.isSwitch},
                         {"min", b.min},       {"center", b.center}, {"max", b.max}};
         };
         jm["channels"] = json::array();
@@ -231,7 +232,7 @@ bool InputManager::controlOn(uint32_t id) {
 // Called with m_mutex held, at the simulation rate, so a short tap of a
 // button is never missed between two host frames. Every source counts at
 // once: the radio's binding, the key and the gamepad button.
-void InputManager::updateControls(const RawDevice *radio, const DeviceMapping *map) {
+void InputManager::updateControls(const RawDevice *radio, const DeviceMapping *map, float dt) {
     uint32_t padButtons = 0;
     float padLT = 0, padRT = 0;
     for (const RawDevice &d : m_devices) {
@@ -245,55 +246,42 @@ void InputManager::updateControls(const RawDevice *radio, const DeviceMapping *m
         ControlState &st = m_controlState[i];
         // the radio: a switch position (or a held button) is a level; a push
         // button standing in for a switch (toggle) is a press
-        bool level = false, levelValid = false, push = false;
+        ControlReading r;
+        bool bound = false;
         if (radio && map) {
             auto it = map->controls.find(c.name);
             if (it != map->controls.end()) {
+                bound = true;
                 const ChannelBinding &b = it->second;
                 bool known = true, raw = false;
                 if (b.axis >= 0 && b.axis < (int)radio->axes.size())
-                    raw = switchPositionOf(*map, b, radio->axes[b.axis]) > 0;
+                    raw = switchOnWithHysteresis(*map, b, radio->axes[b.axis], st.rawOn);
                 else if (b.button >= 0 && b.button < (int)radio->buttons.size())
                     raw = (radio->buttons[b.button] != 0) != b.inverted;
                 else
                     known = false;
+                if (known) raw = debounceControl(st, raw, dt);
+                else st.rawValid = false;
                 if (known && b.toggle && c.kind == ControlKind::Switch) {
-                    push = raw && !st.pushPrev;
+                    r.push = raw && !st.pushPrev;
                     st.pushPrev = raw;
                 } else if (known) {
-                    level = raw;
-                    levelValid = true;
+                    r.level = raw;
+                    r.levelValid = true;
+                    // an instant action on a switch: flipping it back is a press too
+                    r.bothWays = b.isSwitch && c.kind == ControlKind::Instant;
                 }
             }
         }
+        if (!bound) st.rawValid = false;  // the next radio reading starts afresh
         int key = c.key;
         auto ko = m_controlKeys.find(c.name);
         if (ko != m_controlKeys.end()) key = ko->second;
-        bool keyDown = key > 0 && key < (int)m_keys.size() && m_keys[key];
-        bool padDown = false;
-        if (c.padButton == kPadLeftTrigger) padDown = padLT > 0.5f;
-        else if (c.padButton == kPadRightTrigger) padDown = padRT > 0.5f;
-        else if (c.padButton >= 0 && c.padButton < 32) padDown = (padButtons >> c.padButton) & 1u;
-
-        bool before = st.on;
-        if (c.kind == ControlKind::Button) {
-            st.on = (levelValid && level) || keyDown || padDown;
-        } else {
-            if (levelValid && !st.radioValid) {
-                before = level;  // the first reading of a switch is where it is, not a flip
-                st.on = level;
-            } else if (levelValid && level != st.radioPrev) {
-                st.on = level;
-            }
-            if (push) st.on = !st.on;
-            if (keyDown && !st.keyPrev) st.on = !st.on;
-            if (padDown && !st.padPrev) st.on = !st.on;
-        }
-        st.radioValid = levelValid;
-        st.radioPrev = level;
-        st.keyPrev = keyDown;
-        st.padPrev = padDown;
-        if (st.on && !before) st.presses++;
+        r.key = key > 0 && key < (int)m_keys.size() && m_keys[key];
+        if (c.padButton == kPadLeftTrigger) r.pad = padLT > 0.5f;
+        else if (c.padButton == kPadRightTrigger) r.pad = padRT > 0.5f;
+        else if (c.padButton >= 0 && c.padButton < 32) r.pad = (padButtons >> c.padButton) & 1u;
+        updateControlState(c.kind, st, r);
     }
 }
 
@@ -543,7 +531,7 @@ void InputManager::update(double wallTime, float dt, float out[kChannelCount], b
         m_toggleGuid.clear();
     }
     // the wizard's presses are not the game's
-    if (!m_wizardActive) updateControls(controlRadio, controlMap);
+    if (!m_wizardActive) updateControls(controlRadio, controlMap, dt);
     std::copy(ch, ch + kChannelCount, out);
     if (!radioLost) std::copy(ch, ch + kChannelCount, m_lastOut);
     m_status = st;

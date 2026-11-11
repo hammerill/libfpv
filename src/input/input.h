@@ -45,6 +45,10 @@ struct ChannelBinding {
     // a push button (or momentary switch) that stands in for a switch: each
     // press flips the channel on or off
     bool toggle = false;
+    // A game control's radio switch, not a button (the setup's "It's a
+    // button" box unticked): an instant control acts on each flip of it,
+    // to ON and back to OFF.
+    bool isSwitch = false;
     // AUX switches on an axis are positions: "on" at one raw value, "off" at
     // rest. Several switches can share one multi-position switch.
     float switchOn() const { return inverted ? min : max; }
@@ -65,7 +69,9 @@ struct DeviceMapping {
 // for the raw axis value: +1 when the switch is nearer its "on" position
 // than half the way to any other known position of that axis (rest, or
 // another switch's "on"), else -1.
-inline float switchPositionOf(const DeviceMapping &m, const ChannelBinding &b, float raw) {
+// How far the "on" position of switch binding `b` is from the nearest other
+// known position of its axis (rest, or another switch's "on").
+inline float switchSpacing(const DeviceMapping &m, const ChannelBinding &b) {
     float on = b.switchOn();
     float nearest = std::fabs(b.switchOff() - on);
     auto other = [&](const ChannelBinding &ob) {
@@ -75,7 +81,11 @@ inline float switchPositionOf(const DeviceMapping &m, const ChannelBinding &b, f
     };
     for (int o = kAux1; o < kChannelCount; o++) other(m.channels[o]);
     for (auto &kv : m.controls) other(kv.second);
-    return std::fabs(raw - on) < 0.5f * nearest ? 1.0f : -1.0f;
+    return nearest;
+}
+
+inline float switchPositionOf(const DeviceMapping &m, const ChannelBinding &b, float raw) {
+    return std::fabs(raw - b.switchOn()) < 0.5f * switchSpacing(m, b) ? 1.0f : -1.0f;
 }
 
 // AUX channel `c` (bound to an axis), see switchPositionOf.
@@ -83,9 +93,87 @@ inline float switchPosition(const DeviceMapping &m, int c, float raw) { return s
 
 // --- game controls (fpv_controls_set) ------------------------------------------
 
-// A button acts while held (each press counts); a switch is on or off, and
-// a key, gamepad button or radio push button flips it.
-enum class ControlKind { Button = 0, Switch = 1 };
+// fpv_control_kind. An instant action happens once per press (on a radio
+// switch: per flip, either way); a switch is on or off, and a key, gamepad
+// button or radio push button flips it; a hold control acts while held.
+enum class ControlKind { Instant = 0, Switch = 1, Hold = 2 };
+
+// A game control's radio switch has thresholds with a gap between them: it
+// turns on within kSwitchOnShare of the spacing to the nearest other position
+// and off only beyond kSwitchOffShare, so jitter around the middle never
+// flips it. Then a change must hold kControlDebounce seconds: one noisy USB
+// report (a spike to the other position) is never a flip.
+constexpr float kSwitchOnShare = 0.35f, kSwitchOffShare = 0.65f;
+constexpr float kControlDebounce = 0.03f;
+
+inline bool switchOnWithHysteresis(const DeviceMapping &m, const ChannelBinding &b, float raw, bool wasOn) {
+    float share = wasOn ? kSwitchOffShare : kSwitchOnShare;
+    return std::fabs(raw - b.switchOn()) < share * switchSpacing(m, b);
+}
+
+// One game control's state, updated at the simulation rate.
+struct ControlState {
+    bool on = false;
+    uint32_t presses = 0;
+    bool radioValid = false, radioPrev = false;  // the radio's level last update
+    bool pushPrev = false;  // a radio push button (toggle binding)
+    bool keyPrev = false, padPrev = false;
+    // the radio before the debounce: the raw reading (for the hysteresis),
+    // and the level it settled on
+    bool rawOn = false, rawValid = false, settled = false;
+    float pending = 0;  // seconds the raw reading has differed from `settled`
+};
+
+// The radio's reading of a control after the debounce (see kControlDebounce).
+inline bool debounceControl(ControlState &st, bool raw, float dt) {
+    st.rawOn = raw;
+    if (!st.rawValid) {
+        st.rawValid = true;
+        st.settled = raw;
+        st.pending = 0;
+    } else if (raw == st.settled) {
+        st.pending = 0;
+    } else if ((st.pending += dt) >= kControlDebounce) {
+        st.settled = raw;
+        st.pending = 0;
+    }
+    return st.settled;
+}
+
+// What one update read for a control: its radio binding (a level: a switch
+// position or a held button; or a push of a button standing in for a
+// switch), its key and its gamepad button.
+struct ControlReading {
+    bool levelValid = false, level = false;
+    bool push = false;
+    bool bothWays = false;  // an instant control on a radio switch: each flip is a press
+    bool key = false, pad = false;
+};
+
+inline void updateControlState(ControlKind kind, ControlState &st, const ControlReading &r) {
+    bool before = st.on;
+    if (kind != ControlKind::Switch) {
+        // the first reading of a radio switch is where it is, not a press
+        if (r.levelValid && !st.radioValid && r.level) before = true;
+        st.on = (r.levelValid && r.level) || r.key || r.pad;
+        if (r.bothWays && r.levelValid && st.radioValid && st.radioPrev && !r.level) st.presses++;
+    } else {
+        if (r.levelValid && !st.radioValid) {
+            before = r.level;  // the first reading of a switch is where it is, not a flip
+            st.on = r.level;
+        } else if (r.levelValid && r.level != st.radioPrev) {
+            st.on = r.level;
+        }
+        if (r.push) st.on = !st.on;
+        if (r.key && !st.keyPrev) st.on = !st.on;
+        if (r.pad && !st.padPrev) st.on = !st.on;
+    }
+    st.radioValid = r.levelValid;
+    st.radioPrev = r.level;
+    st.keyPrev = r.key;
+    st.padPrev = r.pad;
+    if (st.on && !before) st.presses++;
+}
 
 // Gamepad buttons are SDL_GamepadButton indices; the triggers count as
 // buttons past half travel.
@@ -95,7 +183,7 @@ struct ControlDesc {
     uint32_t id = 0;
     std::string name;   // key in radio_mappings.json and settings.json
     std::string label;
-    ControlKind kind = ControlKind::Button;
+    ControlKind kind = ControlKind::Instant;
     int key = 0;         // keyboard key (fpv_key / ASCII), 0 = none
     int padButton = -1;  // gamepad button, -1 = none
 };
@@ -212,7 +300,7 @@ private:
     bool mapRadio(const RawDevice &d, const DeviceMapping &m, float out[kChannelCount]);
     void mapGamepad(const RawDevice &d, float dt, float out[kChannelCount]);
     void mapKeyboard(float dt, bool radioDetected, float out[kChannelCount]);
-    void updateControls(const RawDevice *radio, const DeviceMapping *map);
+    void updateControls(const RawDevice *radio, const DeviceMapping *map, float dt);
 
     std::mutex m_mutex;
     std::string m_dataDir;
@@ -247,13 +335,6 @@ private:
     std::array<bool, kChannelCount> m_togglePressed{}, m_toggleOn{};
     std::string m_toggleGuid;
 
-    struct ControlState {
-        bool on = false;
-        uint32_t presses = 0;
-        bool radioValid = false, radioPrev = false;  // the radio's level last update
-        bool pushPrev = false;  // a radio push button (toggle binding)
-        bool keyPrev = false, padPrev = false;
-    };
     std::vector<ControlDesc> m_controls;
     std::vector<ControlState> m_controlState;  // parallel to m_controls
     std::map<std::string, int> m_controlKeys;  // the player's keys, by name

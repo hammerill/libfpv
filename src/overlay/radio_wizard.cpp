@@ -86,8 +86,13 @@ void RadioWizard::enterControl() {
     const ControlDesc &c = m_controls[m_controlIndex];
     m_controlTitle = c.label;
     // a button usually is one on the radio: it is kept after the release
-    m_momentary = c.kind == ControlKind::Button;
-    if (c.kind == ControlKind::Button)
+    m_momentary = c.kind != ControlKind::Switch;
+    if (c.kind == ControlKind::Instant)
+        m_controlText = "Optional: press the button (or flip the switch) that should do \"" + c.label +
+                        "\", or Skip. It happens once per press. On a switch (untick the box below) it happens on "
+                        "every flip, to ON and back to OFF, so you never flip it back for nothing. A position of a "
+                        "3-position switch that no other mode uses works too.";
+    else if (c.kind == ControlKind::Hold)
         m_controlText = "Optional: press the button (or flip the switch) that should do \"" + c.label +
                         "\", or Skip. It acts while held; a momentary switch or a push button works best. A "
                         "position of a 3-position switch that no other mode uses works too.";
@@ -323,8 +328,12 @@ bool RadioWizard::next(std::string &hint) {
 #else
     b.toggle = m_momentary;
 #endif
-    // a game button acts while held: a push button is just that
-    if (control && control->kind == ControlKind::Button) b.toggle = false;
+    // an instant or hold control on a push button is just that: no toggling;
+    // on a switch, an instant one acts on each flip
+    if (control && control->kind != ControlKind::Switch) {
+        b.toggle = false;
+        b.isSwitch = !m_momentary;
+    }
     if (m_candidate >= 1000) {
         b.button = m_candidate - 1000;
         // the switch is "on" in its current (flipped) position

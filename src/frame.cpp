@@ -71,10 +71,10 @@ static void refreshRaycastProxies(const FlightSnapshot &s) {
     // One ray of the host's; a hit inside a portal's opening goes on from
     // the linked one, and what it finds there is brought back to this side
     // (where it seems to be, seen through the opening).
-    auto cast = [&](Vec3 d) {
+    auto cast = [&](Vec3 from, float range, Vec3 d) {
         d = normalize(d);
-        Vec3 o = s.pos;
-        float left = reach, travelled = 0;
+        Vec3 o = from;
+        float left = range, travelled = 0;
         PortalTransform back{Quat{}, {}, {}};  // from the far side to the drone's
         bool through = false;
         for (int hop = 0; hop < 3 && left > 0; hop++) {
@@ -122,8 +122,14 @@ static void refreshRaycastProxies(const FlightSnapshot &s) {
             return;
         }
     };
-    for (Vec3 d : dirs) cast(d);
-    if (length2(s.vel) > 0.25f) cast(s.vel);
+    for (Vec3 d : dirs) cast(s.pos, reach, d);
+    if (length2(s.vel) > 0.25f) cast(s.pos, reach, s.vel);
+    if (s.cargoHanging) {
+        // the cargo on its line collides on its own, maybe metres away
+        float cargoReach = std::max(1.5f, length(s.cargoVel) * 0.3f);
+        for (Vec3 d : dirs) cast(s.cargoPos, cargoReach, d);
+        if (length2(s.cargoVel) > 0.25f) cast(s.cargoPos, cargoReach, s.cargoVel);
+    }
     L.world.setProxyPlanes(std::move(planes));
 }
 
@@ -474,6 +480,15 @@ extern "C" FPV_API fpv_result fpv_drone_tick(fpv_drone *d, float frameDt, fpv_fr
     put3(f.wind, cv.dirToHost(cur.wind) * cv.unitsPerMeter());
     f.portal_passes = cur.portalPasses;
     f.last_portal = cur.lastPortal;
+    if (cur.cargo) {
+        f.cargo_flags = FPV_CARGO_CARRIED;
+        if (cur.cargoHanging) f.cargo_flags |= FPV_CARGO_ON_LINE;
+        if (cur.cargoLineTaut) f.cargo_flags |= FPV_CARGO_LINE_TAUT;
+        bool both = prev.active && prev.cargo && prev.cargoHanging == cur.cargoHanging;
+        put3(f.cargo_position, cv.posToHost(both ? lerp(prev.cargoPos, cur.cargoPos, alpha) : cur.cargoPos));
+        put3(f.cargo_velocity, cv.dirToHost(both ? lerp(prev.cargoVel, cur.cargoVel, alpha) : cur.cargoVel) *
+                                   cv.unitsPerMeter());
+    }
 
     updatePresentation(f, pos, vel, cur.beeperSwitch);
     L.lastFrame = f;

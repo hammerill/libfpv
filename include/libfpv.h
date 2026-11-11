@@ -364,16 +364,34 @@ FPV_API fpv_result fpv_drone_set_preset(fpv_drone *drone, const char *preset);
  * The attitude and spin are kept, and Betaflight flies on from there. */
 FPV_API fpv_result fpv_drone_push(fpv_drone *drone, const float velocity[3], int replace);
 
-/* Cargo: something the drone carries (a crate hooked under it, a parcel).
- * It is rigidly attached: its mass and inertia add to the quad's (the centre
- * of mass stays where it is), and a sphere around it collides with the
- * world. Its impacts report motor_index FPV_IMPACT_CARGO. The game draws it
- * at frame.position + frame.rotation * offset. */
+/* Cargo: something the drone carries (a crate, a parcel, a cube).
+ *
+ * On a line (line_length > 0, the usual choice for picking things up): it
+ * hangs from under the frame on a winch line, as a body of its own. It
+ * falls, swings, rests on the ground with the line slack and slides along
+ * the world (its sphere collides); only the line's pull reaches the quad,
+ * through its centre of mass, so the quad keeps its own inertia and the
+ * flight controller stays in charge. The line starts as long as the cargo
+ * is far from the hook at the pickup, and the winch reels it to
+ * line_length. The game draws it at frame.cargo_position.
+ *
+ * Rigid (line_length 0): strapped to the frame. Its mass and inertia add
+ * to the quad's (the centre of mass stays where it is) and its sphere
+ * collides as part of the quad. Keep it small and close: a big sphere or
+ * a long offset adds a lot of inertia, and the quad flies like a brick.
+ *
+ * Either way its impacts report motor_index FPV_IMPACT_CARGO. */
 typedef struct fpv_cargo {
     uint32_t struct_size;
     float mass;       /* kg; 0 = nothing carried */
-    float offset[3];  /* its centre, drone-local host coords and units (e.g. below the frame) */
+    /* Its centre, drone-local host coords and units: where it stays
+     * (rigid), or where it is at the pickup (on a line). */
+    float offset[3];
     float radius;     /* host units, the collision sphere; 0 = it collides with nothing */
+    /* Host units. > 0: it hangs on a line reeled to this length from under
+     * the frame (0.5 m/s); a later call with the cargo already on a line
+     * only changes its length and mass. 0: rigidly attached. */
+    float line_length;
 } fpv_cargo;
 
 FPV_API void fpv_cargo_defaults(fpv_cargo *cargo);
@@ -546,7 +564,21 @@ typedef struct fpv_frame {
      * the moment for the game's own "through a portal" effects. */
     uint32_t portal_passes;
     int32_t last_portal;
+
+    /* Cargo (fpv_drone_set_cargo): FPV_CARGO_* flags (0 = nothing carried),
+     * and its centre and velocity, host coords and units, interpolated like
+     * the drone. Draw the carried object there; give it the velocity when
+     * it is dropped. */
+    uint32_t cargo_flags;
+    float cargo_position[3];
+    float cargo_velocity[3];
 } fpv_frame;
+
+enum fpv_cargo_flags {
+    FPV_CARGO_CARRIED = 1u << 0,
+    FPV_CARGO_ON_LINE = 1u << 1,  /* hanging on its line */
+    FPV_CARGO_LINE_TAUT = 1u << 2 /* the line pulls: the cargo is lifted or dragged */
+};
 
 /* Advances presentation by frame_dt seconds of host time and fills `frame`.
  * In FPV_TIMING_MANUAL mode it does not advance the simulation (use
@@ -1029,12 +1061,23 @@ FPV_API void fpv_input_key(int key, int down);
  * ------------------------------------------------------------------------ */
 
 typedef enum fpv_control_kind {
-    /* Acts while held: a momentary switch or a button. Each press counts. */
-    FPV_CONTROL_BUTTON = 0,
+    /* An instant action (fire, use, jump, take a photo): it happens once,
+     * at the moment of the press, and holding it does nothing more. The
+     * default. On a radio push button (or a spring-loaded switch) each
+     * press does it; on a 2- or 3-position switch each flip does it, to its
+     * ON position and back again, so the pilot never flips a switch back
+     * for nothing. Act on `presses` from fpv_control_poll. */
+    FPV_CONTROL_INSTANT = 0,
     /* On or off: a 2- or 3-position switch, or a key or button whose each
      * press flips it. */
-    FPV_CONTROL_SWITCH = 1
+    FPV_CONTROL_SWITCH = 1,
+    /* Acts for as long as it is held (a winch, a boost, zoom): a push
+     * button or a spring-loaded switch, or a switch while it is ON. */
+    FPV_CONTROL_HOLD = 2
 } fpv_control_kind;
+
+/* The old name of FPV_CONTROL_INSTANT. */
+#define FPV_CONTROL_BUTTON FPV_CONTROL_INSTANT
 
 /* Gamepad buttons (SDL_GamepadButton). The default gamepad layout flies
  * with SOUTH (arm), EAST (beeper) and NORTH (turtle): use the others. */
@@ -1065,10 +1108,11 @@ typedef struct fpv_control_desc {
  * id and name stay. */
 FPV_API fpv_result fpv_controls_set(const fpv_control_desc *controls, uint32_t count);
 /* Whether control `id` is on now (held, or switched on), and in `presses`
- * (optional) how many times it went from off to on since the last poll:
- * read it every frame and act on presses, so a tap shorter than a frame is
- * never lost. The first reading of a radio switch is where it is, not a
- * press. Keys only count while the overlay is closed. */
+ * (optional) how many times it went from off to on since the last poll
+ * (for an INSTANT control on a radio switch: how many times the switch was
+ * flipped, either way): read it every frame and act on presses, so a tap
+ * shorter than a frame is never lost. The first reading of a radio switch
+ * is where it is, not a press. Keys only count while the overlay is closed. */
 FPV_API int fpv_control_poll(uint32_t id, uint32_t *presses);
 
 /* ===========================================================================
