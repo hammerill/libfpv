@@ -36,6 +36,11 @@ addToLibrary({
     navigator.clipboard?.writeText(UTF8ToString(text)).catch(() => {});
   },
 
+  libfpv_web_open_url__deps: ['$UTF8ToString'],
+  libfpv_web_open_url: (url) => {
+    if (typeof window != 'undefined') window.open(UTF8ToString(url), '_blank', 'noopener');
+  },
+
   libfpv_web_clipboard_read__deps: ['$stringToNewUTF8', 'libfpv_web_on_paste', 'free'],
   libfpv_web_clipboard_read: (toImport) => {
     if (!navigator.clipboard?.readText) {

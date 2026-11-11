@@ -405,7 +405,15 @@ Build libfpv with `-DLIBFPV_KAMIKAZE=ON` for kamikaze (strike) FPV. The
 drone then carries a warhead, and `libfpv.h` gains the "Kamikaze" section
 (the definition `LIBFPV_KAMIKAZE` comes with `libfpv::fpv`; a host not
 using CMake defines it itself). The rules are in the header and in
-DECISIONS D24. In short:
+DECISIONS D24.
+
+`-DLIBFPV_KAMIKAZE_PROMOTE=ON` keeps the plain build (no warhead, no
+kamikaze API) but still shows the overlay's Kamikaze tab, filled with a
+note about the Kamikaze version on Patreon, an "Open Patreon" button and a
+QR code to the page. Both fill the same tab, so CMake refuses to configure
+with both options on.
+
+The kamikaze build in short:
 
 | Switch | Channel | Keyboard | Gamepad |
 |---|---|---|---|

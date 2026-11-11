@@ -23,3 +23,14 @@ arm and explode switches, the Kamikaze overlay tab, `fpv_kamikaze_*`,
 - Never turn it on in CI/CD, release or deployed (web) builds.
 - Game integrations must not enable it or mention it in their READMEs, mod
   pages or default builds either. Use it only in local development builds.
+
+### `LIBFPV_KAMIKAZE_PROMOTE`
+
+The promote build (the Kamikaze tab pointing to the Kamikaze version on
+Patreon, no warhead code) has its own rule:
+
+- The CMake option stays `OFF` by default, in libfpv and in every game
+  integration.
+- Never turn it on in CI/CD, release or web pipelines yourself: no
+  workflow, preset, script or default may set it. Turning it on in a
+  pipeline is a manual action for the maintainer to take.

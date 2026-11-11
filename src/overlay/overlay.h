@@ -59,6 +59,8 @@ private:
 #if defined(LIBFPV_KAMIKAZE)
     void tabKamikaze();
     void warheadStatus();
+#elif defined(LIBFPV_KAMIKAZE_PROMOTE)
+    void tabKamikaze();
 #endif
     void wizardUi(const std::vector<RawDevice> &devs);
     void channelBars(const float *ch);

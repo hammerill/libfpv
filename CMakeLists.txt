@@ -13,6 +13,11 @@ option(LIBFPV_WITH_OVERLAY "Build the Dear ImGui overlay" ON)
 option(LIBFPV_BUILD_TESTS "Build the test suite" ON)
 option(LIBFPV_BUILD_EXAMPLES "Build the examples" ON)
 option(LIBFPV_KAMIKAZE "Kamikaze FPV: warhead with bomb arm and explode switches (docs/INTEGRATION.md#kamikaze-builds)" OFF)
+option(LIBFPV_KAMIKAZE_PROMOTE "Kamikaze tab that points to the Kamikaze version instead (docs/INTEGRATION.md#kamikaze-builds)" OFF)
+if(LIBFPV_KAMIKAZE AND LIBFPV_KAMIKAZE_PROMOTE)
+  # both fill the overlay's Kamikaze tab
+  message(FATAL_ERROR "LIBFPV_KAMIKAZE and LIBFPV_KAMIKAZE_PROMOTE can't both be ON: pick one")
+endif()
 if(EMSCRIPTEN)
   # Browser builds read radios and gamepads through the Gamepad API (docs/WEB.md)
   set(LIBFPV_WITH_SDL OFF)
@@ -157,6 +162,10 @@ if(LIBFPV_KAMIKAZE)
   target_sources(fpv PRIVATE src/sim/kamikaze.cpp src/api_kamikaze.cpp)
   # public: the kamikaze API in libfpv.h exists only with this definition
   target_compile_definitions(fpv PUBLIC LIBFPV_KAMIKAZE=1)
+endif()
+if(LIBFPV_KAMIKAZE_PROMOTE)
+  # private: only the overlay's tab changes, the API stays the plain one
+  target_compile_definitions(fpv PRIVATE LIBFPV_KAMIKAZE_PROMOTE=1)
 endif()
 
 if(LIBFPV_WITH_SDL)

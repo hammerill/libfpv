@@ -13,6 +13,8 @@ void libfpv_web_clipboard_write(const char *utf8);
 // Reads the clipboard asynchronously; the text arrives through
 // libfpv_web_on_paste (overlay.cpp), for the Import tab or the focused field.
 void libfpv_web_clipboard_read(int toImport);
+// Opens the address in a new browser tab.
+void libfpv_web_open_url(const char *utf8);
 }
 
 #endif

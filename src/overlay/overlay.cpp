@@ -162,6 +162,11 @@ void Overlay::ensureContext() {
     ImGuiPlatformIO &pio = ImGui::GetPlatformIO();
     pio.Platform_SetClipboardTextFn = [](ImGuiContext *, const char *text) { libfpv_web_clipboard_write(text); };
     pio.Platform_GetClipboardTextFn = [](ImGuiContext *) -> const char * { return ""; };
+    // links open in a new browser tab (ImGui's default would fork xdg-open)
+    pio.Platform_OpenInShellFn = [](ImGuiContext *, const char *url) {
+        libfpv_web_open_url(url);
+        return true;
+    };
 #endif
     ImGui::StyleColorsDark();
     ImGuiStyle &st = ImGui::GetStyle();
@@ -1448,6 +1453,80 @@ void Overlay::tabConfigurator() {
     }
 }
 
+#if defined(LIBFPV_KAMIKAZE_PROMOTE)
+// Builds without the kamikaze feature: the tab points to the Kamikaze version.
+void Overlay::tabKamikaze() {
+    static const char *const kUrl = "https://patreon.com/Hammerill";
+    ImGui::TextWrapped("libfpv is a 100%% open source and free project.");
+    ImGui::Spacing();
+    ImGui::TextWrapped("To support the creator, you can download the Kamikaze version of this mod on their Patreon.");
+    ImGui::Spacing();
+    ImGui::TextWrapped("The Kamikaze build will include bomb switches & safety features, detonation on impact or a "
+                       "button, and different views of the explosion. Not for military use.");
+    ImGui::Spacing();
+    ImGui::TextWrapped("Your contribution will help libfpv thrive and be integrated into other video games.");
+    ImGui::Spacing();
+    ImGui::TextLinkOpenURL(kUrl);
+    ImGui::Spacing();
+    if (ImGui::Button("Open Patreon")) {
+        ImGuiPlatformIO &pio = ImGui::GetPlatformIO();
+        if (!pio.Platform_OpenInShellFn || !pio.Platform_OpenInShellFn(ImGui::GetCurrentContext(), kUrl))
+            FPV_LOGW("overlay: couldn't open %s", kUrl);
+    }
+    ImGui::Spacing();
+
+    // QR code of kUrl (version 3-M, 29x29, no quiet zone; '#' is dark),
+    // made with Python's qrcode: QRCode(error_correction=ERROR_CORRECT_M,
+    // border=0), add_data(url), make(fit=True), get_matrix()
+    static const char *const kQr[] = {
+        "####### #### ###  #   #######",
+        "#     # # #  ###   #  #     #",
+        "# ### # ##  ###    #  # ### #",
+        "# ### #  #    ## #  # # ### #",
+        "# ### # ## ### #  ##  # ### #",
+        "#     #   #####  #    #     #",
+        "####### # # # # # # # #######",
+        "          #   #    ##        ",
+        "#  ###### ########   #  # ###",
+        "## ##      #  #   #    ## ## ",
+        "### ### #  ## #  #     #  #  ",
+        "##  #   ### # ## # #######  #",
+        "# #  ## # #  ##     # #     #",
+        "     # #  # #       # #######",
+        "# ### # ####  ## ####   # # #",
+        " ## ## ## #  ## # #  # ## # #",
+        " # # ###  ##   #   ##    #   ",
+        "## # # #### #     ###   # ## ",
+        "## # ####  # ## ####    ##  #",
+        "## ###   ##  # ##     # ###  ",
+        "##    #  # # #   #  ######## ",
+        "        ## # #  ### #   ##   ",
+        "####### ###### ### ## # ##   ",
+        "#     # # #  #  #####   #  ##",
+        "# ### # ## # # ##  #######   ",
+        "# ### # ## #### ###        # ",
+        "# ### #   ## ## #  # # ## ###",
+        "#     #    #   #  #  #  ### #",
+        "####### ####  #  #########   ",
+    };
+    const int n = (int)(sizeof kQr / sizeof kQr[0]), quiet = 4;
+    const float cell = std::max(1.0f, std::floor(4 * m_scale));
+    const float side = (n + 2 * quiet) * cell;
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    p.x = std::floor(p.x);
+    p.y = std::floor(p.y);
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(p, ImVec2(p.x + side, p.y + side), IM_COL32_WHITE);
+    for (int y = 0; y < n; y++)
+        for (int x = 0; x < n; x++)
+            if (kQr[y][x] == '#') {
+                ImVec2 a(p.x + (quiet + x) * cell, p.y + (quiet + y) * cell);
+                dl->AddRectFilled(a, ImVec2(a.x + cell, a.y + cell), IM_COL32_BLACK);
+            }
+    ImGui::Dummy(ImVec2(side, side));
+}
+#endif
+
 // --- frame -------------------------------------------------------------------------
 
 void Overlay::buildUi() {
@@ -1464,7 +1543,7 @@ void Overlay::buildUi() {
                 void (Overlay::*fn)();
             } static const tabs[] = {{"Fly", &Overlay::tabFly},
                                      {"Radio", &Overlay::tabRadio},
-#if defined(LIBFPV_KAMIKAZE)
+#if defined(LIBFPV_KAMIKAZE) || defined(LIBFPV_KAMIKAZE_PROMOTE)
                                      {"Kamikaze", &Overlay::tabKamikaze},
 #endif
                                      {"Drone", &Overlay::tabDrone},
