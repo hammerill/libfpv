@@ -1468,12 +1468,6 @@ void Overlay::tabKamikaze() {
     ImGui::Spacing();
     ImGui::TextLinkOpenURL(kUrl);
     ImGui::Spacing();
-    if (ImGui::Button("Open Patreon")) {
-        ImGuiPlatformIO &pio = ImGui::GetPlatformIO();
-        if (!pio.Platform_OpenInShellFn || !pio.Platform_OpenInShellFn(ImGui::GetCurrentContext(), kUrl))
-            FPV_LOGW("overlay: couldn't open %s", kUrl);
-    }
-    ImGui::Spacing();
 
     // QR code of kUrl (version 3-M, 29x29, no quiet zone; '#' is dark),
     // made with Python's qrcode: QRCode(error_correction=ERROR_CORRECT_M,
@@ -1524,6 +1518,12 @@ void Overlay::tabKamikaze() {
                 dl->AddRectFilled(a, ImVec2(a.x + cell, a.y + cell), IM_COL32_BLACK);
             }
     ImGui::Dummy(ImVec2(side, side));
+    ImGui::Spacing();
+    if (ImGui::Button("Open Patreon")) {
+        ImGuiPlatformIO &pio = ImGui::GetPlatformIO();
+        if (!pio.Platform_OpenInShellFn || !pio.Platform_OpenInShellFn(ImGui::GetCurrentContext(), kUrl))
+            FPV_LOGW("overlay: couldn't open %s", kUrl);
+    }
 }
 #endif
 
