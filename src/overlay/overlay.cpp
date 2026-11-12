@@ -1462,7 +1462,10 @@ void Overlay::tabKamikaze() {
     ImGui::TextWrapped("To support the creator, you can download the Kamikaze version of this mod on their Patreon.");
     ImGui::Spacing();
     ImGui::TextWrapped("The Kamikaze build will include bomb switches & safety features, detonation on impact or a "
-                       "button, and different views of the explosion. Not for military use.");
+                       "button, and different views of the explosion. Not designed for military use.");
+    ImGui::Spacing();
+    ImGui::TextWrapped("By the way, you can subscribe to the Patreon to have early access to future FPV drone mods "
+                       "for other games, and to be present in the priority queue of asking the next game to mod.");
     ImGui::Spacing();
     ImGui::TextWrapped("Your contribution will help libfpv thrive and be integrated into other video games.");
     ImGui::Spacing();
