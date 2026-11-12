@@ -799,8 +799,11 @@ with nearest filtering was rejected: goggles interpolate, and blocky pixels
 read as a retro game, not a video feed.
 
 Both effects are off by default (settings `videoNoise`,
-`videoResolution`). `FPV_INIT_NO_VIDEO_FEED` hides them for games that
-don't draw the pass. Presets name real parts: the Freestyler is a Caddx
+`videoResolution`), and offered only to games that pass
+`FPV_INIT_VIDEO_FEED`. It is opt-in, unlike the lens's opt-out
+`FPV_INIT_NO_LENS_DISTORTION`, because the feed came after the games: an
+opt-out would have shown settings that do nothing in every integration
+that has not ported the renderer yet. Presets name real parts: the Freestyler is a Caddx
 Ratel 2 (4:3, NTSC) on a TBS Unify Pro32 HV at 400 mW, and the Air65 II a
 BetaFPV C03 on its Matrix 1S AIO VTX at 25 mW (1S brownouts).
 

@@ -1374,7 +1374,7 @@ void Overlay::tabCamera() {
     const fpv_frame &f = L.lastFrame;
     const fpv_video_feed &vf = f.video_feed;
     const bool analog = !p.vtx.digital;
-    if (L.config.flags & FPV_INIT_NO_VIDEO_FEED) {
+    if (!(L.config.flags & FPV_INIT_VIDEO_FEED)) {
         ImGui::TextDisabled("Video noise and camera resolution: not drawn by this game");
     } else {
         if (ImGui::Checkbox(analog ? "Analog video noise" : "Digital link breakup", &L.settings.videoNoise)) saveSettings();

@@ -471,7 +471,7 @@ extern "C" FPV_API fpv_result fpv_drone_tick(fpv_drone *d, float frameDt, fpv_fr
         vin.link.kFactor = cur.videoK;
         vin.link.dopplerHz = cur.videoDoppler;
         vin.lost = cur.active && cur.videoRxDbm < -150.0f;
-        bool feed = !(L.config.flags & FPV_INIT_NO_VIDEO_FEED);
+        bool feed = (L.config.flags & FPV_INIT_VIDEO_FEED) != 0;  // the game draws it
         vin.noise = feed && L.settings.videoNoise;
         vin.resolution = feed && L.settings.videoResolution;
         vin.osdStyle = L.settings.osdStyle;

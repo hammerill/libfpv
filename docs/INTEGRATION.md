@@ -53,8 +53,10 @@ shows a slightly wider, undistorted view.
 ## The video feed
 
 Real FPV is watched through a video link, and `frame.video_feed` describes
-what the goggles show. The player turns two effects on in F8 > Camera >
-"Video feed". Both are off by default, and while they are off `flags` is 0
+what the goggles show. A game that draws it passes `FPV_INIT_VIDEO_FEED` in
+`fpv_global_config.flags`. Only then can the player turn on two effects in
+F8 > Camera > "Video feed"; in other games the settings show as
+unavailable. Both are off by default, and while they are off `flags` is 0
 and the FPV view is drawn as above.
 
 - **Analog video noise** (`FPV_VIDEO_FEED_NOISE`). A link budget runs on
@@ -137,9 +139,8 @@ in three steps:
 
 `fpv_video_gl3.h`'s GLSL is the reference for every step. HLSL needs only
 renames: `texelFetch` → `Load`, `fract` → `frac`, `mix` → `lerp`. Its hash
-avoids `sin`, so it gives the same noise on every GPU. A game that can't draw
-the feed passes `FPV_INIT_NO_VIDEO_FEED`, and the overlay shows the settings
-as unavailable.
+avoids `sin`, so it gives the same noise on every GPU. Pass
+`FPV_INIT_VIDEO_FEED` once the port works.
 
 Presets give the parts: a quad's `"camera": {"model": "Caddx Ratel 2"}`
 names a file in `presets/camera` (`tvl`, `aspect` "4:3" or "16:9", `system`

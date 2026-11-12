@@ -190,10 +190,11 @@ enum fpv_init_flags {
      * keeps the chosen FOV with k1 = k2 = 0, and the overlay's fisheye
      * setting is shown as unavailable. */
     FPV_INIT_NO_LENS_DISTORTION = 1u << 3,
-    /* The host does not draw the video feed (frame.video_feed: analog noise,
-     * the camera's resolution and aspect): its flags stay 0 and the
-     * overlay's video feed settings are shown as unavailable. */
-    FPV_INIT_NO_VIDEO_FEED = 1u << 4
+    /* The host draws the video feed (frame.video_feed: analog noise, the
+     * camera's resolution and aspect; docs/renderers/fpv_video_gl3.h). Only
+     * then does the overlay offer the player those settings; without it
+     * they are shown as unavailable and frame.video_feed.flags stays 0. */
+    FPV_INIT_VIDEO_FEED = 1u << 4
 };
 
 typedef struct fpv_global_config {
@@ -524,9 +525,10 @@ typedef struct fpv_video_state {
  * The video feed: what the goggles show, for the optional post-process that
  * draws the analog link's noise and the camera's resolution and aspect (see
  * docs/INTEGRATION.md#the-video-feed, and docs/renderers/fpv_video_gl3.h,
- * which draws all of it with OpenGL 3 / GLES 3 / WebGL 2). The player turns
- * the effects on in F8 > Camera; both are off by default, and then `flags`
- * is 0 and the game draws the FPV view as before.
+ * which draws all of it with OpenGL 3 / GLES 3 / WebGL 2). A game that
+ * draws it passes FPV_INIT_VIDEO_FEED; the player then turns the effects
+ * on in F8 > Camera. Both are off by default, and while they are off (or
+ * the game did not opt in) `flags` is 0 and the FPV view is drawn as before.
  * ------------------------------------------------------------------------- */
 enum fpv_video_feed_flags {
     /* Draw the link's noise: analog snow, sparkles, torn and rolling lines,

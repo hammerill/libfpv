@@ -707,6 +707,7 @@ int main(int argc, char **argv) {
     cfg.data_dir = dataDir.c_str();
     cfg.coords = fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1.0f);  // OpenGL: X right, Y up, -Z forward
     cfg.log = logCb;
+    cfg.flags |= FPV_INIT_VIDEO_FEED;  // fpv_video_gl3.h draws the video feed
 #if defined(FPV_STANDALONE_BF_CONFIG)
     // the build's Betaflight config: every new drone configuration (and a
     // reset one) starts from it; existing ones and later edits are kept
