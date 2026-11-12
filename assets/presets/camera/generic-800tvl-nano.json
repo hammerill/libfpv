@@ -1,0 +1,13 @@
+{
+    "version": 0,
+    "name": "Generic 800TVL nano camera",
+    "fileName": "generic-800tvl-nano",
+    "buildIn": true,
+    "description": "A no-name 800TVL 1/4\" CMOS nano camera from a budget whoop kit: soft, over-sharpened, NTSC 4:3.",
+    "type": "analog",
+    "sensor": "1/4\" CMOS",
+    "tvl": 800,
+    "aspect": "4:3",
+    "system": "NTSC",
+    "sharpening": 0.85
+}

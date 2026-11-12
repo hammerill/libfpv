@@ -5,6 +5,11 @@
     "buildIn": true,
     "description": "A 25mW HDZero racing VTX designed for clean, low-latency digital video. Optimized for stable transmission with minimal breakup—perfect for competitive environments where clarity counts.",
     "type": "hdzero",
+    "powerMw": 25,
+    "height": 540,
+    "fps": 90,
+    "freezes": false,
+    "sensitivityDbm": -92,
     "noiseFloor": 0.009999999776482582,
     "noiseFactor": 1.0,
     "range": 800.0

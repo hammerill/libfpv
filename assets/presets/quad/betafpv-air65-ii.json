@@ -3,7 +3,7 @@
     "name": "BetaFPV Air65 II Freestyle",
     "fileName": "betafpv-air65-ii",
     "buildIn": true,
-    "description": "BetaFPV Air65 II Freestyle: 65 mm 1S brushless whoop with 0702 25000kV motors, Gemfan 1219S props, C03 camera and an analog VTX, on a LAVA II 1S 320mAh. 17.8 g dry, 26 g ready to fly, about 5:1 thrust to weight on a bench, more at a standstill with its ducts.",
+    "description": "BetaFPV Air65 II Freestyle: 65 mm 1S brushless whoop with 0702 25000kV motors, Gemfan 1219S props, a C03 camera (1200TVL, 4:3) and the Matrix 1S AIO's analog VTX at 25 mW, on a LAVA II 1S 320mAh. 17.8 g dry, 26 g ready to fly, about 5:1 thrust to weight on a bench, more at a standstill with its ducts.",
     "frameDragArea": {
         "x": 0.0022,
         "y": 0.0045,
@@ -43,9 +43,10 @@
     "motor": "BetaFPV 0702 25000kV",
     "propeller": "Gemfan 1219S 3-blade",
     "battery": "BetaFPV LAVA II 1S 320mAh",
-    "vtx": "25mW analog vtx",
+    "vtx": "BetaFPV Matrix 1S AIO VTX",
     "soundMaxRpm": 48000.0,
     "camera": {
+        "model": "BetaFPV C03",
         "uptiltDeg": 20.0
     },
     "collision": {

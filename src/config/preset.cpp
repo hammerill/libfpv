@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "config/preset.h"
 
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <regex>
@@ -10,6 +13,7 @@
 
 #include "nlohmann/json.hpp"
 #include "util/fs.h"
+#include "video/video_link.h"
 
 namespace fpv {
 
@@ -40,6 +44,19 @@ static Vec3F vec3f(const json &j, const char *key, Vec3F def) {
 static std::string str(const json &j, const char *key, const std::string &def = "") {
     auto it = j.find(key);
     return (it != j.end() && it->is_string()) ? it->get<std::string>() : def;
+}
+
+// An aspect ratio: 1.333 or "4:3"
+static float aspectOf(const json &j, float def) {
+    auto it = j.find("aspect");
+    if (it == j.end()) return def;
+    if (it->is_number()) return std::clamp(it->get<float>(), 0.5f, 4.0f);
+    if (it->is_string()) {
+        float w = 0, h = 0;
+        if (std::sscanf(it->get<std::string>().c_str(), "%f:%f", &w, &h) == 2 && w > 0 && h > 0)
+            return std::clamp(w / h, 0.5f, 4.0f);
+    }
+    return def;
 }
 
 // Component files are referenced by their "name" field (SimITL convention).
@@ -169,10 +186,23 @@ DronePreset loadPresetFile(const std::string &quadJsonPath) {
     if (!str(q, "vtx").empty()) {
         try {
             json v = findByName(root / "vtx", str(q, "vtx"));
-            p.vtx.digital = str(v, "type", "analog") != "analog";
+            std::string type = str(v, "type", "analog");
+            p.vtx.name = str(v, "name");
+            p.vtx.digital = type != "analog";
             p.vtx.noiseFloor = num(v, "noiseFloor", p.vtx.noiseFloor);
             p.vtx.noiseFactor = num(v, "noiseFactor", p.vtx.noiseFactor);
             p.vtx.rangeM = num(v, "range", p.vtx.rangeM);
+            // no power given (SimITL's own files): the one whose first
+            // sparkles come at `range` in the open
+            float derivedDbm = -94.0f + kVideoSystemLossDb - kVideoTxGainDbi - kVideoRxPatchDbi +
+                               freeSpaceLossDb(std::max(p.vtx.rangeM, 10.0f));
+            p.vtx.powerMw = num(v, "powerMw", std::pow(10.0f, derivedDbm / 10.0f));
+            p.vtx.powerNoise = num(v, "powerNoise", p.vtx.powerNoise);
+            p.vtx.minVoltage = num(v, "minCellVoltage", p.vtx.minVoltage);
+            p.vtx.height = (int)num(v, "height", type == "hdzero" ? 720.0f : 1080.0f);
+            p.vtx.fps = num(v, "fps", 60.0f);
+            p.vtx.freezes = v.value("freezes", type != "hdzero");
+            p.vtx.sensitivityDbm = num(v, "sensitivityDbm", type == "hdzero" ? -92.0f : -98.0f);
         } catch (...) {
         }
     }
@@ -198,9 +228,28 @@ DronePreset loadPresetFile(const std::string &quadJsonPath) {
     p.camera.offset = {0.0f, 0.02f, std::clamp(armLen * 0.4f, 0.02f, 0.05f)};
     if (q.contains("camera") && q["camera"].is_object()) {
         const json &c = q["camera"];
+        // the camera model: presets/camera/<name>.json
+        if (!str(c, "model").empty()) {
+            try {
+                json m = findByName(root / "camera", str(c, "model"));
+                p.camera.model = str(m, "name");
+                p.camera.aspect = aspectOf(m, p.camera.aspect);
+                p.camera.tvl = num(m, "tvl", p.camera.tvl);
+                p.camera.system = str(m, "system", "NTSC") == "PAL" ? FPV_VIDEO_PAL : FPV_VIDEO_NTSC;
+                p.camera.sharpening = num(m, "sharpening", p.camera.sharpening);
+                // a digital camera sets the mode it streams in
+                if (p.vtx.digital) {
+                    p.vtx.height = (int)num(m, "height", (float)p.vtx.height);
+                    p.vtx.fps = num(m, "fps", p.vtx.fps);
+                }
+            } catch (...) {
+            }
+        }
+        p.camera.aspect = aspectOf(c, p.camera.aspect);
+        p.camera.system = str(c, "system").empty() ? p.camera.system
+                          : str(c, "system") == "PAL" ? FPV_VIDEO_PAL : FPV_VIDEO_NTSC;
         p.camera.uptiltDeg = num(c, "uptiltDeg", p.camera.uptiltDeg);
         p.camera.fovYDeg = num(c, "fovYDeg", p.camera.fovYDeg);
-        p.camera.aspect = num(c, "aspect", p.camera.aspect);
         p.camera.k1 = num(c, "k1", p.camera.k1);
         p.camera.k2 = num(c, "k2", p.camera.k2);
         p.camera.zoom = num(c, "zoom", p.camera.zoom);
@@ -291,11 +340,15 @@ DronePreset builtinDefaultPreset() {
     p.motorImbalance = {8.0f, 5.0f, 4.0f};
     p.maxGroundEffectDist = 0.33f;
     p.soundMaxRpm = 33000.0f;
-    p.vtx.digital = true;
-    p.vtx.noiseFloor = 0.01f;
-    p.vtx.noiseFactor = 1.0f;
-    p.vtx.rangeM = 2000.0f;
-    p.camera.aspect = 16.0f / 9.0f;
+    // a classic analog setup: TBS Unify Pro32 HV at 400 mW, Caddx Ratel 2 in 4:3
+    p.vtx.name = "TBS Unify Pro32 HV";
+    p.vtx.digital = false;
+    p.vtx.powerMw = 400.0f;
+    p.vtx.powerNoise = 0.12f;
+    p.camera.model = "Caddx Ratel 2";
+    p.camera.aspect = 4.0f / 3.0f;
+    p.camera.tvl = 1200.0f;
+    p.camera.sharpening = 0.55f;
     p.collision.propRadius = 5.1f * 0.0254f * 0.5f;
     return p;
 }

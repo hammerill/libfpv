@@ -5,6 +5,11 @@
     "buildIn": true,
     "description": "A modern digital HD video system (DJI O3/O4, Walksnail, HDZero class) at freestyle power levels.",
     "type": "digital",
+    "powerMw": 700,
+    "height": 1080,
+    "fps": 60,
+    "freezes": true,
+    "sensitivityDbm": -98,
     "noiseFloor": 0.01,
     "noiseFactor": 1.0,
     "range": 2000.0

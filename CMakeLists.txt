@@ -57,6 +57,7 @@ set(LIBFPV_SOURCES
   src/world/wind.cpp
   src/osd/osd.cpp
   src/audio/synth.cpp
+  src/video/video_link.cpp
   ${LIBFPV_GEN_DIR}/embedded_presets.cpp
   ${LIBFPV_GEN_DIR}/embedded_fonts.cpp
 )

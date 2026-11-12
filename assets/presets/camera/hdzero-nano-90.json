@@ -1,0 +1,12 @@
+{
+    "version": 0,
+    "name": "HDZero Nano 90",
+    "fileName": "hdzero-nano-90",
+    "buildIn": true,
+    "description": "HDZero Nano 90: the racing camera of HDZero, 4:3, streamed in the low-latency 540p90 mode.",
+    "type": "digital",
+    "aspect": "4:3",
+    "height": 540,
+    "fps": 90,
+    "sharpening": 0.3
+}

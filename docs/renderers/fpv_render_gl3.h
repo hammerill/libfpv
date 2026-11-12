@@ -32,7 +32,8 @@ void fpv_gl3_shutdown(fpv_gl3 *r);
 
 #endif
 
-#ifdef FPV_RENDER_GL3_IMPLEMENTATION
+#if defined(FPV_RENDER_GL3_IMPLEMENTATION) && !defined(FPV_RENDER_GL3_IMPLEMENTED)
+#define FPV_RENDER_GL3_IMPLEMENTED /* included again (fpv_video_gl3.h): one copy */
 #include <string.h>
 
 #ifdef FPV_GL3_GLES

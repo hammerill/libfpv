@@ -1,0 +1,14 @@
+{
+    "version": 1,
+    "name": "BetaFPV Matrix 1S AIO VTX",
+    "fileName": "betafpv-matrix-1s-vtx",
+    "buildIn": true,
+    "description": "The analog VTX on the Air65 II's Matrix 1S AIO board: 5.8 GHz, 25-400 mW (set to 25 mW, indoor whoop power). It runs straight off the 1S battery, so a hard punch on a tired pack can brown it out.",
+    "type": "analog",
+    "powerMw": 25,
+    "powerNoise": 0.3,
+    "minCellVoltage": 2.9,
+    "noiseFloor": 0.014,
+    "noiseFactor": 1.4,
+    "range": 1100.0
+}

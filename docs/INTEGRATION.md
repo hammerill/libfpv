@@ -50,6 +50,104 @@ aspect. When the slider is at 0, the preset's own `camera.k1` / `k2` / `zoom`
 are used (normally none). A game that skips the post-process still works, but
 shows a slightly wider, undistorted view.
 
+## The video feed
+
+Real FPV is watched through a video link, and `frame.video_feed` describes
+what the goggles show. The player turns two effects on in F8 > Camera >
+"Video feed". Both are off by default, and while they are off `flags` is 0
+and the FPV view is drawn as above.
+
+- **Analog video noise** (`FPV_VIDEO_FEED_NOISE`). A link budget runs on
+  the simulation thread: the VTX's power, free-space loss at 5.8 GHz, the
+  ground's reflection when flying low and far, the patterns of both antennas
+  (a flip that points the VTX antenna at the pilot, or flying right
+  overhead, costs a lot), and obstruction measured with rays through the
+  first Fresnel zone, so the signal fades as the drone slides behind a
+  corner. On the host thread, multipath fading runs line by line at the
+  Doppler of the drone's speed through two diversity antennas. Each line's
+  carrier-to-noise ratio then sets what that line looks like:
+  - grain stretched along the line;
+  - FM clicks (sparklies) at Rice's rate below the threshold, white on dark
+    and black on bright;
+  - colour speckle, and the colour killer once the burst is lost;
+  - torn line starts from sync hits, which the PLL pulls back over the next
+    lines;
+  - a rolling picture with the black blanking bar once vertical sync goes;
+  - snow when nothing is left.
+
+  Hard impacts jolt the feed, a sagging 1S pack browns out a whoop's VTX,
+  and ESC noise on the power wiring draws crawling diagonal stripes with
+  throttle (strongly on a cheap VTX). Digital links break into macroblocks
+  and freeze instead.
+- **Camera resolution and aspect** (`FPV_VIDEO_FEED_RESOLUTION`). The
+  picture is drawn at the feed's resolution and at the camera's aspect, with
+  black bars like in goggles: a 4:3 camera on a 16:9 screen gets bars at the
+  sides. Analog is 720 samples by 240 (NTSC) or 288 (PAL) lines per field,
+  interlaced and shown by bobbing. Luma is limited to `luma_cycles` (the
+  camera's TVL through the link's ~5 MHz, about 400 TVL whatever the
+  camera claims). Colour is limited to `chroma_cycles`, and fine detail near
+  the colour subcarrier decodes as rainbows. The camera's edge enhancement
+  adds halos. Digital uses the transmitted mode's pixels (e.g. 720 × 540 for
+  a 4:3 camera in HDZero's 540p90).
+
+The easy way is `docs/renderers/fpv_video_gl3.h` (OpenGL 3.3, GLES 3,
+WebGL 2). It replaces the lens shader above and draws the OSD too:
+
+```c
+fpv_video_gl3 v; fpv_video_gl3_init(&v);   // once
+// every frame, the scene rendered from frame.camera into scene_tex:
+fpv_video_gl3_draw(&v, &ui, &frame, scene_tex, scene_w, scene_h, fb_w, fb_h, 1);
+fpv_gl3_render(&ui, fpv_overlay_render(dt), fb_w, fb_h);
+```
+
+Render the scene with `fov_y_degrees` as the vertical FOV at the screen's
+aspect, as usual. When the picture is 4:3, its middle is used. With the
+resolution effect on, the lens works on the camera's own aspect
+(`aspect_hint`), so the FOV is exact. A host with another renderer ports it
+in three steps:
+
+1. **The signal.** Draw a full-screen pass into a texture of `raster_width`
+   × an analog field's lines (240 NTSC, 288 PAL) with the resolution effect
+   on, or into a texture of the picture's size with it off. Redraw it only
+   when `field` changes: the feed runs at 59.94 or 50 fields a second (the
+   digital mode's frame rate), and the texture holds still in between, like
+   goggles. For each pixel:
+   - Find its field line. `roll` adds `roll × 263` (313 PAL) lines, wrapping;
+     lines past the picture are the blanking, drawn black.
+   - Read that line's two texels from `lines` (uploaded as a 2 ×
+     `line_count` RGBA8 texture, nearest; the layout is in libfpv.h) and
+     shift the sample by its horizontal shift.
+   - Sample the scene through the lens. The lens is the formula above, with
+     the picture's aspect.
+   - With the resolution effect, low-pass the luma across the line to
+     `luma_cycles` and the colour (YIQ) to `chroma_cycles`.
+   - Add the line's grain and sparkles, apply its colour gain and hue, and
+     the `interference` stripes.
+   - Mix toward snow by the line's picture value.
+
+   Analog, with `FPV_VIDEO_FEED_OSD_IN_SIGNAL`: draw the OSD (analog style)
+   into a texture first and mix it into the scene samples, so it is noisy
+   and soft like the rest of the picture.
+2. **The goggles.** Draw that texture with bilinear filtering into the
+   picture's rectangle: `picture_aspect` fitted to the screen, black around
+   it. For an analog field, move it down half a line when `field_parity`
+   is 1 (bob).
+3. **The OSD on top**, digital or with the effects off, in the player's
+   `osd_style`.
+
+`fpv_video_gl3.h`'s GLSL is the reference for every step. HLSL needs only
+renames: `texelFetch` → `Load`, `fract` → `frac`, `mix` → `lerp`. Its hash
+avoids `sin`, so it gives the same noise on every GPU. A game that can't draw
+the feed passes `FPV_INIT_NO_VIDEO_FEED`, and the overlay shows the settings
+as unavailable.
+
+Presets give the parts: a quad's `"camera": {"model": "Caddx Ratel 2"}`
+names a file in `presets/camera` (`tvl`, `aspect` "4:3" or "16:9", `system`
+NTSC or PAL, `sharpening`; a digital camera's `height` and `fps`). The VTX
+file gives `powerMw`, `powerNoise` (0..1, motor noise reaching the video),
+`minCellVoltage` (brownouts) and, for digital links, `height`, `fps`,
+`freezes` and `sensitivityDbm`.
+
 ## GPS and the home point
 
 Every simulated quad has a GPS and a barometer, so Betaflight's GPS OSD
@@ -472,7 +570,13 @@ moment `fpv_kamikaze_poll_detonation` returns the detonation:
 1. **View** (`c.ending_view`), what the screen shows:
    - `FPV_KAMIKAZE_VIEW_SIGNAL_LOST` (default): the FPV view, with full
      static while `FPV_DRONE_DETONATED` is set and a blank OSD, like a
-     real lost feed. Consider hiding the game's own UI
+     real lost feed. When the player has the video noise on
+     (`frame.video_feed.flags & FPV_VIDEO_FEED_NOISE`), the feed already
+     is that static: the link reports no transmitter, and
+     [the video feed](#the-video-feed) draws the receiver's own snow (grey,
+     streaked along the lines, no sync). Keep drawing the FPV view through
+     it then, and paint your own static only while the noise is off.
+     Consider hiding the game's own UI
      too, as while `FPV_DRONE_OSD_DISABLED` is set
      ([OSD disable switch](#osd-disable-switch)), so the screen shows only
      the static.

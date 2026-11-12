@@ -1,0 +1,15 @@
+{
+    "version": 0,
+    "name": "BetaFPV C03",
+    "fileName": "betafpv-c03",
+    "buildIn": true,
+    "description": "BetaFPV C03 micro camera (Air65 II): 1/3\" CMOS, 1200TVL, global WDR, 2.1 mm M7 lens (160 degrees), NTSC 4:3, 1.45 g.",
+    "type": "analog",
+    "sensor": "1/3\" CMOS",
+    "tvl": 1200,
+    "aspect": "4:3",
+    "system": "NTSC",
+    "lensMm": 2.1,
+    "fovDeg": 160,
+    "sharpening": 0.6
+}

@@ -66,9 +66,15 @@ engine or mod loader.
   quieter far away and behind walls, with Doppler, the ground's reflection
   and echoes. Both the OSD and the overlay are returned as textured
   triangles, so one small renderer draws both.
-- **Camera.** Uptilt and FOV are adjustable, and there is a fisheye lens
-  (on by default). Analog video noise grows with range and with obstacles in
-  the way.
+- **Camera and video feed.** Uptilt and FOV are adjustable, and there is a
+  fisheye lens (on by default). Optionally (F8 > Camera, off by default) the
+  view looks like a real goggle feed. Analog noise comes from a 5.8 GHz link
+  budget with multipath fading: snow, sparkles, torn and rolling lines and
+  colour loss with range, walls, flips, speed and crashes. Digital links
+  break up and freeze. The picture can also be drawn at the camera's
+  resolution and aspect, black bars included. Presets name real cameras and
+  VTXs (Caddx Ratel 2 with a TBS Unify Pro32 HV, BetaFPV C03, HDZero
+  Nano 90...).
 - **Web builds.** A game with source code available can ship its mod as a
   web page. The game and libfpv compile to WebAssembly, and players fly from
   a link with nothing to install. Radio, keys, overlay, OSD, sound and saved

@@ -3,7 +3,7 @@
     "name": "Freestyler (5\" 6S)",
     "fileName": "freestyler-5",
     "buildIn": true,
-    "description": "The 5\" you see in every bando edit: a 225 mm true-X freestyle frame, 2207 1950kV motors, 5.1x3x3 props, a 6S 1100 on top and a digital HD air unit. 580 g ready to fly without an action camera, about 11:1 thrust to weight, around 140 km/h flat out.",
+    "description": "The 5\" you see in every bando edit: a 225 mm true-X freestyle frame, 2207 1950kV motors, 5.1x3x3 props, a 6S 1100 on top and the classic analog setup: a Caddx Ratel 2 in 4:3 and a TBS Unify Pro32 HV at 400 mW. 580 g ready to fly without an action camera, about 11:1 thrust to weight, around 140 km/h flat out.",
     "frameDragArea": {
         "x": 0.0095,
         "y": 0.0085,
@@ -41,9 +41,10 @@
     "motor": "Generic 2207 1950kV",
     "propeller": "Generic 5.1x3x3",
     "battery": "Generic 6S 1100mAh",
-    "vtx": "Digital HD vtx",
+    "vtx": "TBS Unify Pro32 HV",
     "soundMaxRpm": 33000.0,
     "camera": {
+        "model": "Caddx Ratel 2",
         "uptiltDeg": 25.0
     }
 }

@@ -1,0 +1,15 @@
+{
+    "version": 0,
+    "name": "Caddx Ratel 2",
+    "fileName": "caddx-ratel-2",
+    "buildIn": true,
+    "description": "Caddx Ratel 2: the classic freestyle analog camera. 1/1.8\" Starlight HDR CMOS, 1200TVL, 2.1 mm lens (165 degrees), NTSC/PAL and 16:9/4:3 switchable, here NTSC 4:3.",
+    "type": "analog",
+    "sensor": "1/1.8\" Starlight CMOS",
+    "tvl": 1200,
+    "aspect": "4:3",
+    "system": "NTSC",
+    "lensMm": 2.1,
+    "fovDeg": 165,
+    "sharpening": 0.55
+}

@@ -57,6 +57,9 @@
     "propeller": "SProp 3x4x3",
     "battery": "SHL 4s 850mah",
     "vtx": "25mW analog vtx",
+    "camera": {
+        "model": "Caddx Ant"
+    },
     "soundMaxRpm": 36000.0,
     "model": "vtx-slayer-one(3\")"
 }

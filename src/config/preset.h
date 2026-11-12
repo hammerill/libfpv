@@ -19,13 +19,27 @@ struct CameraSettings {
                                 // (used when the player turns the fisheye slider off)
     float zoom = 1.0f;
     Vec3 offset{0.0f, 0.02f, 0.03f};  // from the centre of mass, metres
+    // the camera model (presets/camera, "model" in the quad's camera object)
+    std::string model;
+    float tvl = 1000.0f;         // analog horizontal resolution, TV lines
+    int system = 0;              // FPV_VIDEO_NTSC or FPV_VIDEO_PAL (analog)
+    float sharpening = 0.5f;     // the camera's edge enhancement 0..1
 };
 
 struct VtxSettings {
+    std::string name;
     bool digital = false;
-    float noiseFloor = 0.014f;
+    float noiseFloor = 0.014f;   // SimITL's fields, unused by libfpv's link model
     float noiseFactor = 1.4f;
-    float rangeM = 1100.0f;
+    float rangeM = 1100.0f;      // when powerMw is missing, the power is derived from it
+    float powerMw = 25.0f;
+    float powerNoise = 0.15f;    // 0..1: motor and ESC noise reaching the video (analog)
+    float minVoltage = 0.0f;     // per cell: below it the VTX browns out (1S whoops), 0 = never
+    // digital: the transmitted mode, and how the link fails
+    int height = 720;
+    float fps = 60.0f;
+    bool freezes = false;        // DJI / Walksnail hold the frame; HDZero breaks up
+    float sensitivityDbm = -95.0f;
 };
 
 struct CollisionSettings {

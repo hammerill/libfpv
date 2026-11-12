@@ -1,0 +1,14 @@
+{
+    "version": 0,
+    "name": "Caddx Ant",
+    "fileName": "caddx-ant",
+    "buildIn": true,
+    "description": "Caddx Ant nano camera: 1/3\" CMOS, 1200TVL, global WDR, 1.8 mm lens, NTSC/PAL switchable, sold in 4:3 or 16:9 (here 4:3), 2 g.",
+    "type": "analog",
+    "sensor": "1/3\" CMOS",
+    "tvl": 1200,
+    "aspect": "4:3",
+    "system": "NTSC",
+    "lensMm": 1.8,
+    "sharpening": 0.6
+}

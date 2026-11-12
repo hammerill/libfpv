@@ -13,8 +13,10 @@
 //      fpv_drone_tick                        pose + camera + OSD + impacts
 //      place the game camera at frame.camera (or chase/LOS)
 //      draw the drone at frame.position/rotation, props by frame.motors[].rpm
-//      lens distortion + video noise post-process from frame.camera/video
-//      fpv_osd_draw_data + fpv_overlay_render drawn by fpv_render_gl3.h
+//      the FPV view through fpv_video_gl3.h: lens distortion, and the video
+//      feed (frame.video_feed: analog noise, the camera's resolution and
+//      aspect) when the player turns it on, with the OSD
+//      fpv_overlay_render drawn by fpv_render_gl3.h
 //   5. forward keyboard/mouse to fpv_input_key / fpv_overlay_*,
 //      and stop game input while fpv_overlay_wants_input()
 //   6. audio: fpv_audio_read from the audio callback
@@ -23,7 +25,8 @@
 // Keys: F8 overlay, V camera (FPV/chase/LOS), R respawn, F11 or Alt+Enter
 // fullscreen, Esc quit.
 // Verification flags: --autopilot (scripted flight), --screenshot out.ppm
-// --frames N (save the N-th frame and exit), --overlay (open it), --camera.
+// --frames N (save the N-th frame and exit), --overlay (open it), --camera,
+// --pilot X,Z (the pilot stands X, Z metres from the spawn: the video range).
 //
 // Web builds (Emscripten) run the same game in a browser page: WebGL 2,
 // the page's audio, the browser's Gamepad API for radios (docs/WEB.md).
@@ -64,6 +67,8 @@
 #endif
 #define FPV_RENDER_GL3_IMPLEMENTATION
 #include "fpv_render_gl3.h"
+#define FPV_VIDEO_GL3_IMPLEMENTATION
+#include "fpv_video_gl3.h"
 #include "libfpv.h"
 
 // --- tiny math ---------------------------------------------------------------------
@@ -314,12 +319,14 @@ void main() {
   float fog = clamp(length(v_world - eye) / 400.0, 0.0, 1.0);
   o = vec4(mix(c, vec3(0.62, 0.74, 0.86), fog * fog), 1.0);
 })";
-// Post-process: Brown-Conrady lens distortion and analog video noise, as in
+// Post-process for the views fpv_video_gl3.h does not draw (chase, LOS, the
+// kamikaze flash, and the lost feed while the video noise is off: plain
+// static): Brown-Conrady lens distortion as in
 // docs/INTEGRATION.md#lens-distortion.
 static const char *kPostVs = R"(out vec2 uv;
 void main() { vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); uv = p; gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); })";
 static const char *kPostFs = R"(in vec2 uv; uniform sampler2D scene; uniform vec2 k; uniform float zoom; uniform float aspect;
-uniform float noise; uniform float breakup; uniform float time; uniform float analog; uniform float flash;
+uniform float time; uniform float flash;
 uniform float lost; out vec4 o;
 float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
 void main() {
@@ -328,14 +335,7 @@ void main() {
   float r2 = dot(c, c);
   vec2 d = c * (1.0 + k.x * r2 + k.y * r2 * r2) / zoom;
   vec2 suv = d / scale + 0.5;
-  if (breakup > 0.0) { // rolling tear lines
-    float line = step(1.0 - breakup * 0.25, hash(vec2(floor(uv.y * 120.0), floor(time * 20.0))));
-    suv.x += line * (hash(vec2(time, uv.y)) - 0.5) * 0.15;
-  }
   vec3 col = (suv.x < 0.0 || suv.x > 1.0 || suv.y < 0.0 || suv.y > 1.0) ? vec3(0.0) : texture(scene, suv).rgb;
-  float n = hash(uv * 513.0 + time) - 0.5;
-  col += n * noise * 0.9 * analog;
-  col = mix(col, vec3(dot(col, vec3(0.3, 0.59, 0.11))), noise * 0.6 * analog);
   col = mix(col, vec3(1.0, 0.85, 0.6), flash);
   col = mix(col, vec3(hash(floor(uv * vec2(320.0, 240.0)) + fract(time) * 91.0) * 0.85), lost); // no signal: static
   o = vec4(col, 1.0);
@@ -629,6 +629,8 @@ int main(int argc, char **argv) {
 #endif
     int frames = 0, width = 1280, height = 720, camMode = 0;
     bool autopilot = false, openOverlay = false;
+    bool pilotSet = false;
+    float pilotX = 0, pilotZ = 0;
 #if defined(LIBFPV_KAMIKAZE)
     bool kamikazeDemo = false;
     // the ending chosen on the command line (-1 = the player's, F8 > Kamikaze)
@@ -643,6 +645,7 @@ int main(int argc, char **argv) {
         else if (a == "--frames") frames = std::atoi(nextArg().c_str());
         else if (a == "--autopilot") autopilot = true;
         else if (a == "--overlay") openOverlay = true;
+        else if (a == "--pilot") pilotSet = std::sscanf(nextArg().c_str(), "%f,%f", &pilotX, &pilotZ) == 2;
         else if (a == "--width") width = std::atoi(nextArg().c_str());
         else if (a == "--height") height = std::atoi(nextArg().c_str());
 #if defined(LIBFPV_KAMIKAZE)
@@ -794,6 +797,10 @@ int main(int argc, char **argv) {
         std::fprintf(stderr, "drone: %s\n", fpv_last_error());
         return 1;
     }
+    if (pilotSet) {
+        const float feet[3] = {pilotX, 0, pilotZ};
+        fpv_drone_set_pilot_position(drone, feet);
+    }
     // the home arrow and distance point at the launch pad, wherever the drone
     // is armed (without this, home is where it last armed)
     fpv_gps_set_home(dd.position);
@@ -834,6 +841,8 @@ int main(int argc, char **argv) {
     glGenVertexArrays(1, &emptyVao);
     fpv_gl3 ui;
     if (!fpv_gl3_init(&ui)) std::fprintf(stderr, "overlay renderer failed\n");
+    fpv_video_gl3 video;
+    if (!fpv_video_gl3_init(&video)) std::fprintf(stderr, "video feed renderer failed\n");
     GLuint fbo = 0, fboTex = 0, fboDepth = 0;
     int fboW = 0, fboH = 0;
 
@@ -1108,14 +1117,10 @@ int main(int argc, char **argv) {
             }
         }
 
-        // post-process to the window: lens distortion + analog noise
+        // post-process to the window
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glViewport(0, 0, fbw, fbh);
         glDisable(GL_DEPTH_TEST);
-        glUseProgram(postProg);
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, fboTex);
-        glUniform1i(glGetUniformLocation(postProg, "scene"), 0);
         bool fpv = camMode == 0 && !cutscene;
 #if defined(LIBFPV_KAMIKAZE)
         if (ending.showing && ending.view == FPV_KAMIKAZE_VIEW_SIGNAL_LOST) fpv = true;
@@ -1124,6 +1129,10 @@ int main(int argc, char **argv) {
 #if defined(LIBFPV_KAMIKAZE)
         if (blast.start >= 0 && !fpv) flash = (float)std::fmax(0.0, 0.8 - (time - blast.start) * 3);
 #endif
+        glUseProgram(postProg);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, fboTex);
+        glUniform1i(glGetUniformLocation(postProg, "scene"), 0);
         glUniform1f(glGetUniformLocation(postProg, "flash"), flash);
         float lost = 0;
 #if defined(LIBFPV_KAMIKAZE)
@@ -1133,19 +1142,24 @@ int main(int argc, char **argv) {
         glUniform2f(glGetUniformLocation(postProg, "k"), fpv ? frame.camera.distortion_k1 : 0, fpv ? frame.camera.distortion_k2 : 0);
         glUniform1f(glGetUniformLocation(postProg, "zoom"), fpv ? frame.camera.distortion_zoom : 1.0f);
         glUniform1f(glGetUniformLocation(postProg, "aspect"), aspect);
-        glUniform1f(glGetUniformLocation(postProg, "noise"), fpv ? frame.video.noise : 0);
-        glUniform1f(glGetUniformLocation(postProg, "breakup"), fpv ? frame.video.breakup : 0);
-        glUniform1f(glGetUniformLocation(postProg, "analog"), frame.video.is_digital ? 0.0f : 1.0f);
         glUniform1f(glGetUniformLocation(postProg, "time"), (float)time);
-        glBindVertexArray(emptyVao);
-        glDrawArrays(GL_TRIANGLES, 0, 3);
+        // With the video feed's noise on, a lost feed (the VTX went with the
+        // drone) is the feed's own: the receiver's snow, from libfpv's link.
+        bool feedNoise = (frame.video_feed.flags & FPV_VIDEO_FEED_NOISE) != 0;
+        if (fpv && (lost == 0 || feedNoise)) {
+            // the goggles: lens, the video feed and the OSD (fpv_video_gl3.h)
+            fpv_video_gl3_draw(&video, &ui, &frame, fboTex, fbw, fbh, fbw, fbh, 1);
+        } else {
+            glBindVertexArray(emptyVao);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+            if (fpv) fpv_gl3_render(&ui, fpv_osd_draw_data(&frame, (float)ww, (float)wh, FPV_OSD_STYLE_ANALOG), fbw, fbh);
+        }
 
         // OSD (FPV view only) and overlay, in window coordinates
         // the overlay works in window coordinates, so its scale is the content
         // scale only (Windows 150% = 1.5), not the Retina pixel density
         float uiScale = SDL_GetWindowDisplayScale(win) / std::max(1.0f, SDL_GetWindowPixelDensity(win));
         fpv_overlay_set_display((float)ww, (float)wh, uiScale > 0 ? uiScale : 1.0f);
-        if (fpv) fpv_gl3_render(&ui, fpv_osd_draw_data(&frame, (float)ww, (float)wh, FPV_OSD_STYLE_ANALOG), fbw, fbh);
         fpv_gl3_render(&ui, fpv_overlay_render(dt), fbw, fbh);
 
         frameNo++;
@@ -1178,6 +1192,7 @@ int main(int argc, char **argv) {
     if (audio) SDL_DestroyAudioStream(audio);
     fpv_drone_delete(drone);
     fpv_global_terminate();
+    fpv_video_gl3_shutdown(&video);
     fpv_gl3_shutdown(&ui);
     SDL_GL_DestroyContext(gl);
     SDL_DestroyWindow(win);

@@ -57,6 +57,9 @@
     "propeller": "SProp 5.1x3.5x3",
     "battery": "SHL 4s 1300mah",
     "vtx": "25mW hdzero vtx",
+    "camera": {
+        "model": "HDZero Nano 90"
+    },
     "soundMaxRpm": 28000.0,
     "model": "vtx-slayer-one(4\")"
 }

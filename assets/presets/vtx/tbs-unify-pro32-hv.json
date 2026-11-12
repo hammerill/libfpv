@@ -1,0 +1,13 @@
+{
+    "version": 1,
+    "name": "TBS Unify Pro32 HV",
+    "fileName": "tbs-unify-pro32-hv",
+    "buildIn": true,
+    "description": "TBS Unify Pro32 HV: the classic 5\" analog VTX. 25/100/400/1000 mW, 2S-6S input (6-25 V), MMCX, NTSC/PAL. Set to 400 mW, freestyle's usual power.",
+    "type": "analog",
+    "powerMw": 400,
+    "powerNoise": 0.12,
+    "noiseFloor": 0.01,
+    "noiseFactor": 1.0,
+    "range": 3000.0
+}

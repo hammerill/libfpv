@@ -18,6 +18,7 @@
 #include "sim/portal.h"
 #include "world/collision.h"
 #include "world/wind.h"
+#include "video/video_link.h"
 #if defined(LIBFPV_KAMIKAZE)
 #include "sim/kamikaze.h"
 #endif
@@ -57,6 +58,8 @@ struct FlightSnapshot {
     bool cargoLineTaut = false;  // the line pulls (it lifts or drags the cargo)
     Vec3 cargoPos, cargoVel;     // its centre, world
     float videoNoise = 0, videoBreakup = 0, videoSignal = 1;
+    // the link budget (D34): mean received power, Rician K, fade rate
+    float videoRxDbm = -40, videoK = 10, videoDoppler = 0;
     std::array<uint8_t, 16 * 30> osd{};
     uint32_t osdRevision = 0;
     std::array<float, kChannelCount> channels{};
@@ -163,7 +166,7 @@ private:
     void resolveContacts(float dt);
     void propStrikes(float dt);
     void updateGroundEffect(float out[4]);
-    void updateVideo();
+    void updateVideo(float dt);
     Vec3 updateWind(float dt);
     void recordImpact(const Contact &c, float speed, float impulse, int motor);
     // drops the contacts in a portal's hole from m_contacts (from `first` on)
@@ -230,7 +233,15 @@ private:
     Vec3 m_invInertiaBody{550, 310, 550};
     uint32_t m_videoTick = 0;
     int m_yawReversed = -1;
-    float m_videoOcclusion = 0;
+    // the video link's obstruction probe (D34): a few rays per 20 ms cycle
+    struct VideoProbe {
+        bool centre = false;    // the direct ray is blocked
+        float tNear = 0, tFar = 0;  // the obstacle's start from each end
+        int offsets = 0;        // blocked paths through the first Fresnel zone
+        float lossDb = 0;       // smoothed
+        float kFactor = 10;     // smoothed
+    } m_videoProbe;
+    float m_videoTarget[2] = {0, 10};  // loss dB, K, from the last full cycle
 #if defined(LIBFPV_KAMIKAZE)
     Warhead m_warhead;
     Vec3 m_impactVel;  // velocity before the current contacts resolved

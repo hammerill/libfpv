@@ -189,7 +189,11 @@ enum fpv_init_flags {
     /* The host does not draw the lens distortion post-process: frame.camera
      * keeps the chosen FOV with k1 = k2 = 0, and the overlay's fisheye
      * setting is shown as unavailable. */
-    FPV_INIT_NO_LENS_DISTORTION = 1u << 3
+    FPV_INIT_NO_LENS_DISTORTION = 1u << 3,
+    /* The host does not draw the video feed (frame.video_feed: analog noise,
+     * the camera's resolution and aspect): its flags stay 0 and the
+     * overlay's video feed settings are shown as unavailable. */
+    FPV_INIT_NO_VIDEO_FEED = 1u << 4
 };
 
 typedef struct fpv_global_config {
@@ -516,6 +520,87 @@ typedef struct fpv_video_state {
     uint32_t is_digital;     /* digital links freeze/pixelate instead */
 } fpv_video_state;
 
+/* ---------------------------------------------------------------------------
+ * The video feed: what the goggles show, for the optional post-process that
+ * draws the analog link's noise and the camera's resolution and aspect (see
+ * docs/INTEGRATION.md#the-video-feed, and docs/renderers/fpv_video_gl3.h,
+ * which draws all of it with OpenGL 3 / GLES 3 / WebGL 2). The player turns
+ * the effects on in F8 > Camera; both are off by default, and then `flags`
+ * is 0 and the game draws the FPV view as before.
+ * ------------------------------------------------------------------------- */
+enum fpv_video_feed_flags {
+    /* Draw the link's noise: analog snow, sparkles, torn and rolling lines,
+     * colour loss; digital broken blocks and freezes. */
+    FPV_VIDEO_FEED_NOISE = 1u << 0,
+    /* Draw the picture at the signal's resolution (raster_width x
+     * raster_height, analog bandwidth) and at the camera's aspect
+     * (picture_aspect), with black bars around it like in goggles. */
+    FPV_VIDEO_FEED_RESOLUTION = 1u << 1,
+    /* Analog: the flight controller's OSD chip writes the OSD into the
+     * video before the transmitter, so it gets the noise and the blur too.
+     * Draw it into the picture, not over it. */
+    FPV_VIDEO_FEED_OSD_IN_SIGNAL = 1u << 2
+};
+
+typedef enum fpv_video_system {
+    FPV_VIDEO_NTSC = 0,     /* analog, 525 lines, 59.94 fields/s */
+    FPV_VIDEO_PAL = 1,      /* analog, 625 lines, 50 fields/s */
+    FPV_VIDEO_DIGITAL = 2   /* HDZero, DJI, Walksnail... */
+} fpv_video_system;
+
+/* Rows of fpv_video_feed.lines: an analog field's lines with its blanking. */
+#define FPV_VIDEO_MAX_LINES 320
+
+typedef struct fpv_video_feed {
+    uint32_t flags;            /* fpv_video_feed_flags; 0 = draw the view as it is */
+    uint32_t system;           /* fpv_video_system */
+    float picture_aspect;      /* the camera's picture, width / height (4:3, 16:9) */
+    /* The signal's pixels: analog 720 x 480 (NTSC) or 720 x 576 (PAL), whatever
+     * the aspect (non-square pixels); digital the transmitted mode, e.g. 960 x 720. */
+    uint32_t raster_width;
+    uint32_t raster_height;
+    /* Analog: the finest detail across the picture's width, in cycles (black +
+     * white line pairs): the camera's TVL limited by the link's bandwidth;
+     * the colour's, much less; the colour subcarrier's cycles per line
+     * (fine detail turns into rainbows); the camera's edge enhancement 0..1. */
+    float luma_cycles;
+    float chroma_cycles;
+    float subcarrier_cycles;
+    float sharpening;
+    /* Counts the fields (analog) or frames (digital) received: redraw the
+     * signal only when it changes, so the feed runs at the link's rate.
+     * field_parity: which lines of the interlaced frame this field carries. */
+    uint32_t field;
+    uint32_t field_parity;
+    /* Vertical roll of a picture that lost vertical sync, a fraction of the
+     * frame (0 = locked); the blanking shows as a black bar. */
+    float roll;
+    float seed;                /* changes every field, seeds the noise */
+    /* Interference from the motors and ESCs on the power wiring, a luma
+     * offset of amplitude * sin(2 pi (x * cycles_per_line + line * step + phase))
+     * (x 0..1 across the line): diagonal stripes that crawl with throttle. */
+    float interference[4];     /* amplitude, cycles per line, step per line, phase (cycles) */
+    /* Digital links: the share of macroblocks lost in this frame, how much the
+     * low bitrate smears the picture (0..1), and whether the goggles hold the
+     * last picture (1) instead. */
+    float block_errors;
+    float softness;
+    uint32_t frozen;
+    /* The link, for display: received power and carrier-to-noise ratio. */
+    float rssi_dbm;
+    float cnr_db;
+    uint32_t osd_style;        /* fpv_osd_style the player chose (F8 > OSD) */
+    /* Analog, per line of the field (line_count rows, the picture's lines
+     * first, then the blanking), 8 bytes = two RGBA8 texels per row:
+     *   texel 0: R grain amplitude (* 0.5), G sparkle density (cubed: the
+     *            chance per click cell), B colour gain, A picture (0 = snow)
+     *   texel 1: R, G horizontal shift (16 bits, R high: v / 65535 * 0.5 - 0.25
+     *            of the width), B luma offset (- 0.5), A hue shift ((- 0.5) * 2 pi)
+     * Upload it as a 2 x line_count texture, nearest filtering. */
+    uint32_t line_count;
+    uint8_t lines[FPV_VIDEO_MAX_LINES * 8];
+} fpv_video_feed;
+
 typedef struct fpv_frame {
     uint32_t struct_size;
     double sim_time;          /* seconds of simulated time */
@@ -572,6 +657,10 @@ typedef struct fpv_frame {
     uint32_t cargo_flags;
     float cargo_position[3];
     float cargo_velocity[3];
+
+    /* What the goggles show: the optional video feed post-process
+     * (fpv_video_feed above). */
+    fpv_video_feed video_feed;
 } fpv_frame;
 
 enum fpv_cargo_flags {

@@ -464,6 +464,28 @@ extern "C" FPV_API fpv_result fpv_drone_tick(fpv_drone *d, float frameDt, fpv_fr
         o.motor_index = e.motorIndex;
     }
 
+    // --- the video feed (D34) --------------------------------------------------------
+    {
+        VideoInputs vin;
+        vin.link.rxDbm = cur.videoRxDbm;
+        vin.link.kFactor = cur.videoK;
+        vin.link.dopplerHz = cur.videoDoppler;
+        vin.lost = cur.active && cur.videoRxDbm < -150.0f;
+        bool feed = !(L.config.flags & FPV_INIT_NO_VIDEO_FEED);
+        vin.noise = feed && L.settings.videoNoise;
+        vin.resolution = feed && L.settings.videoResolution;
+        vin.osdStyle = L.settings.osdStyle;
+        vin.cellVoltage = f.battery.cell_voltage > 0 ? f.battery.cell_voltage : 4.0f;
+        float throttle = 0;
+        for (int i = 0; i < 4; i++) {
+            throttle += cur.motors[i].command * 0.25f;
+            vin.motorHz[i] = cur.motors[i].rpm / 60.0f * 7.0f;  // 14 poles, 7 pole pairs
+        }
+        vin.throttle = throttle;
+        for (const ImpactEvent &e : L.impactScratch) vin.impact = std::max(vin.impact, std::clamp((e.speed - 2.0f) / 8.0f, 0.0f, 1.0f));
+        L.videoFeed.update(frameDt, videoSpec(p), vin, f.video_feed);
+    }
+
     memcpy(f.osd, cur.osd.data(), sizeof(f.osd));
     f.osd_revision = cur.osdRevision;
 #if defined(LIBFPV_KAMIKAZE)

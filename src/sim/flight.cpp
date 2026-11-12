@@ -684,30 +684,80 @@ void Flight::updateGroundEffect(float out[4]) {
     }
 }
 
-void Flight::updateVideo() {
-    // occlusion between pilot (receiver) and drone (transmitter), 50 Hz
-    if (m_videoTick++ % 20 == 0) {
-        Vec3 rx = m_pilotPos + Vec3{0, 1.5f, 0};
-        Vec3 d = m_pos - rx;
-        float dist = length(d);
-        float blocked = 0;
-        if (dist > 0.5f) {
-            float t;
-            Vec3 n;
-            uint8_t mat;
-            uint32_t obj;
-            if (m_world->raycast(rx, d / dist, dist - 0.3f, m_simTime, t, n, mat, obj, true)) blocked = 1;
+// The video link's budget (D34): free-space loss, the ground's reflection,
+// both antennas' patterns and what stands between the pilot and the drone.
+// The fast fading is the host thread's (VideoFeed), from the K factor and
+// the Doppler given here.
+void Flight::updateVideo(float dt) {
+    Vec3 rx = m_pilotPos + Vec3{0, kVideoRxHeight, 0};
+    Vec3 d = m_pos - rx;
+    float dist = length(d);
+    VideoProbe &v = m_videoProbe;
+    // Obstruction, spread over a 20-tick cycle: the direct ray from both
+    // ends (how deep the obstacle is), four paths bent through the first
+    // Fresnel zone's edge (partial blockage, diffraction round a corner).
+    uint32_t slot = m_videoTick++ % 20;
+    if (dist > 0.5f) {
+        Vec3 u = d / dist;
+        float t;
+        Vec3 n;
+        uint8_t mat;
+        uint32_t obj;
+        auto blocked = [&](Vec3 a, Vec3 b, float *tHit) {
+            Vec3 ab = b - a;
+            float len = length(ab);
+            if (len < 0.3f) return false;
+            bool hit = m_world->raycast(a, ab / len, len - 0.15f, m_simTime, t, n, mat, obj, true);
+            if (hit && tHit) *tHit = t;
+            return hit;
+        };
+        if (slot == 0) {
+            v.centre = blocked(rx, m_pos, &v.tNear);
+            v.offsets = 0;
+        } else if (slot == 1 && v.centre) {
+            if (!blocked(m_pos, rx, &v.tFar)) v.tFar = 0;
+        } else if (slot >= 2 && slot <= 5) {
+            Vec3 a = normalize(cross(u, {0, 1, 0}), {1, 0, 0});
+            Vec3 b = cross(a, u);
+            float r1 = std::sqrt(kVideoWavelength * dist * 0.25f);  // first Fresnel zone at the middle
+            Vec3 off = (slot == 2 ? a : slot == 3 ? -a : slot == 4 ? b : -b) * (0.6f * r1);
+            Vec3 mid = (rx + m_pos) * 0.5f + off;
+            if (blocked(rx, mid, nullptr) || blocked(mid, m_pos, nullptr)) v.offsets++;
+        } else if (slot == 6) {
+            float f = (v.centre ? 0.5f : 0.0f) + 0.125f * (float)v.offsets;
+            // a wall costs ~12 dB at 5.8 GHz, a building's depth much more
+            float depth = v.centre ? std::max(0.0f, dist - v.tNear - v.tFar) : 0.0f;
+            float targetLoss = f * std::min(12.0f + 0.6f * depth, 45.0f);
+            float targetK = 0.3f + 9.7f * (1 - f) * (1 - f);  // blocked: only scattered paths remain
+            m_videoTarget[0] = targetLoss;
+            m_videoTarget[1] = targetK;
         }
-        m_videoOcclusion += (blocked - m_videoOcclusion) * 0.25f;
+    } else {
+        m_videoTarget[0] = 0;
+        m_videoTarget[1] = 10;
     }
-    float dist = length(m_pos - m_pilotPos);
-    const VtxSettings &v = m_preset.vtx;
-    float rangeFrac = dist / std::max(1.0f, v.rangeM);
-    float noise = v.noiseFloor + v.noiseFactor * 0.1f * rangeFrac * rangeFrac * 10.0f * 0.1f + m_videoOcclusion * 0.45f;
-    noise = std::clamp(noise + std::max(0.0f, rangeFrac - 0.8f) * 2.5f, 0.0f, 1.0f);
-    m_snap.videoNoise = noise;
-    m_snap.videoBreakup = std::clamp((noise - 0.55f) * 2.2f, 0.0f, 1.0f);
-    m_snap.videoSignal = std::clamp(1.0f - noise, 0.0f, 1.0f);
+    float a = 1 - std::exp(-std::max(dt, 0.0f) / 0.12f);
+    v.lossDb += (m_videoTarget[0] - v.lossDb) * a;
+    v.kFactor += (m_videoTarget[1] - v.kFactor) * a;
+
+    const VtxSettings &vtx = m_preset.vtx;
+    float powerDbm = 10.0f * std::log10(std::max(vtx.powerMw, 0.01f));
+    Vec3 toPilotLocal = rotate(conj(m_rot), -d);
+    float elevation = dist > 0.01f ? std::asin(std::clamp(d.y / dist, -1.0f, 1.0f)) : 0.0f;
+    float height = m_snap.altitude >= 0 ? m_snap.altitude : 10.0f;
+    float rxDbm = powerDbm + txAntennaGainDb(toPilotLocal) + rxAntennaGainDb(elevation) - freeSpaceLossDb(dist) -
+                  groundLossDb(dist, std::max(height, 0.1f), kVideoRxHeight) - v.lossDb - kVideoSystemLossDb;
+    // low over the ground the reflection is a strong second path
+    float k = v.kFactor * std::clamp(height / 3.0f, 0.3f, 1.0f);
+    m_snap.videoRxDbm = rxDbm;
+    m_snap.videoK = k;
+    m_snap.videoDoppler = length(m_vel) / kVideoWavelength;
+    // fpv_video_state: 0..1 summaries against the receiver's threshold
+    float cnr = vtx.digital ? rxDbm - vtx.sensitivityDbm + 10.0f : rxDbm - kVideoNoiseFloorDbm;
+    float signal = std::clamp((cnr + 6.0f) / 26.0f, 0.0f, 1.0f);
+    m_snap.videoSignal = signal;
+    m_snap.videoNoise = 1.0f - signal;
+    m_snap.videoBreakup = std::clamp((10.0f - cnr) / 12.0f, 0.0f, 1.0f);
 }
 
 void Flight::setHome(const Vec3 *home) {
@@ -943,7 +993,7 @@ void Flight::step(float dt, const float channels[kChannelCount], bool radioLost)
         if ((m_videoTick & 7) == 0) {
             m_snap.altitude = m_world->raycast(m_pos, {0, -1, 0}, 1000.0f, m_simTime, t, n, mat, obj) ? t : -1.0f;
         }
-        updateVideo();
+        updateVideo(dt);
     }
 #if defined(LIBFPV_KAMIKAZE)
     m_snap.warhead = m_warhead.snapshot();
@@ -953,6 +1003,7 @@ void Flight::step(float dt, const float channels[kChannelCount], bool radioLost)
         // the video transmitter went with it: no signal
         m_snap.videoNoise = m_snap.videoBreakup = 1.0f;
         m_snap.videoSignal = 0.0f;
+        m_snap.videoRxDbm = -200.0f;
         m_snap.crashed = true;
     }
 #endif

@@ -15,6 +15,7 @@
 #include "fpv_math.h"
 #include "sim/flight.h"
 #include "sim/runner.h"
+#include "video/video_link.h"
 #include "world/collision.h"
 #include "world/wind.h"
 
@@ -43,6 +44,9 @@ struct Settings {
     float cameraUptilt = -1, cameraFov = -1;
     float cameraFisheye = 0.5f;  // lens strength 0..1, 0 = off (the preset's own k1/k2)
     bool chaseSmoothing = true;
+    // the video feed post-process (frame.video_feed), off by default
+    bool videoNoise = false;       // the link's noise
+    bool videoResolution = false;  // the camera's resolution and aspect
     KeyboardHover keyboardHover = KeyboardHover::Auto;  // automatic hover throttle, see InputManager
     float keyboardThrottleExpo = kDefaultKeyboardThrottleExpo;  // 1/s, see InputManager
     float keyboardYawExpo = kDefaultKeyboardYawExpo;            // 1/s, see InputManager
@@ -129,6 +133,9 @@ struct Lib {
     // FPV_DRONE_RADIO_ACTIVE: channels at the last movement, and its time
     float radioRest[FPV_CHANNEL_COUNT] = {};
     double radioMovedAt = -1e9;
+
+    // the goggles' feed: fading, sync, the per-line table (host thread)
+    VideoFeed videoFeed;
 
     // presentation state (host thread)
     Vec3 chasePos;

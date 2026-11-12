@@ -24,3 +24,10 @@ add_executable(fpv_synth_tests test_synth.cpp ${PROJECT_SOURCE_DIR}/src/audio/sy
 target_include_directories(fpv_synth_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
 target_compile_features(fpv_synth_tests PRIVATE cxx_std_17)
 add_test(NAME fpv_synth_tests COMMAND fpv_synth_tests)
+
+# The video link's model, without the library: budget, fading, the line table.
+add_executable(fpv_video_tests test_video.cpp ${PROJECT_SOURCE_DIR}/src/video/video_link.cpp)
+target_include_directories(fpv_video_tests PRIVATE ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/include
+  ${PROJECT_SOURCE_DIR}/third_party/SimITL/src)
+target_compile_features(fpv_video_tests PRIVATE cxx_std_17)
+add_test(NAME fpv_video_tests COMMAND fpv_video_tests)

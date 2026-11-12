@@ -720,6 +720,93 @@ game: its own idle moves broke the pose, and the game had to suppress them.
 In the pilot view the character is the game's, as if there were no drone,
 and the radio in the player's hands is enough.
 
+### D34. The video feed: a link budget, line-by-line fading, the goggles' raster
+
+The old effect was one number (noise from range and one occlusion ray)
+painted as uniform per-pixel static, which looks like no real feed. Real
+analog FPV is FM video, and its look follows from that. Above the FM
+threshold (CNR ~10-13 dB) the picture is clean. Below it come impulse
+clicks ("sparklies"), then colour speckle and loss of the colour burst,
+then hits on the sync pulses, then lost vertical sync and snow.
+ImmersionRC measured first snow at about -94 dBm and lost sync at about
+-106 dBm on a good receiver. libfpv measures CNR against a -104 dBm floor,
+so those two points fall at +10 and -2 dB.
+
+**Simulation thread (`Flight::updateVideo`).** The link budget:
+
+- the VTX's power and a 10 dB system loss (polarisation, frame and
+  battery, detuning), which puts a 25 mW VTX's first sparkles near 1 km in
+  the open and a 400 mW one's near 3 km;
+- free-space loss at 5.8 GHz;
+- the two-ray ground loss past `4 h1 h2 / λ` (0.7 of 40 dB/decade, rough
+  ground): flying low and far is what kills range;
+- a dipole VTX antenna up and back on the frame (its null along the axis,
+  so flips that point it at the pilot dip);
+- the goggles' patch plus omni (weak right overhead).
+
+Obstruction uses rays spread over a 20-tick cycle. The direct ray is cast
+from both ends, which gives the obstacle's depth (12 dB plus 0.6 dB/m,
+capped at 45 dB). Four paths bend through the edge of the first Fresnel
+zone, so the signal fades as the drone slides behind a corner instead of
+switching off. Blockage also lowers the Rician K factor: behind a wall only
+scattered paths remain (Rayleigh, deep fades). The thread reports the mean
+received power, K and the Doppler `|v| / λ`.
+
+**Host thread (`VideoFeed`).** It runs once per field (59.94 NTSC, 50 PAL,
+the mode's frame rate for digital) on the host's clock. It generates
+the fast fading line by line: Jakes' sum of eight sinusoids per antenna
+with a direct path of K times their power, and selection diversity with
+hysteresis. At 20 m/s a fade lasts ~40 lines, which gives the horizontal
+bands of noise real feeds have, sweeping faster the faster the drone flies.
+Slow log-normal shadowing (2.5 dB, 0.4 s) comes on top. Each line's CNR
+maps to:
+
+- grain from the FM improvement (video SNR ≈ CNR + 26 dB);
+- a click density from Rice's rate `B / (2√3) · erfc(√CNR)` (B = 18 MHz
+  IF);
+- colour gain and hue jitter;
+- a horizontal sync kick that the line PLL pulls back over the next ~10
+  lines (the classic torn edge);
+- the antenna switch's glitch, visible only on weak lines.
+
+Per field it decides the colour killer (with hysteresis), vertical lock
+and the roll, impact jolts, brownouts (cell voltage below the VTX's
+`minCellVoltage`: the VTX resets for 0.4-1 s), the ESC's 48 kHz PWM
+(`interference`: 2.5 cycles a line, stepping 0.05 a line, so diagonal
+stripes that crawl) and the motors' electrical hum bars, both scaled by
+throttle and the VTX's `powerNoise`. The result goes to the host as a
+2 × lines RGBA8 table in the frame (no texture API: a frame is a
+per-drone, thread-safe copy) plus a few scalars. Fades, sync and clicks
+are all decided here, so every renderer shows the same feed, and the
+shader only draws a table.
+
+Digital links use a margin above `sensitivityDbm`. HDZero breaks into
+macroblocks around 0 dB and holds below -8 dB. DJI and Walksnail
+(`freezes`) lose bitrate first (mush), then stutter and hold frames.
+
+**Rendering (`fpv_video_gl3.h`).** Two passes. The signal is drawn at the
+feed's raster: an analog field is 720 × 240/288, the 720 samples a goggle's
+decoder takes, and luma is limited to the camera's TVL through a 5 MHz
+baseband, about 250 cycles across, so every "1200TVL" camera looks about
+400 TVL through the link, as on real goggles. It is redrawn only on a new
+field, so it runs at 60 Hz whatever the game's rate, and the previous one
+is the history for digital freezes and stale blocks. The goggles then
+scale it bilinearly into the camera's aspect with black bars, bobbing the
+interlaced fields half a line. On analog the OSD is drawn into the signal,
+because the flight controller's OSD chip writes into the video before the
+VTX, so it tears, rolls and drowns in snow with the picture. Pixelation
+with nearest filtering was rejected: goggles interpolate, and blocky pixels
+read as a retro game, not a video feed.
+
+Both effects are off by default (settings `videoNoise`,
+`videoResolution`). `FPV_INIT_NO_VIDEO_FEED` hides them for games that
+don't draw the pass. Presets name real parts: the Freestyler is a Caddx
+Ratel 2 (4:3, NTSC) on a TBS Unify Pro32 HV at 400 mW, and the Air65 II a
+BetaFPV C03 on its Matrix 1S AIO VTX at 25 mW (1S brownouts).
+
+Reversing: both settings off is the old picture without its static. The
+old `fpv_video_state` fields remain, derived from the new budget.
+
 ## Platforms
 
 ### D19. Windows: MinGW-w64 cross build, fully static runtimes
@@ -1028,7 +1115,12 @@ the props are broken (CRASHED), the motors are stopped, AUX1 is held low,
 the video reports no signal (noise 1, signal 0), and the OSD is blank
 until the repair: with the video transmitter gone, the goggles show only
 static. libfpv used to write "SIGNAL LOST" in the middle of it; that was
-dropped so the screen is just the static. Games can still draw their own
+dropped so the screen is just the static. With the video feed's noise on
+(D34) the static is the feed's: the detonation sets the received power to
+nothing, so the per-line table goes to snow with no sync. The blanking bar
+and torn line starts mix into that snow by each line's signal, so a
+missing transmitter shows uniform receiver noise edge to edge. Games paint
+their own static only while the noise is off (the default). Games can still draw their own
 OSD with `FPV_KAMIKAZE_NO_OSD`. `fpv_drone_repair` is the new drone with a
 new, safe warhead. libfpv never respawns on its own: whether the game
 cuts to a cutscene, respawns at once, or leaves the pilot on static until

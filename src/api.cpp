@@ -66,6 +66,8 @@ void loadSettings() {
         s.cameraFov = j.value("cameraFov", s.cameraFov);
         s.cameraFisheye = std::clamp(j.value("cameraFisheye", s.cameraFisheye), 0.0f, 1.0f);
         s.chaseSmoothing = j.value("chaseSmoothing", s.chaseSmoothing);
+        s.videoNoise = j.value("videoNoise", s.videoNoise);
+        s.videoResolution = j.value("videoResolution", s.videoResolution);
         // "auto", "on" or "off"; older versions stored a bool (off by default)
         auto hover = j.find("keyboardHover");
         if (hover != j.end() && hover->is_string()) {
@@ -133,6 +135,8 @@ void saveSettings() {
               {"cameraFov", s.cameraFov},
               {"cameraFisheye", s.cameraFisheye},
               {"chaseSmoothing", s.chaseSmoothing},
+              {"videoNoise", s.videoNoise},
+              {"videoResolution", s.videoResolution},
               {"keyboardHover", s.keyboardHover == KeyboardHover::On    ? "on"
                                 : s.keyboardHover == KeyboardHover::Off ? "off"
                                                                         : "auto"},
@@ -375,9 +379,12 @@ static bool restoreShippedPreset(const std::string &fileName) {
     if (const EmbeddedFile *diff = embedded("quad/" + fileName + ".diff.txt")) restore(*diff);
     json q = json::parse(quad->data, quad->data + quad->size, nullptr, false);
     // components are referenced by their "name" field or file stem
-    for (const char *kind : {"motor", "propeller", "battery", "vtx"}) {
-        if (!q.is_object() || !q.contains(kind) || !q[kind].is_string()) continue;
-        std::string name = q[kind].get<std::string>(), dir = std::string(kind) + "/";
+    for (const char *kind : {"motor", "propeller", "battery", "vtx", "camera"}) {
+        if (!q.is_object() || !q.contains(kind)) continue;
+        // the camera model sits in the quad's "camera" object
+        const json &ref = std::string(kind) == "camera" && q[kind].is_object() ? q[kind].value("model", json()) : q[kind];
+        if (!ref.is_string()) continue;
+        std::string name = ref.get<std::string>(), dir = std::string(kind) + "/";
         for (size_t i = 0; i < kEmbeddedPresetsCount; i++) {
             const EmbeddedFile &f = kEmbeddedPresets[i];
             std::string path = f.path;

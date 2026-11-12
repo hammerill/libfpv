@@ -61,6 +61,9 @@
     "propeller": "Pfan 1614 PC3",
     "battery": "GoblinII 1S 580mah",
     "vtx": "cheap 25mW analog vtx",
+    "camera": {
+        "model": "Generic 800TVL nano camera"
+    },
     "soundMaxRpm": 64700,
     "model": "vtx-slayer-one(3\")"
 }

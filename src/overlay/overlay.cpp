@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 
 #include "core/bf_bridge.h"
@@ -1369,11 +1370,35 @@ void Overlay::tabCamera() {
         ImGui::TextDisabled(hearsFromPilot() ? "Auto: from the pilot, in this view." : "Auto: onboard, in this view.");
     ImGui::TextDisabled("From the pilot, the drone is quieter far away and behind walls, with echoes and Doppler.");
     ImGui::TextDisabled("Games that support it hear their own sounds from the pilot too.");
-    sectionTitle("Video link");
+    sectionTitle("Video feed");
     const fpv_frame &f = L.lastFrame;
-    ImGui::Text("%s link, signal %.0f%%, noise %.0f%%", f.video.is_digital ? "Digital" : "Analog",
-                f.video.signal_strength * 100, f.video.noise * 100);
-    ImGui::TextDisabled("Noise grows with distance from the pilot and behind obstacles.");
+    const fpv_video_feed &vf = f.video_feed;
+    const bool analog = !p.vtx.digital;
+    if (L.config.flags & FPV_INIT_NO_VIDEO_FEED) {
+        ImGui::TextDisabled("Video noise and camera resolution: not drawn by this game");
+    } else {
+        if (ImGui::Checkbox(analog ? "Analog video noise" : "Digital link breakup", &L.settings.videoNoise)) saveSettings();
+        ImGui::TextDisabled(analog ? "Snow, sparkles, torn and rolling lines, colour loss: with range, walls, "
+                                     "flips, speed, crashes and motor noise."
+                                   : "Broken blocks and frozen frames when the link is weak.");
+        if (ImGui::Checkbox("Camera resolution and aspect", &L.settings.videoResolution)) saveSettings();
+        ImGui::TextDisabled("The picture at the feed's resolution and the camera's aspect, with black bars.");
+    }
+    char aspect[16];
+    float a = p.camera.aspect;
+    std::snprintf(aspect, sizeof aspect, std::fabs(a - 4.0f / 3) < 0.02f ? "4:3" : std::fabs(a - 16.0f / 9) < 0.02f ? "16:9" : "%.2f:1", a);
+    const char *system = vf.system == FPV_VIDEO_PAL ? "PAL" : vf.system == FPV_VIDEO_NTSC ? "NTSC" : "digital";
+    ImGui::Text("Camera  %s, %s %s", p.camera.model.empty() ? "generic" : p.camera.model.c_str(), aspect, system);
+    if (analog)
+        ImGui::Text("Feed    %u x %u, %.0f TVL camera, about %.0f TVL through the link", vf.raster_width,
+                    vf.raster_height, p.camera.tvl, vf.luma_cycles * 2 / std::max(a, 0.1f));
+    else
+        ImGui::Text("Feed    %u x %u at %.0f fps", vf.raster_width, vf.raster_height, p.vtx.fps);
+    ImGui::Text("VTX     %s, %.0f mW", p.vtx.name.empty() ? (analog ? "analog" : "digital") : p.vtx.name.c_str(), p.vtx.powerMw);
+    ImGui::Text("Link    %.0f dBm, %s %.0f dB", vf.rssi_dbm, analog ? "CNR" : "margin",
+                analog ? vf.cnr_db : vf.rssi_dbm - p.vtx.sensitivityDbm);
+    ImGui::TextDisabled(analog ? "Sparkles start near 10 dB CNR, sync is lost below about -2 dB."
+                               : "The picture breaks up near 0 dB margin.");
 }
 
 void Overlay::tabControls() {
