@@ -604,7 +604,8 @@ it spawns the drone.
 
 The motors only arm with the bomb switch off. Take off, flip it, and the
 warhead is live (OSD `BOMB_ARMED`; with an arming delay set, `ARMING 3` first).
-Any touch then sets it off, even a light tap on the ground, and so does the
+While it is live, Betaflight's crosshairs shrink to an aiming dot and the
+artificial horizon is not drawn (each only if the player has it on). Any touch then sets it off, even a light tap on the ground, and so does the
 explode switch. With the bomb switch off nothing explodes. The warhead
 weighs something (by default 60 % of the quad), so a loaded drone climbs
 and turns slower.
@@ -656,7 +657,7 @@ moment `fpv_kamikaze_poll_detonation` returns the detonation:
      the static.
    - `FPV_KAMIKAZE_VIEW_CUTSCENE`: the game camera shows the explosion from
      another angle (an external shot of the blast).
-2. **Duration** (`c.ending_duration`, 0..30 s, default 3): how long the view
+2. **Duration** (`c.ending_duration`, 0..30 s, default 2): how long the view
    shows. 0 skips the view for Respawn and Recall: they happen right after
    the blast.
 3. **Then** (`c.ending_then`), what the game does when the time is up:
@@ -691,7 +692,7 @@ The overlay then only offers those choices, and a saved choice the game
 can't do reads back as the game's default (the saved choice itself is
 kept, so it comes back where it is supported). A supported saved choice
 always wins over the default. Not calling it means everything is
-supported, with the defaults signal lost, 3 s, respawn. Signal lost and
+supported, with the defaults signal lost, 2 s, respawn. Signal lost and
 Nothing need nothing from the game, so libfpv always allows them. A game
 without a character to hand control back to leaves out Recall.
 

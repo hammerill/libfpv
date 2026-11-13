@@ -2266,7 +2266,7 @@ void testKamikazeGroundTap() {
     CHECK(fpv_kamikaze_set_config(&cfg) == FPV_ERROR_INVALID_ARGUMENT, "fuse below 0.1 m/s refused");
     // the ending duration (the overlay's "Ending"): stored for the game, kept by older hosts
     fpv_kamikaze_config_defaults(&cfg);
-    CHECK(cfg.ending_duration == 3.0f, "default ending 3 s (%.1f)", cfg.ending_duration);
+    CHECK(cfg.ending_duration == 2.0f, "default ending 2 s (%.1f)", cfg.ending_duration);
     cfg.ending_duration = 5.0f;
     CHECK(fpv_kamikaze_set_config(&cfg) == FPV_OK, "set ending: %s", fpv_last_error());
     fpv_kamikaze_config_defaults(&cfg);
@@ -2457,8 +2457,8 @@ void testKamikazeEnding() {
     fpv_kamikaze_config cfg;
     fpv_kamikaze_config_defaults(&cfg);
     CHECK(cfg.ending_view == FPV_KAMIKAZE_VIEW_SIGNAL_LOST && cfg.ending_then == FPV_KAMIKAZE_THEN_RESPAWN &&
-              cfg.ending_duration == 3.0f,
-          "defaults: signal lost, 3 s, respawn (%u, %.1f, %u)", cfg.ending_view, cfg.ending_duration, cfg.ending_then);
+              cfg.ending_duration == 2.0f,
+          "defaults: signal lost, 2 s, respawn (%u, %.1f, %u)", cfg.ending_view, cfg.ending_duration, cfg.ending_then);
     cfg.ending_view = FPV_KAMIKAZE_VIEW_CUTSCENE;
     cfg.ending_then = FPV_KAMIKAZE_THEN_RECALL;
     cfg.ending_duration = 0;

@@ -56,7 +56,7 @@
 /* The one place the version is set: CMakeLists.txt reads these three. */
 #define LIBFPV_VERSION_MAJOR 0
 #define LIBFPV_VERSION_MINOR 2
-#define LIBFPV_VERSION_PATCH 5
+#define LIBFPV_VERSION_PATCH 6
 #define LIBFPV_STRINGIFY_(x) #x
 #define LIBFPV_STRINGIFY(x) LIBFPV_STRINGIFY_(x)
 #define LIBFPV_VERSION_STRING                                                  \
@@ -1104,7 +1104,7 @@ typedef struct fpv_kamikaze_config {
     float payload_drop;
     /* The ending, the player's choice in the overlay (F8 > Kamikaze): after
      * a detonation the game shows ending_view for ending_duration seconds
-     * (0..30, default 3), then does ending_then. 0 s skips the view for
+     * (0..30, default 2), then does ending_then. 0 s skips the view for
      * RESPAWN and RECALL (they happen at once). With
      * FPV_KAMIKAZE_THEN_NOTHING the view shows and stays until the player
      * acts, whatever the duration (also 0).

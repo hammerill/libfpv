@@ -307,6 +307,11 @@ void bfb_osd_set_host_message(int index, const char *text)
     osdHostCustomMsg[index][MAX_NAME_LENGTH] = '\0';
 }
 
+void bfb_osd_set_aim_dot(int on)
+{
+    osdHostAimDot = on != 0;
+}
+
 int bfb_osd_disabled(void)
 {
     return IS_RC_MODE_ACTIVE(BOXOSD) ? 1 : 0;
@@ -411,6 +416,7 @@ void bfb_gps_update(float east, float north, float up, float vEast, float vNorth
 void bfb_gps_set_home(float east, float north, float up)
 {
     const gpsLocation_t home = toLocation(east, north, up);
+    gpsHomeHeldByHost = true;  // Betaflight keeps it while disarmed (patch 0015)
     if (STATE(GPS_FIX_HOME) && GPS_home_llh.lat == home.lat && GPS_home_llh.lon == home.lon &&
         GPS_home_llh.altCm == home.altCm) {
         return;
@@ -429,6 +435,19 @@ void bfb_gps_set_home(float east, float north, float up)
         GPS_distanceToHomeCm = dist;
         GPS_directionToHome = dir / 10;
     }
+}
+
+void bfb_rx_recovered(void)
+{
+    rxHostSignalRecovered();
+    failsafeHostRecover();
+    coreHostRxRecovered();
+}
+
+void bfb_gps_release_home(void)
+{
+    /* back to Betaflight's own home: the arming point, cleared while disarmed */
+    gpsHomeHeldByHost = false;
 }
 
 /* The virtual barometer otherwise reads sea level forever, and Betaflight's

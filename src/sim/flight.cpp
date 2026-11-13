@@ -217,7 +217,17 @@ void Flight::teleport(Vec3 pos, Quat rot) {
     m_vel = {};
     m_angVel = {};
     simitl_command(CommandType::Reset);
+    rcRespawnGrace();
     m_lastGroundContact = -1;
+}
+
+// A respawned (moved or repaired) drone gets 1 s in which no RC packet is
+// lost, so a link that was down (a wall, a blast) never leaves Betaflight in
+// RXLOSS, refusing to arm, right after the respawn.
+void Flight::rcRespawnGrace() {
+    m_rcImmuneUntil = m_simTime + 1.0;
+    // and Betaflight skips its own recovery (FAILSAFE, then NOT_DISARMED)
+    if (m_bfReady && m_active) bfb_rx_recovered();
 }
 
 void Flight::resetFlightTime() {
@@ -227,6 +237,7 @@ void Flight::resetFlightTime() {
 void Flight::repair() {
     simitl_command(CommandType::Repair);
     for (float &d : m_propDamage) d = 0;
+    rcRespawnGrace();
 #if defined(LIBFPV_KAMIKAZE)
     m_warhead.reset(m_simTime);  // a repaired drone carries a new warhead
 #endif
@@ -818,6 +829,7 @@ void Flight::updateRcLink() {
     m_rcInputs.kFactor = m_rcK;
     m_rcInputs.dopplerHz = m_rcDoppler;
     m_rcInputs.armed = bfb_is_armed();
+    m_rcInputs.immune = m_simTime < m_rcImmuneUntil;
 #if defined(LIBFPV_KAMIKAZE)
     m_rcInputs.alive = !m_warhead.detonated();
 #endif
@@ -958,16 +970,23 @@ void Flight::step(float dt, const float channels[kChannelCount], bool radioLost)
     // after the update: arming inside it may have just moved home
     {
         std::lock_guard<std::mutex> lock(m_homeMutex);
-        if (m_hasHome) bfb_gps_set_home(m_home.x, m_home.z, m_home.y);
+        if (m_hasHome) {
+            bfb_gps_set_home(m_home.x, m_home.z, m_home.y);
+        } else {
+            bfb_gps_release_home();
+        }
     }
     const StateOutput &out = SimITL::Sim::getInstance().getStateUpdate();
 
     // --- integrate pose with collisions -----------------------------------
 #if defined(LIBFPV_KAMIKAZE)
     if (m_active && m_warhead.detonated()) {
-        // the wreck stays where it exploded until repaired
+        // the wreck stays where it exploded until repaired, its motors dead:
+        // with the receiver gone (simulated RC link), Betaflight's failsafe
+        // still holds the last sticks, and SimITL would spin them up
         m_vel = {};
         m_angVel = {};
+        stopMotors();
     } else
 #endif
     if (m_active) {
@@ -1009,6 +1028,8 @@ void Flight::step(float dt, const float channels[kChannelCount], bool radioLost)
     char bombText[24] = "";
     if (m_active) m_warhead.statusText(bombText, sizeof bombText, m_simTime, bfb_is_armed());
     bfb_osd_set_host_message(0, bombText);
+    // a live bomb: the crosshairs become an aiming dot, no artificial horizon
+    bfb_osd_set_aim_dot(m_active && m_warhead.snapshot().state == WarheadState::Armed);
 #endif
 
     // --- snapshot -----------------------------------------------------------
@@ -1096,6 +1117,11 @@ void Flight::step(float dt, const float channels[kChannelCount], bool radioLost)
         m_snap.videoSignal = 0.0f;
         m_snap.videoRxDbm = -200.0f;
         m_snap.crashed = true;
+        // and it makes no sound: no motors, no buzzer
+        for (MotorSnapshot &m : m_snap.motors) {
+            m.rpm = m.thrust = m.current = m.command = 0;
+        }
+        m_snap.beeper = m_snap.beeperSwitch = false;
     }
 #endif
 }

@@ -1,0 +1,58 @@
+diff --git a/src/main/osd/osd_elements.c b/src/main/osd/osd_elements.c
+--- a/src/main/osd/osd_elements.c
++++ b/src/main/osd/osd_elements.c
+@@ -754,6 +754,13 @@
+ static void osdElementArtificialHorizon(osdElementParms_t *element)
+ {
+     static int x = -4;
++#if defined(SIMULATOR_BUILD)
++    if (osdHostAimDot) {
++        x = -4;
++        element->drawElement = false;
++        return;
++    }
++#endif
+     // Get pitch and roll limits in tenths of degrees
+     const int maxPitch = osdConfig()->ahMaxPitch * 10;
+     const int maxRoll = osdConfig()->ahMaxRoll * 10;
+@@ -974,6 +981,16 @@
+ 
+ static void osdElementCrosshairs(osdElementParms_t *element)
+ {
++#if defined(SIMULATOR_BUILD)
++    if (osdHostAimDot) {
++        // the centre glyph's place, the side lines blanked
++        element->buff[0] = SYM_BLANK;
++        element->buff[1] = SYM_STICK_OVERLAY_SPRITE_MID;
++        element->buff[2] = SYM_BLANK;
++        element->buff[3] = 0;
++        return;
++    }
++#endif
+     element->buff[0] = SYM_AH_CENTER_LINE;
+     element->buff[1] = SYM_AH_CENTER;
+     element->buff[2] = SYM_AH_CENTER_LINE_RIGHT;
+diff --git a/src/main/osd/osd.c b/src/main/osd/osd.c
+--- a/src/main/osd/osd.c
++++ b/src/main/osd/osd.c
+@@ -321,6 +321,7 @@
+ 
+ #if defined(SIMULATOR_BUILD)
+ bool osdHostLinkElementsHidden = true;  // the host's RC link is off by default
++bool osdHostAimDot = false;
+ // the setting the list of active elements was built with
+ static bool osdActiveElementsLinkHidden = true;
+ #endif
+diff --git a/src/main/osd/osd.h b/src/main/osd/osd.h
+--- a/src/main/osd/osd.h
++++ b/src/main/osd/osd.h
+@@ -416,6 +416,9 @@
+ // elements (RSSI, RSSI dBm, link quality, RSNR, TX power) would only show
+ // defaults, so they are left out. Set from the host on the FC thread.
+ extern bool osdHostLinkElementsHidden;
++// The host's aim mode: the crosshairs shrink to a dot and the artificial
++// horizon is not drawn. Set from the host on the FC thread.
++extern bool osdHostAimDot;
+ #endif
+ void changeOsdProfileIndex(uint8_t profileIndex);
+ uint8_t getCurrentOsdProfileIndex(void);

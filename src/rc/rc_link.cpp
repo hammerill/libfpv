@@ -164,6 +164,14 @@ bool RcLink::sendPacket(const RcLinkInputs &in, float packetDt) {
     float txDbm = 10.0f * std::log10((float)m_st.txPowerMw);
     float rxDbm = in.alive ? txDbm + in.pathGainDb + fadeDb : -200.0f;
     bool ok = uniform() < packetSuccess(rxDbm - mode.sensitivityDbm);
+    if (in.immune) {
+        ok = true;
+        if (!m_st.connected) {
+            m_st.connected = true;  // no resync wait either
+            m_sinceRx = 0;
+            m_telemAge = 0;
+        }
+    }
 
     if (!m_st.connected) {
         // searching: only a run of good link finds the sync again

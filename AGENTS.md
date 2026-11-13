@@ -24,6 +24,20 @@ arm and explode switches, the Kamikaze overlay tab, `fpv_kamikaze_*`,
 - Game integrations must not enable it or mention it in their READMEs, mod
   pages or default builds either. Use it only in local development builds.
 
+### Kamikaze dev machines (`LIBFPV_KAMIKAZE_DEV`)
+
+If the environment variable `LIBFPV_KAMIKAZE_DEV` is set to `1` or `true`
+(check with `echo $LIBFPV_KAMIKAZE_DEV`), this machine is a kamikaze dev
+machine: every local build and deploy of libfpv, its examples and the game
+integrations that use it (the `*-fpv` projects' local deploy scripts, local
+CMake/Make builds) is a kamikaze build (`LIBFPV_KAMIKAZE=ON`), unless the
+user says otherwise for that build.
+
+This covers local builds only. It never changes anything public: CI/CD,
+release, web or other pipelines, presets, defaults, READMEs and the rules
+above all stay as they are. If the variable is unset or anything else,
+build without kamikaze as usual.
+
 ### `LIBFPV_KAMIKAZE_PROMOTE`
 
 The promote build (the Kamikaze tab pointing to the Kamikaze version on

@@ -81,6 +81,7 @@ struct RcLinkInputs {
     float dopplerHz = 0;     // speed / wavelength
     bool armed = false;
     bool alive = true;       // false: no receiver (destroyed)
+    bool immune = false;     // respawn grace: every packet arrives, the link is up
 };
 
 // Where the link is.

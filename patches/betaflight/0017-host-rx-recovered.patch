@@ -1,0 +1,128 @@
+diff --git a/src/main/fc/core.c b/src/main/fc/core.c
+--- a/src/main/fc/core.c
++++ b/src/main/fc/core.c
+@@ -275,6 +275,23 @@
+     }
+ 
+     return false;
++}
++#endif
++
++// whether the RX had a signal at the last arming status update
++static bool hadRx = false;
++
++#if defined(SIMULATOR_BUILD)
++void coreHostRxRecovered(void)
++{
++    // the link never went away as far as the arm switch check goes: no
++    // "just got RX back" edge. Still not armed until the arm switch reads
++    // off with live data, as after a real recovery, but that is the next
++    // packet, not the end of the failsafe.
++    hadRx = true;
++    if (!ARMING_FLAG(ARMED)) {
++        setArmingDisabled(ARMING_DISABLED_NOT_DISARMED);
++    }
+ }
+ #endif
+ 
+@@ -298,7 +315,6 @@
+ 
+         // If switch is used for arming then check it is not defaulting to on when the RX link recovers from a fault
+         if (!isUsingSticksForArming()) {
+-            static bool hadRx = false;
+             const bool haveRx = isRxReceivingSignal();
+ 
+             const bool justGotRxBack = !hadRx && haveRx;
+diff --git a/src/main/fc/core.h b/src/main/fc/core.h
+--- a/src/main/fc/core.h
++++ b/src/main/fc/core.h
+@@ -79,6 +79,10 @@
+ bool processRx(timeUs_t currentTimeUs);
+ void processRxModes(timeUs_t currentTimeUs);
+ void updateArmingStatus(void);
++#if defined(SIMULATOR_BUILD)
++// The simulator host made the RX link good again (a respawned drone).
++void coreHostRxRecovered(void);
++#endif
+ 
+ void taskGyroSample(timeUs_t currentTimeUs);
+ bool gyroFilterReady(void);
+diff --git a/src/main/flight/failsafe.c b/src/main/flight/failsafe.c
+--- a/src/main/flight/failsafe.c
++++ b/src/main/flight/failsafe.c
+@@ -208,6 +208,31 @@
+     }
+ }
+ 
++#if defined(SIMULATOR_BUILD)
++// The simulator host made the RX link good again (a respawned drone): end
++// any failsafe and take the link as up now, without the recovery period.
++void failsafeHostRecover(void)
++{
++    const uint32_t now = millis();
++    failsafeState.validRxDataReceivedAt = now;
++    failsafeState.validRxDataFailedAt = now - failsafeState.receivingRxDataPeriodPreset - 1;
++    failsafeState.receivingRxDataPeriod = 0;
++    failsafeState.rxLinkState = FAILSAFE_RXLINK_UP;
++    failsafeState.boxFailsafeSwitchWasOn = false;
++    if (failsafeState.phase != FAILSAFE_IDLE) {
++        failsafeState.phase = FAILSAFE_IDLE;
++        failsafeState.active = false;
++        failsafeState.throttleLowPeriod = 0;
++#ifdef USE_GPS_RESCUE
++        DISABLE_FLIGHT_MODE(GPS_RESCUE_MODE);
++#endif
++        DISABLE_FLIGHT_MODE(FAILSAFE_MODE);
++    }
++    unsetArmingDisabled(ARMING_DISABLED_FAILSAFE);
++    unsetArmingDisabled(ARMING_DISABLED_RX_FAILSAFE);
++}
++#endif
++
+ void failsafeCheckDataFailurePeriod(void)
+ // runs directly from scheduler, every 10ms, to validate the link
+ {
+diff --git a/src/main/flight/failsafe.h b/src/main/flight/failsafe.h
+--- a/src/main/flight/failsafe.h
++++ b/src/main/flight/failsafe.h
+@@ -108,3 +108,6 @@
+ void failsafeOnRxResume(void);
+ void failsafeOnValidDataReceived(void);
+ void failsafeOnValidDataFailed(void);
++#if defined(SIMULATOR_BUILD)
++void failsafeHostRecover(void);
++#endif
+diff --git a/src/main/rx/rx.c b/src/main/rx/rx.c
+--- a/src/main/rx/rx.c
++++ b/src/main/rx/rx.c
+@@ -396,6 +396,17 @@
+     rxChannelCount = MIN(rxConfig()->max_aux_channel + NON_AUX_CHANNEL_COUNT, rxRuntimeState.channelCount);
+ }
+ 
++#if defined(SIMULATOR_BUILD)
++// The simulator host made the RX link good again (a respawned drone): the
++// signal counts as received now, as if a packet had just come in.
++void rxHostSignalRecovered(void)
++{
++    rxSignalReceived = true;
++    needRxSignalBefore = micros() + RXLOSS_TRIGGER_INTERVAL;
++    rxDataProcessingRequired = true;
++}
++#endif
++
+ bool isRxReceivingSignal(void)
+ {
+     return rxSignalReceived;
+diff --git a/src/main/rx/rx.h b/src/main/rx/rx.h
+--- a/src/main/rx/rx.h
++++ b/src/main/rx/rx.h
+@@ -175,6 +175,9 @@
+ bool rxUpdateCheck(timeUs_t currentTimeUs, timeDelta_t currentDeltaTimeUs);
+ void rxFrameCheck(timeUs_t currentTimeUs, timeDelta_t currentDeltaTimeUs);
+ bool isRxReceivingSignal(void);
++#if defined(SIMULATOR_BUILD)
++void rxHostSignalRecovered(void);
++#endif
+ bool rxAreFlightChannelsValid(void);
+ bool calculateRxChannelsAndUpdateFailsafe(timeUs_t currentTimeUs);
+ 

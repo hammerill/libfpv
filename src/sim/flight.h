@@ -179,6 +179,7 @@ private:
     void buildShape();
     float shapeBottom() const;
     void stopMotors();
+    void rcRespawnGrace();  // 1 s without RC packet loss
     void syncPropDirection();
     void resolveContacts(float dt);
     void propStrikes(float dt);
@@ -273,6 +274,7 @@ private:
     std::atomic<float> m_hostRcLoss{-1.0f};
     RcLinkInputs m_rcInputs;       // for this step's packets
     double m_rcLastPacket = -1;    // sim time of the last packet slot
+    double m_rcImmuneUntil = -1;   // respawn grace: no packet lost before then
     bool m_rcPushed = false;       // Betaflight shows our link statistics
 #if defined(LIBFPV_KAMIKAZE)
     Warhead m_warhead;

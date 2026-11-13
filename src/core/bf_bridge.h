@@ -74,6 +74,9 @@ int bfb_beeper_switch(void);
  * the Configurator), drawn wherever the player put that element; up to 16
  * characters, "" draws nothing, NULL gives the element back to Betaflight. */
 void bfb_osd_set_host_message(int index, const char *text);
+/* Aim mode: the crosshairs element shrinks to a dot and the artificial
+ * horizon element is not drawn (both only if the player has them on). */
+void bfb_osd_set_aim_dot(int on);
 /* Calibration, RX recovery or boot grace still pending. */
 int bfb_settling(void);
 
@@ -103,6 +106,12 @@ void bfb_rc_link_release(void);
  * arming. Call every step while the host's home applies; when it stops,
  * Betaflight takes the next arming point again. */
 void bfb_gps_set_home(float east, float north, float up);
+/* hand the home point back to Betaflight (the arming point) */
+void bfb_gps_release_home(void);
+/* A respawned drone's RC link is good at once: ends any failsafe, clears
+ * RXLOSS and the failsafe arming block without the recovery delay; arming
+ * still needs the arm switch read off from live packets. */
+void bfb_rx_recovered(void);
 
 void bfb_ws_set_enabled(int enabled);
 void bfb_ws_set_base_port(int basePort);
