@@ -56,7 +56,7 @@
 /* The one place the version is set: CMakeLists.txt reads these three. */
 #define LIBFPV_VERSION_MAJOR 0
 #define LIBFPV_VERSION_MINOR 2
-#define LIBFPV_VERSION_PATCH 6
+#define LIBFPV_VERSION_PATCH 7
 #define LIBFPV_STRINGIFY_(x) #x
 #define LIBFPV_STRINGIFY(x) LIBFPV_STRINGIFY_(x)
 #define LIBFPV_VERSION_STRING                                                  \
@@ -360,7 +360,11 @@ FPV_API fpv_result fpv_drone_delete(fpv_drone *drone);
 /* Teleports to a pose with zero velocity. The drone stays armed only if the
  * player's arm switch is still on. NULL rotation keeps the current yaw upright. */
 FPV_API fpv_result fpv_drone_reset(fpv_drone *drone, const float position[3], const float rotation[4]);
-/* Fresh battery, cool undamaged motors and new propellers. */
+/* Fresh battery, cool undamaged motors and new propellers.
+ * A repaired or reset drone takes no prop damage for 0.25 s (from the
+ * world or fpv_drone_damage_props): repair then reset a drone that sits in
+ * water and the new one starts whole, while the game's world still
+ * describes the old spot for a frame or two. */
 FPV_API fpv_result fpv_drone_repair(fpv_drone *drone);
 /* The game damages the propellers: fire, water, a bullet through the props,
  * anything that would hurt a real one (docs/INTEGRATION.md#damage).

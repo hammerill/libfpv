@@ -275,6 +275,12 @@ private:
     RcLinkInputs m_rcInputs;       // for this step's packets
     double m_rcLastPacket = -1;    // sim time of the last packet slot
     double m_rcImmuneUntil = -1;   // respawn grace: no packet lost before then
+    // Respawn grace for the props: a repaired or moved drone takes no damage
+    // before then, so what surrounded it before (the water it was repaired
+    // in, a host's stale damage, a world object still moving to the new
+    // spot) never breaks the new props.
+    double m_damageGraceUntil = -1;
+    bool canDamage() const { return m_damage && m_simTime >= m_damageGraceUntil; }
     bool m_rcPushed = false;       // Betaflight shows our link statistics
 #if defined(LIBFPV_KAMIKAZE)
     Warhead m_warhead;

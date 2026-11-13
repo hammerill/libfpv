@@ -563,6 +563,12 @@ the rule for every integration, as on a real quad:
   always calls it.
 - Effects that are only the game's (sparks, smoke, sound) can still play
   when the drone is immune.
+- **Respawns are safe.** After `fpv_drone_repair` or `fpv_drone_reset` the
+  drone takes no prop damage for 0.25 s, from surfaces or from
+  `fpv_drone_damage_props`. A respawn key that repairs then resets a drone
+  sitting in water gives a whole new drone, even though the simulation
+  steps between the two calls and the game's own damage checks still see
+  the old spot for a frame. Keep calling the damage every frame as usual.
 
 ## Kamikaze builds
 

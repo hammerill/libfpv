@@ -2651,6 +2651,10 @@ void testSimOptions() {
     fpv_sim_set_options(0);
     fpv_drone_damage_props(s.drone, 2, 0.4f);
     s.run(0.1f);
+    CHECK(s.f.motors[2].prop_damage == 0, "a new drone's respawn grace ignores the game's damage");
+    s.run(0.2f);  // past the grace
+    fpv_drone_damage_props(s.drone, 2, 0.4f);
+    s.run(0.1f);
     CHECK(std::fabs(s.f.motors[2].prop_damage - 0.4f) < 1e-4f && s.f.motors[0].prop_damage == 0, "one prop damaged (%.2f)",
           s.f.motors[2].prop_damage);
     fpv_drone_damage_props(s.drone, -1, 1.0f);
@@ -2660,6 +2664,54 @@ void testSimOptions() {
     s.run(0.1f);
     CHECK(!(s.f.flags & FPV_DRONE_CRASHED), "repaired");
     s.destroy();
+}
+
+// A respawn out of water: the game repairs, the simulation steps on with
+// the drone still in the water, then the game resets it somewhere dry, and
+// its own damage for the old spot arrives a frame late. The new drone
+// starts whole; left in the water, it breaks its props again.
+void testRespawnFromWater() {
+    Host h(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1));
+    fpv_material water{};
+    water.restitution = 0.05f;
+    water.friction = 0.9f;
+    water.flags = FPV_MATERIAL_KILLS_PROPS;
+    CHECK(fpv_material_set(7, &water) == FPV_OK, "material");
+    World w = makeLevel(h, 100, 0);
+    float a[3], b[3], c[3], d[3];
+    h.pos(10, 0.5f, -5, a);  // a pond's surface over the ground at right 10..20
+    h.pos(20, 0.5f, -5, b);
+    h.pos(20, 0.5f, 5, c);
+    h.pos(10, 0.5f, 5, d);
+    w.quad(a, b, c, d);
+    std::vector<uint8_t> mats(w.idx.size() / 3, 0);
+    mats[2] = mats[3] = 7;
+    fpv_mesh m = w.mesh();
+    m.materials = mats.data();
+    CHECK(fpv_static_surfaces_load(&m, 1) == FPV_OK, "load");
+    float dry[3], wet[3];
+    h.pos(0, 0, 0, dry);
+    h.pos(15, 1.5f, 0, wet);  // it falls onto the pond
+    Session s;
+    s.spawn(wet);
+    s.run(0.5f);
+    bool broken = true;
+    for (auto &mo : s.f.motors) broken = broken && mo.prop_damage >= 1.0f;
+    CHECK(broken, "the water breaks the props (%.2f)", s.f.motors[0].prop_damage);
+    fpv_drone_repair(s.drone);
+    s.run(0.03f);  // the simulation keeps stepping before the game's reset
+    fpv_drone_reset(s.drone, dry, nullptr);
+    fpv_drone_damage_props(s.drone, -1, 0.5f / 30.0f);  // the game's water damage, a frame late
+    s.run(0.5f);
+    float worst = 0;
+    for (auto &mo : s.f.motors) worst = std::max(worst, mo.prop_damage);
+    CHECK(worst == 0 && !(s.f.flags & FPV_DRONE_CRASHED), "the respawned drone is whole (damage %.2f)", worst);
+    fpv_drone_reset(s.drone, wet, nullptr);
+    s.run(0.5f);
+    CHECK(s.f.flags & FPV_DRONE_CRASHED, "put back in the water, it breaks again");
+    s.destroy();
+    fpv_material def{0.2f, 0.6f, 0};
+    fpv_material_set(7, &def);
 }
 
 // The pilot's features: only what the game supports, the player's choice.
@@ -3320,6 +3372,7 @@ int main(int argc, char **argv) {
         {"wall_crash", testWallCrash},
         {"thirty_mps_thin_wall", testThirtyMetersPerSecond},
         {"motor_burnout", testMotorBurnout},
+        {"respawn_from_water", testRespawnFromWater},
         {"presets", testPresets},
         {"preset_switch_battery", testPresetSwitchBattery},
         {"preset_switch_rest", testPresetSwitchRest},

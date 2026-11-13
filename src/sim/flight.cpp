@@ -29,6 +29,12 @@ constexpr float kWinchSpeed = 0.5f;          // m/s, the cargo line reeled in or
 constexpr float kCargoDragCoef = 1.0f;       // the hanging cargo's drag coefficient (on pi r^2)
 constexpr float kCargoRestitution = 0.15f;
 constexpr float kMaxAngularSpeed = 100.0f;   // rad/s, SimITL's own clamp
+// After a repair or a teleport the props take no damage for this long (sim
+// seconds): it covers a repair and a reset called one after the other while
+// the simulation keeps stepping, and the host's next frame or two, whose
+// world (a water plane following the drone, its own damage checks) still
+// describes the old spot. Spawned straight into lava, the props still go.
+constexpr double kRespawnDamageGrace = 0.25;
 #if defined(LIBFPV_KAMIKAZE)
 constexpr float kPayloadRadius = 0.035f;     // the warhead's size (its own inertia)
 constexpr float kAutoPayloadRatio = 0.6f;    // automatic payload: 60% of the quad's mass
@@ -218,6 +224,7 @@ void Flight::teleport(Vec3 pos, Quat rot) {
     m_angVel = {};
     simitl_command(CommandType::Reset);
     rcRespawnGrace();
+    m_damageGraceUntil = m_simTime + kRespawnDamageGrace;
     m_lastGroundContact = -1;
 }
 
@@ -238,13 +245,14 @@ void Flight::repair() {
     simitl_command(CommandType::Repair);
     for (float &d : m_propDamage) d = 0;
     rcRespawnGrace();
+    m_damageGraceUntil = m_simTime + kRespawnDamageGrace;
 #if defined(LIBFPV_KAMIKAZE)
     m_warhead.reset(m_simTime);  // a repaired drone carries a new warhead
 #endif
 }
 
 void Flight::damageProps(int motor, float amount) {
-    if (!m_damage || !m_active || !(amount > 0)) return;
+    if (!canDamage() || !m_active || !(amount > 0)) return;
     for (int i = 0; i < 4; i++)
         if (motor < 0 || motor == i) m_propDamage[i] = std::min(1.0f, m_propDamage[i] + amount);
 }
@@ -626,7 +634,7 @@ void Flight::resolveContacts(float dt) {
 
     for (const Item &it : items) {
         Material mat = m_world->material(it.c.material);
-        if (it.motor >= 0 && (mat.flags & kMatKillsProps) && m_damage) m_propDamage[it.motor] = 1.0f;
+        if (it.motor >= 0 && (mat.flags & kMatKillsProps) && canDamage()) m_propDamage[it.motor] = 1.0f;
         if (it.approach > kImpactReportSpeed) recordImpact(it.c, it.approach, it.accN, it.motor);
 #if defined(LIBFPV_KAMIKAZE)
         if (it.approach > kWarheadTouchSpeed &&
@@ -660,7 +668,7 @@ void Flight::propStrikes(float dt) {
             if (std::fabs(dot(c.point - hub, up)) > kPropDiscHalfThickness) continue;
             Material mat = m_world->material(c.material);
             if (mat.flags & kMatKillsProps) {
-                if (m_damage) m_propDamage[i] = 1.0f;
+                if (canDamage()) m_propDamage[i] = 1.0f;
                 break;
             }
             if (m_simTime - m_lastMotorStrike[i + 1] < 0.02) continue;
@@ -670,7 +678,7 @@ void Flight::propStrikes(float dt) {
             float spin = std::fabs(out.motorRpm[i]) / maxRpm;
             float severity = closing + spin * 3.0f;
             if (severity < 0.5f) continue;
-            if (m_damage)
+            if (canDamage())
                 m_propDamage[i] = std::min(1.0f, m_propDamage[i] + severity / std::max(1.0f, m_preset.collision.propDurability));
             recordImpact(c, closing, 0.0f, i);
 #if defined(LIBFPV_KAMIKAZE)

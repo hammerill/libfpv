@@ -988,6 +988,7 @@ FPV_API fpv_result fpv_drone_reset(fpv_drone *d, const float position[3], const 
         L.flight.teleport(pos + rotate(rot, Vec3{0, L.flight.restHeight() + 0.002f, 0}), rot);
         L.flight.resetFlightTime();  // a reset starts a new flight
     });
+    L.world.setProxyPlanes({});  // the host's hits around the old spot; the next tick casts anew
     L.chaseValid = false;
     L.windProbe.reset();
     return FPV_OK;
