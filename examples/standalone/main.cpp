@@ -296,6 +296,13 @@ static GLuint program(const char *vs, const char *fs) {
     glAttachShader(p, sh(GL_VERTEX_SHADER, vs));
     glAttachShader(p, sh(GL_FRAGMENT_SHADER, fs));
     glLinkProgram(p);
+    GLint ok;
+    glGetProgramiv(p, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        char log[2048];
+        glGetProgramInfoLog(p, sizeof log, nullptr, log);
+        std::fprintf(stderr, "program: %s\n", log);
+    }
     return p;
 }
 
@@ -843,7 +850,10 @@ int main(int argc, char **argv) {
     fpv_gl3 ui;
     if (!fpv_gl3_init(&ui)) std::fprintf(stderr, "overlay renderer failed\n");
     fpv_video_gl3 video;
-    if (!fpv_video_gl3_init(&video)) std::fprintf(stderr, "video feed renderer failed\n");
+    // without it (a shader failed: the log says why), the FPV view falls back
+    // to the plain lens post-process and the OSD, with no video feed effects
+    bool videoOk = fpv_video_gl3_init(&video) != 0;
+    if (!videoOk) std::fprintf(stderr, "video feed renderer failed, drawing the FPV view without it\n");
     GLuint fbo = 0, fboTex = 0, fboDepth = 0;
     int fboW = 0, fboH = 0;
 
@@ -1160,7 +1170,7 @@ int main(int argc, char **argv) {
         // With the video feed's noise on, a lost feed (the VTX went with the
         // drone) is the feed's own: the receiver's snow, from libfpv's link.
         bool feedNoise = (frame.video_feed.flags & FPV_VIDEO_FEED_NOISE) != 0;
-        if (fpv && (lost == 0 || feedNoise)) {
+        if (fpv && videoOk && (lost == 0 || feedNoise)) {
             // the goggles: lens, the video feed and the OSD (fpv_video_gl3.h)
             fpv_video_gl3_draw(&video, &ui, &frame, fboTex, fbw, fbh, fbw, fbh, 1);
         } else {

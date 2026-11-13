@@ -877,7 +877,14 @@ interlaced fields half a line. On analog the OSD is drawn into the signal,
 because the flight controller's OSD chip writes into the video before the
 VTX, so it tears, rolls and drowns in snow with the picture. Pixelation
 with nearest filtering was rejected: goggles interpolate, and blocky pixels
-read as a retro game, not a video feed.
+read as a retro game, not a video feed. The signal shader is built as three
+programs, one per mode (lens only, analog, digital), not one that branches
+on the mode: as one, ANGLE's Direct3D 11 backend (Chrome and Edge on
+Windows) hands FXC a shader too big for it, and the browser's GPU process
+dies of a stack overflow while compiling it (found on an Intel UHD laptop,
+2026-11; each mode alone compiles in about 0.1 s). If a program still
+fails, `fpv_video_gl3_init` logs the reason and returns 0, and the
+standalone example draws the FPV view with its plain lens pass and the OSD.
 
 Both effects are on by default (settings `videoNoise`,
 `videoResolution`; first off, turned on by default in 2026-11 so new
