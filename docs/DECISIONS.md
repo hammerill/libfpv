@@ -752,6 +752,15 @@ switching off. Blockage also lowers the Rician K factor: behind a wall only
 scattered paths remain (Rayleigh, deep fades). The thread reports the mean
 received power, K and the Doppler `|v| / λ`.
 
+Those rays only see libfpv's own collision world (static surfaces and
+objects). A game whose world is reachable only through the raycast
+callback (GTA San Andreas: its own collision, streamed) would leave every
+building out of the link, a clean picture through a city at 800 m. So
+`fpv_drone_tick` casts the same seven rays through the callback on the host
+thread, one per call (the pilot's end starts 0.6 m out, past his own body
+or car), and hands the loss and K to the simulation, which keeps whichever
+blocks more.
+
 **Host thread (`VideoFeed`).** It runs once per field (59.94 NTSC, 50 PAL,
 the mode's frame rate for digital) on the host's clock. It generates
 the fast fading line by line: Jakes' sum of eight sinusoids per antenna

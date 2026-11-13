@@ -149,6 +149,13 @@ public:
     double simTime() const { return m_simTime; }
     Vec3 pilotPosition() const { return m_pilotPos; }
     void setPilotPosition(Vec3 p) { m_pilotPos = p; }  // simulation thread
+    // The video link's obstruction as the game's own raycast sees it (host
+    // thread, frame.cpp): the loss in dB and K factor, combined with what the
+    // simulation's collision world blocks. lossDb < 0: none (no host raycast).
+    void setHostVideoObstruction(float lossDb, float kFactor) {
+        m_hostVideoK = kFactor;
+        m_hostVideoLoss = lossDb;
+    }
     // Lowest point of the collision shape below the centre of mass (metres).
     float restHeight() const;
 
@@ -242,6 +249,7 @@ private:
         float kFactor = 10;     // smoothed
     } m_videoProbe;
     float m_videoTarget[2] = {0, 10};  // loss dB, K, from the last full cycle
+    std::atomic<float> m_hostVideoLoss{-1.0f}, m_hostVideoK{10.0f};
 #if defined(LIBFPV_KAMIKAZE)
     Warhead m_warhead;
     Vec3 m_impactVel;  // velocity before the current contacts resolved

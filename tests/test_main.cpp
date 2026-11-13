@@ -2561,6 +2561,78 @@ void testPilotConfig() {
 
 // Heard from the pilot: quieter far away, quieter still behind a wall; the
 // beeper switch beeps through the motors' volume.
+// The video link sees the game's world through the raycast callback too
+// (frame.cpp refreshVideoProbe): a wall only the callback knows of, between
+// the pilot and the drone, costs signal.
+struct LinkWall {
+    bool on = false;
+};
+static int linkWallCast(void *user, const float o[3], const float d[3], float maxDist, fpv_raycast_hit *hit) {
+    const LinkWall &w = *static_cast<const LinkWall *>(user);
+    float best = maxDist;
+    bool any = false;
+    if (d[1] < -1e-6f) {  // the ground, y = 0
+        float t = -o[1] / d[1];
+        if (t >= 0 && t < best) {
+            best = t;
+            any = true;
+            hit->normal[0] = 0, hit->normal[1] = 1, hit->normal[2] = 0;
+        }
+    }
+    if (w.on && std::fabs(d[2]) > 1e-6f) {  // the wall: z = -50, 60 m wide, 20 m tall
+        float t = (-50.0f - o[2]) / d[2];
+        float x = o[0] + d[0] * t, y = o[1] + d[1] * t;
+        if (t >= 0 && t < best && std::fabs(x) < 30 && y > 0 && y < 20) {
+            best = t;
+            any = true;
+            hit->normal[0] = 0, hit->normal[1] = 0, hit->normal[2] = d[2] > 0 ? -1.0f : 1.0f;
+        }
+    }
+    if (!any) return 0;
+    hit->distance = best;
+    hit->material = 0;
+    hit->object_id = 0;
+    return 1;
+}
+
+void testVideoHostRaycast() {
+    Host h(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1));
+    World deep;  // the callback is the only floor
+    float a[3], b[3], c[3], d[3];
+    h.pos(-200, -50, -200, a);
+    h.pos(200, -50, -200, b);
+    h.pos(200, -50, 200, c);
+    h.pos(-200, -50, 200, d);
+    deep.quad(a, b, c, d);
+    loadWorld(deep);
+    LinkWall wall;
+    fpv_world_set_raycast_callback(linkWallCast, &wall);
+    Session s;
+    float p[3] = {0, 0.05f, 0};
+    s.spawn(p);
+    const float pilot[3] = {0, 0, -100};
+    fpv_drone_set_pilot_position(s.drone, pilot);
+    auto rssi = [&] {
+        s.run(1.0f);
+        double sum = 0;
+        for (int i = 0; i < 20; i++) {
+            s.run(0.05f);
+            sum += s.f.video_feed.rssi_dbm;
+        }
+        return (float)(sum / 20);
+    };
+    float open = rssi();
+    wall.on = true;
+    float behind = rssi();
+    wall.on = false;
+    float again = rssi();
+    std::printf("    rssi 100 m away: open %.1f dBm, behind the wall %.1f dBm, open again %.1f dBm\n", open, behind, again);
+    CHECK(behind < open - 9.0f, "the callback's wall costs signal: %.1f -> %.1f dBm", open, behind);
+    CHECK(std::fabs(again - open) < 2.0f, "back in the open: %.1f dBm (was %.1f)", again, open);
+    s.destroy();
+    fpv_world_set_raycast_callback(nullptr, nullptr);
+}
+
 void testHearing() {
     Host h(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1));
     loadWorld(makeLevel(h, 200, 30));  // a wall 30 m ahead of the drone
@@ -3010,6 +3082,7 @@ int main(int argc, char **argv) {
         {"sim_options", testSimOptions},
         {"pilot_config", testPilotConfig},
         {"hearing", testHearing},
+        {"video_host_raycast", testVideoHostRaycast},
         {"pinned", testPinned},
         {"terminate_reinit", testTerminateReinit},
         {"threaded", testThreadedMode},

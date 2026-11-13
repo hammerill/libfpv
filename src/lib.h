@@ -99,6 +99,15 @@ struct Lib {
 
     fpv_raycast_fn raycast = nullptr;
     void *raycastUser = nullptr;
+    // the video link's obstruction probe through the host raycast, one ray
+    // per fpv_drone_tick (frame.cpp, D34)
+    struct HostVideoProbe {
+        uint32_t slot = 0;
+        bool centre = false;
+        float tNear = 0, tFar = 0;
+        int offsets = 0;
+        bool on = false;  // a result was handed to the simulation
+    } hostVideoProbe;
 
     // wind from the game (fpv_wind_*), internal units; probed and handed to
     // the simulation in fpv_drone_tick

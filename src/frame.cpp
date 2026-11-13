@@ -133,6 +133,72 @@ static void refreshRaycastProxies(const FlightSnapshot &s) {
     L.world.setProxyPlanes(std::move(planes));
 }
 
+// The video link's obstruction through the host raycast (D34). The
+// simulation probes its own collision world, but a game whose world is only
+// reachable through fpv_world_set_raycast_callback (its own physics, too big
+// to hand over) would otherwise leave every building out of the link. The
+// same seven rays as Flight::updateVideo, one per call: the direct ray from
+// both ends, then four paths through the first Fresnel zone's edge.
+static void refreshVideoProbe(const FlightSnapshot &s) {
+    Lib &L = lib();
+    Lib::HostVideoProbe &v = L.hostVideoProbe;
+    if (!L.raycast || !s.active) {
+        if (v.on) L.flight.setHostVideoObstruction(-1.0f, 10.0f);
+        v = Lib::HostVideoProbe{};
+        return;
+    }
+    const CoordConverter &cv = L.conv;
+    Vec3 rx = L.flight.pilotPosition() + Vec3{0, kVideoRxHeight, 0};
+    Vec3 d = s.pos - rx;
+    float dist = length(d);
+    uint32_t slot = v.slot++ % 7;
+    if (dist < 1.0f) {
+        if (slot == 6) {
+            L.flight.setHostVideoObstruction(0.0f, 10.0f);
+            v.on = true;
+        }
+        return;
+    }
+    // From a to b; `skip` metres at a's end are left out (the pilot's own
+    // body, his car: the goggles' antennas sit on his head).
+    auto blocked = [&](Vec3 a, Vec3 b, float skip, float *tHit) {
+        Vec3 ab = b - a;
+        float len = length(ab);
+        if (len < skip + 0.3f) return false;
+        Vec3 u = ab / len;
+        float oh[3], dh[3];
+        put3(oh, cv.posToHost(a + u * skip));
+        put3(dh, cv.dirToHost(u));
+        fpv_raycast_hit hit{};
+        if (!L.raycast(L.raycastUser, oh, dh, cv.lenToHost(len - skip - 0.15f), &hit)) return false;
+        float t = cv.lenToInternal(hit.distance);
+        if (!(t >= 0) || t > len - skip) return false;
+        if (tHit) *tHit = t + skip;
+        return true;
+    };
+    constexpr float kPilotSkip = 0.6f;
+    Vec3 u = d / dist;
+    if (slot == 0) {
+        v.centre = blocked(rx, s.pos, kPilotSkip, &v.tNear);
+        v.offsets = 0;
+    } else if (slot == 1) {
+        if (!v.centre || !blocked(s.pos, rx, 0.0f, &v.tFar)) v.tFar = 0;
+    } else if (slot <= 5) {
+        Vec3 a = normalize(cross(u, {0, 1, 0}), {1, 0, 0});
+        Vec3 b = cross(a, u);
+        float r1 = std::sqrt(kVideoWavelength * dist * 0.25f);  // first Fresnel zone at the middle
+        Vec3 off = (slot == 2 ? a : slot == 3 ? -a : slot == 4 ? b : -b) * (0.6f * r1);
+        Vec3 mid = (rx + s.pos) * 0.5f + off;
+        if (blocked(rx, mid, kPilotSkip, nullptr) || blocked(mid, s.pos, 0.0f, nullptr)) v.offsets++;
+    } else {
+        float depth = v.centre ? std::max(0.0f, dist - v.tNear - v.tFar) : 0.0f;
+        float loss, k;
+        videoObstruction(v.centre, v.offsets, depth, loss, k);
+        L.flight.setHostVideoObstruction(loss, k);
+        v.on = true;
+    }
+}
+
 // A ray against the drone's own collision world (static surfaces, objects)
 // and the game's raycast, whichever is nearer. Host thread.
 static bool worldRay(double simTime, Vec3 o, Vec3 d, float maxDist, float &t, Vec3 &n) {
@@ -303,6 +369,7 @@ extern "C" FPV_API fpv_result fpv_drone_tick(fpv_drone *d, float frameDt, fpv_fr
     Vec3 vel = prev.active ? lerp(prev.vel, cur.vel, alpha) : cur.vel;
 
     refreshRaycastProxies(cur);
+    refreshVideoProbe(cur);
     refreshWind(cur, frameDt);
     refreshHearing(cur, pos, hearsFromPilot(), frameDt);
 

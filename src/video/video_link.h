@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 
 #include "fpv_math.h"
@@ -27,6 +28,17 @@ constexpr float kVideoTxGainDbi = 2.1f;   // dipole / lollipop, at its best
 constexpr float kVideoRxPatchDbi = 8.0f;  // goggles: a patch facing the drone...
 constexpr float kVideoRxOmniDbi = 2.1f;   // ...and an omni, diversity
 constexpr float kVideoRxHeight = 1.7f;    // the goggles above the pilot's feet, m
+
+// The obstruction probe's verdict (D34): the direct ray blocked (centre),
+// how many of the four paths through the first Fresnel zone's edge are
+// (offsets), and the obstacle's depth along the direct ray. Gives the loss
+// over the free-space budget and the Rician K factor.
+inline void videoObstruction(bool centre, int offsets, float depth, float &lossDb, float &kFactor) {
+    float f = (centre ? 0.5f : 0.0f) + 0.125f * (float)offsets;
+    // a wall costs ~12 dB at 5.8 GHz, a building's depth much more
+    lossDb = f * std::min(12.0f + 0.6f * std::max(depth, 0.0f), 45.0f);
+    kFactor = 0.3f + 9.7f * (1 - f) * (1 - f);  // blocked: only scattered paths remain
+}
 
 // What the preset says about the camera and the transmitter.
 struct VideoSpec {

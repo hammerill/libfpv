@@ -724,13 +724,18 @@ void Flight::updateVideo(float dt) {
             Vec3 mid = (rx + m_pos) * 0.5f + off;
             if (blocked(rx, mid, nullptr) || blocked(mid, m_pos, nullptr)) v.offsets++;
         } else if (slot == 6) {
-            float f = (v.centre ? 0.5f : 0.0f) + 0.125f * (float)v.offsets;
-            // a wall costs ~12 dB at 5.8 GHz, a building's depth much more
             float depth = v.centre ? std::max(0.0f, dist - v.tNear - v.tFar) : 0.0f;
-            float targetLoss = f * std::min(12.0f + 0.6f * depth, 45.0f);
-            float targetK = 0.3f + 9.7f * (1 - f) * (1 - f);  // blocked: only scattered paths remain
+            float targetLoss, targetK;
+            videoObstruction(v.centre, v.offsets, depth, targetLoss, targetK);
             m_videoTarget[0] = targetLoss;
             m_videoTarget[1] = targetK;
+        }
+        // the game's world, probed through its raycast on the host thread:
+        // whichever blocks more
+        float hostLoss = m_hostVideoLoss;
+        if (hostLoss >= 0) {
+            m_videoTarget[0] = std::max(m_videoTarget[0], hostLoss);
+            m_videoTarget[1] = std::min(m_videoTarget[1], (float)m_hostVideoK);
         }
     } else {
         m_videoTarget[0] = 0;

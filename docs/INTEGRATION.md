@@ -65,7 +65,9 @@ and the FPV view is drawn as above.
   (a flip that points the VTX antenna at the pilot, or flying right
   overhead, costs a lot), and obstruction measured with rays through the
   first Fresnel zone, so the signal fades as the drone slides behind a
-  corner. On the host thread, multipath fading runs line by line at the
+  corner. The rays test the static surfaces and objects, and the game's
+  raycast callback if it set one (one ray per `fpv_drone_tick`, from the
+  pilot position to the drone, which can be long: hundreds of metres). On the host thread, multipath fading runs line by line at the
   Doppler of the drone's speed through two diversity antennas. Each line's
   carrier-to-noise ratio then sets what that line looks like:
   - grain stretched along the line;
