@@ -44,9 +44,9 @@ struct Settings {
     float cameraUptilt = -1, cameraFov = -1;
     float cameraFisheye = 0.5f;  // lens strength 0..1, 0 = off (the preset's own k1/k2)
     bool chaseSmoothing = true;
-    // the video feed post-process (frame.video_feed), off by default
-    bool videoNoise = false;       // the link's noise
-    bool videoResolution = false;  // the camera's resolution and aspect
+    // the video feed post-process (frame.video_feed), on by default in games that draw it
+    bool videoNoise = true;        // the link's noise
+    bool videoResolution = true;   // the camera's resolution and aspect
     KeyboardHover keyboardHover = KeyboardHover::Auto;  // automatic hover throttle, see InputManager
     float keyboardThrottleExpo = kDefaultKeyboardThrottleExpo;  // 1/s, see InputManager
     float keyboardYawExpo = kDefaultKeyboardYawExpo;            // 1/s, see InputManager

@@ -67,7 +67,7 @@ engine or mod loader.
   and echoes. Both the OSD and the overlay are returned as textured
   triangles, so one small renderer draws both.
 - **Camera and video feed.** Uptilt and FOV are adjustable, and there is a
-  fisheye lens (on by default). Optionally (F8 > Camera, off by default) the
+  fisheye lens (on by default). In games that draw it (F8 > Camera, on by default) the
   view looks like a real goggle feed. Analog noise comes from a 5.8 GHz link
   budget with multipath fading: snow, sparkles, torn and rolling lines and
   colour loss with range, walls, flips, speed and crashes. Digital links

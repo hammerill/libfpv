@@ -56,7 +56,7 @@
 /* The one place the version is set: CMakeLists.txt reads these three. */
 #define LIBFPV_VERSION_MAJOR 0
 #define LIBFPV_VERSION_MINOR 2
-#define LIBFPV_VERSION_PATCH 1
+#define LIBFPV_VERSION_PATCH 2
 #define LIBFPV_STRINGIFY_(x) #x
 #define LIBFPV_STRINGIFY(x) LIBFPV_STRINGIFY_(x)
 #define LIBFPV_VERSION_STRING                                                  \
@@ -538,9 +538,9 @@ typedef struct fpv_video_state {
  * draws the analog link's noise and the camera's resolution and aspect (see
  * docs/INTEGRATION.md#the-video-feed, and docs/renderers/fpv_video_gl3.h,
  * which draws all of it with OpenGL 3 / GLES 3 / WebGL 2). A game that
- * draws it passes FPV_INIT_VIDEO_FEED; the player then turns the effects
- * on in F8 > Camera. Both are off by default, and while they are off (or
- * the game did not opt in) `flags` is 0 and the FPV view is drawn as before.
+ * draws it passes FPV_INIT_VIDEO_FEED; the player can then turn the effects
+ * off in F8 > Camera. Both are on by default; while they are off (or the
+ * game did not opt in) `flags` is 0 and the FPV view is drawn as before.
  * ------------------------------------------------------------------------- */
 enum fpv_video_feed_flags {
     /* Draw the link's noise: analog snow, sparkles, torn and rolling lines,

@@ -879,9 +879,10 @@ VTX, so it tears, rolls and drowns in snow with the picture. Pixelation
 with nearest filtering was rejected: goggles interpolate, and blocky pixels
 read as a retro game, not a video feed.
 
-Both effects are off by default (settings `videoNoise`,
-`videoResolution`), and offered only to games that pass
-`FPV_INIT_VIDEO_FEED`. It is opt-in, unlike the lens's opt-out
+Both effects are on by default (settings `videoNoise`,
+`videoResolution`; first off, turned on by default in 2026-11 so new
+pilots see the feed as goggles show it), and offered only to games that
+pass `FPV_INIT_VIDEO_FEED`. It is opt-in, unlike the lens's opt-out
 `FPV_INIT_NO_LENS_DISTORTION`, because the feed came after the games: an
 opt-out would have shown settings that do nothing in every integration
 that has not ported the renderer yet. Presets name real parts: the Freestyler is a Caddx
@@ -928,7 +929,7 @@ libwebsockets (native), {fmt} and nlohmann/json.
 ### D36. The RC link: ExpressLRS packets, LQ and dynamic power (`src/rc/rc_link.*`, patch `0013`)
 
 Before this the radio link was perfect unless the radio was unplugged
-(`radioLost`). The option (off by default, like the video noise) simulates
+(`radioLost`). The option (off by default) simulates
 an ExpressLRS link packet by packet. A real link degrades through stale
 sticks and a falling LQ before it fails, and that is what pilots learn to
 read.

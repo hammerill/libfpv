@@ -54,10 +54,10 @@ shows a slightly wider, undistorted view.
 
 Real FPV is watched through a video link, and `frame.video_feed` describes
 what the goggles show. A game that draws it passes `FPV_INIT_VIDEO_FEED` in
-`fpv_global_config.flags`. Only then can the player turn on two effects in
+`fpv_global_config.flags`. Only then does the player get two effects in
 F8 > Camera > "Video feed"; in other games the settings show as
-unavailable. Both are off by default, and while they are off `flags` is 0
-and the FPV view is drawn as above.
+unavailable. Both are on by default. While the player has them off (or the
+game doesn't pass the flag) `flags` is 0 and the FPV view is drawn as above.
 
 - **Analog video noise** (`FPV_VIDEO_FEED_NOISE`). A link budget runs on
   the simulation thread: the VTX's power, free-space loss at 5.8 GHz, the
