@@ -56,7 +56,7 @@
 /* The one place the version is set: CMakeLists.txt reads these three. */
 #define LIBFPV_VERSION_MAJOR 0
 #define LIBFPV_VERSION_MINOR 2
-#define LIBFPV_VERSION_PATCH 0
+#define LIBFPV_VERSION_PATCH 1
 #define LIBFPV_STRINGIFY_(x) #x
 #define LIBFPV_STRINGIFY(x) LIBFPV_STRINGIFY_(x)
 #define LIBFPV_VERSION_STRING                                                  \
@@ -772,7 +772,8 @@ FPV_API uint32_t fpv_sim_get_options(void);
  * arrive. Lost packets leave Betaflight with the sticks of the last one;
  * when nothing arrives for long, Betaflight shows RXLOSS and goes to
  * failsafe. Betaflight's OSD shows the link quality (RFMD:LQ), RSSI dBm,
- * RSNR and the transmitter's power, which follows ELRS's dynamic power.
+ * RSNR and the transmitter's power, which follows ELRS's dynamic power;
+ * with the link off, those elements are hidden.
  * The player's choice (F8 > Drone > RC link), saved in settings.json; games
  * normally leave it to the player. See docs/INTEGRATION.md#the-rc-link.
  * ======================================================================== */

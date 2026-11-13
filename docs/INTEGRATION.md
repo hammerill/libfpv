@@ -189,7 +189,10 @@ Betaflight gets the link statistics the way it gets them from an ELRS
 receiver over CRSF. The OSD's link quality element shows `RFMD:LQ` (for
 example `29:100` at 500 Hz), and the RSSI dBm, RSNR and TX power
 (`osd_link_tx_power_pos`) elements and the LQ, RSSI and RSNR warnings
-work. The player places them in F8 > OSD or in the Configurator.
+work. The player places them in F8 > OSD or in the Configurator. With the
+link off, the OSD leaves these elements (and RSSI %) out, since they would
+show only defaults such as -130 dBm. They stay enabled in the settings and
+come back when the link is turned on.
 
 The packet rates, from the overlay or `fpv_rc_link_mode`:
 

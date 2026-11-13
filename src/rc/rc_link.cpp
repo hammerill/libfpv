@@ -93,7 +93,8 @@ float RcLink::gauss() {
     return std::sqrt(-2.0f * std::log(u1)) * std::cos(2 * kPi * u2);
 }
 
-void RcLink::reset(const RcLinkConfig &cfg, uint32_t seed) {
+void RcLink::reset(const RcLinkConfig &config, uint32_t seed) {
+    const RcLinkConfig cfg = config;  // `config` may be m_cfg (reset(config())), wiped below
     *this = RcLink();
     m_rng = seed ? seed * 2654435761u : 1;
     m_cfg = cfg;

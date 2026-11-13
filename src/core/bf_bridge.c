@@ -445,7 +445,8 @@ void bfb_baro_update(float up)
  * The simulated RC link (D36). Betaflight takes link statistics from the
  * receiver protocol only when the sources say so (rx/crsf.c sets them for a
  * CRSF receiver); the SITL receiver has none, so the sources are switched to
- * CRSF while libfpv reports, and restored after.
+ * CRSF while libfpv reports, and restored after. Its OSD elements are shown
+ * only meanwhile (patch 0014).
  * ------------------------------------------------------------------------- */
 
 static bool rcLinkReporting = false;
@@ -462,6 +463,7 @@ void bfb_rc_link_stats(int lq, int rfMode, int rssiDbm, int snrDb, int txPowerMw
     /* every step: a reboot's rxInit may have set them again */
     rssiSource = RSSI_SOURCE_RX_PROTOCOL_CRSF;
     linkQualitySource = LQ_SOURCE_RX_PROTOCOL_CRSF;
+    osdHostLinkElementsHidden = false;  /* the OSD shows the link's elements */
     rssiDbm = constrain(rssiDbm, -130, 0);
     setRssi(scaleRange(rssiDbm, -130, 0, 0, RSSI_MAX_VALUE), RSSI_SOURCE_RX_PROTOCOL_CRSF);
 #ifdef USE_RX_RSSI_DBM
@@ -491,6 +493,7 @@ void bfb_rc_link_release(void)
         return;
     }
     rcLinkReporting = false;
+    osdHostLinkElementsHidden = true;  /* nothing real to show */
     rssiSource = rcLinkSavedRssiSource;
     linkQualitySource = rcLinkSavedLqSource;
     setRssiDirect(0, rssiSource);

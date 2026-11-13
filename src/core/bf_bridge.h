@@ -95,7 +95,9 @@ void bfb_baro_update(float up);
  * in mW. Call every step while the link is simulated; Betaflight's OSD,
  * warnings and statistics read them. */
 void bfb_rc_link_stats(int lq, int rfMode, int rssiDbm, int snrDb, int txPowerMw);
-/* Hands link quality and RSSI back to Betaflight's own sources. */
+/* Hands link quality and RSSI back to Betaflight's own sources. While the
+ * link is not simulated, the OSD leaves out its elements (RSSI, RSSI dBm,
+ * link quality, RSNR, TX power): they would show only defaults. */
 void bfb_rc_link_release(void);
 /* Makes the home point (same frame) override the one Betaflight sets when
  * arming. Call every step while the host's home applies; when it stops,

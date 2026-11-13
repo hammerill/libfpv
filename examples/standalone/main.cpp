@@ -861,6 +861,10 @@ int main(int argc, char **argv) {
     double time = 0;
     bool running = true;
     int frameNo = 0;
+    // the mouse pointer hides after a while without moving, unless the
+    // overlay (which needs it) is open
+    constexpr double kCursorHideS = 2.0;
+    double lastMouse = 0;
     // one frame of the game (a browser calls it once per display refresh)
     auto gameFrame = [&] {
         // 5. input
@@ -897,14 +901,21 @@ int main(int argc, char **argv) {
                 break;
             }
             case SDL_EVENT_TEXT_INPUT: fpv_overlay_text(e.text.text); break;
-            case SDL_EVENT_MOUSE_MOTION: fpv_overlay_mouse_move(e.motion.x, e.motion.y); break;
+            case SDL_EVENT_MOUSE_MOTION:
+                lastMouse = time;
+                fpv_overlay_mouse_move(e.motion.x, e.motion.y);
+                break;
             case SDL_EVENT_MOUSE_BUTTON_DOWN:
             case SDL_EVENT_MOUSE_BUTTON_UP: {
+                lastMouse = time;
                 int b = e.button.button == SDL_BUTTON_LEFT ? 0 : e.button.button == SDL_BUTTON_RIGHT ? 1 : 2;
                 fpv_overlay_mouse_button(b, e.type == SDL_EVENT_MOUSE_BUTTON_DOWN);
                 break;
             }
-            case SDL_EVENT_MOUSE_WHEEL: fpv_overlay_mouse_wheel(e.wheel.x, e.wheel.y); break;
+            case SDL_EVENT_MOUSE_WHEEL:
+                lastMouse = time;
+                fpv_overlay_mouse_wheel(e.wheel.x, e.wheel.y);
+                break;
             default: break;
             }
         }
@@ -913,6 +924,8 @@ int main(int argc, char **argv) {
         last = now;
         if (!screenshot.empty()) dt = 1.0f / 60.0f;
         time += dt;
+        bool showCursor = fpv_overlay_is_open() || time - lastMouse < kCursorHideS;
+        if (showCursor != SDL_CursorVisible()) showCursor ? SDL_ShowCursor() : SDL_HideCursor();
 
         if (autopilot) {
             // scripted pilot: arm, climb, fly forward through the gate loop

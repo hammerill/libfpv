@@ -212,8 +212,27 @@ static void testDynamicPower() {
     CHECK(bench.status().txPowerMw == 10, "disarmed: no jump without telemetry, got %d", bench.status().txPowerMw);
 }
 
+// Flight::spawn resets the link with its own config (a new drone, a fresh
+// link): the config must survive, or a link switched on at launch is off.
+static void testResetKeepsConfig() {
+    std::printf("reset with its own config\n");
+    RcLink link;
+    RcLinkConfig cfg;
+    cfg.enabled = true;
+    cfg.mode = FPV_RC_LINK_900_100HZ;
+    cfg.maxPowerMw = 1000;
+    cfg.dynamicPower = false;
+    link.configure(cfg);
+    link.reset(link.config(), 42);
+    CHECK(link.config().enabled, "still on after reset(config())");
+    CHECK(link.config().mode == FPV_RC_LINK_900_100HZ, "mode kept, got %d", link.config().mode);
+    CHECK(link.config().maxPowerMw == 1000 && !link.config().dynamicPower, "power kept");
+    CHECK(link.status().txPowerMw == 1000, "fixed power at the maximum, got %d", link.status().txPowerMw);
+}
+
 int main() {
     testModesAndPower();
+    testResetKeepsConfig();
     testBudget();
     testObstruction();
     testPerfectAndOff();

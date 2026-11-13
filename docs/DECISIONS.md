@@ -1015,6 +1015,17 @@ Betaflight compiled `USE_RX_RSSI_DBM` out. Patch `0013` keeps it in
 simulator builds. It is one line in `common_post.h` and does not change
 any parameter group's layout (the alarm field is unconditional).
 
+With the link off, nothing reports these statistics, and the elements
+would show Betaflight's defaults (-130 dBm, 0 mW). Patch `0014` adds
+`osdHostLinkElementsHidden` (simulator builds only). While it is set,
+`osdAddActiveElement` leaves out RSSI %, link quality, RSSI dBm, RSNR and
+TX power. A change rebuilds the active list on the next canvas update, the
+way a change of GPS state does. `bfb_rc_link_stats` clears the flag and
+`bfb_rc_link_release` sets it. It starts set, like the link (off). The
+elements' positions and visibility in the EEPROM are left alone, so the
+player's layout is kept for when the link is on. The flag is not a
+parameter group, so it survives Betaflight's reboots.
+
 Not modelled: the pilot's own body between the radio and the drone (libfpv
 doesn't know which way he faces; up to ~10 dB at 2.4 GHz behind him),
 antenna diversity, interference from other links, and ELRS's

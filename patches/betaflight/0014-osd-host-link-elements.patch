@@ -1,0 +1,92 @@
+diff --git a/src/main/osd/osd_elements.c b/src/main/osd/osd_elements.c
+--- a/src/main/osd/osd_elements.c
++++ b/src/main/osd/osd_elements.c
+@@ -2109,8 +2109,35 @@
+     [OSD_PILOT_NAME]              = osdBackgroundPilotName,
+ };
+ 
++#if defined(SIMULATOR_BUILD)
++static bool osdIsLinkElement(osd_items_e element)
++{
++    switch (element) {
++    case OSD_RSSI_VALUE:
++    case OSD_LINK_QUALITY:
++#ifdef USE_RX_RSSI_DBM
++    case OSD_RSSI_DBM_VALUE:
++#endif
++#ifdef USE_RX_RSNR
++    case OSD_RSNR_VALUE:
++#endif
++#ifdef USE_RX_LINK_UPLINK_POWER
++    case OSD_TX_UPLINK_POWER:
++#endif
++        return true;
++    default:
++        return false;
++    }
++}
++#endif
++
+ static void osdAddActiveElement(osd_items_e element)
+ {
++#if defined(SIMULATOR_BUILD)
++    if (osdHostLinkElementsHidden && osdIsLinkElement(element)) {
++        return;
++    }
++#endif
+     if (VISIBLE(osdElementConfig()->item_pos[element])) {
+         activeOsdElementArray[activeOsdElementCount++] = element;
+     }
+diff --git a/src/main/osd/osd.c b/src/main/osd/osd.c
+--- a/src/main/osd/osd.c
++++ b/src/main/osd/osd.c
+@@ -319,11 +319,20 @@
+ static bool osdActiveElementsGpsState;
+ #endif
+ 
++#if defined(SIMULATOR_BUILD)
++bool osdHostLinkElementsHidden = true;  // the host's RC link is off by default
++// the setting the list of active elements was built with
++static bool osdActiveElementsLinkHidden = true;
++#endif
++
+ void osdAnalyzeActiveElements(void)
+ {
+ #ifdef USE_GPS
+     osdActiveElementsGpsState = sensors(SENSOR_GPS);
+ #endif
++#if defined(SIMULATOR_BUILD)
++    osdActiveElementsLinkHidden = osdHostLinkElementsHidden;
++#endif
+     /* This code results in a total RX task RX_STATE_MODES state time of ~68us on an F411 overclocked to 108MHz
+      * This upsets the scheduler task duration estimation and will break SPI RX communication. This can
+      * occur in flight, e.g. when the OSD profile is changed by switch so can be ignored, or GPS sensor comms
+@@ -1549,6 +1558,12 @@
+         }
+ #endif // USE_GPS
+ 
++#if defined(SIMULATOR_BUILD)
++        if (osdActiveElementsLinkHidden != osdHostLinkElementsHidden) {
++            osdAnalyzeActiveElements();
++        }
++#endif
++
+         osdSyncBlink(currentTimeUs);
+ 
+         osdState = OSD_STATE_DRAW_ELEMENT;
+diff --git a/src/main/osd/osd.h b/src/main/osd/osd.h
+--- a/src/main/osd/osd.h
++++ b/src/main/osd/osd.h
+@@ -411,6 +411,12 @@
+ bool osdStatGetState(uint8_t statIndex);
+ void osdSuppressStats(bool flag);
+ void osdAnalyzeActiveElements(void);
++#if defined(SIMULATOR_BUILD)
++// The host simulates the RC link: while it does not, the link statistics
++// elements (RSSI, RSSI dBm, link quality, RSNR, TX power) would only show
++// defaults, so they are left out. Set from the host on the FC thread.
++extern bool osdHostLinkElementsHidden;
++#endif
+ void changeOsdProfileIndex(uint8_t profileIndex);
+ uint8_t getCurrentOsdProfileIndex(void);
+ displayPort_t *osdGetDisplayPort(osdDisplayPortDevice_e *displayPortDevice);

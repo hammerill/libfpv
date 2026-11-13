@@ -2788,9 +2788,11 @@ void testRcLink() {
     h.pos(0, 0, -20, pilot);
     fpv_drone_set_pilot_position(s.drone, pilot);
     auto osdPos = [](int x, int y) { return (x & 31) | ((y & 31) << 5) | (1 << 11); };
+    // the RSSI dBm alarm (-60 dBm by default) off: at 20 m the RSSI is about
+    // that, and a blinking element is blank on every other frame
     std::string cmd = "set osd_link_quality_pos = " + std::to_string(osdPos(1, 3)) + "\n" +
                       "set osd_rssi_dbm_pos = " + std::to_string(osdPos(1, 4)) + "\n" +
-                      "set osd_link_tx_power_pos = " + std::to_string(osdPos(1, 5)) + "\nsave";
+                      "set osd_link_tx_power_pos = " + std::to_string(osdPos(1, 5)) + "\nset osd_rssi_dbm_alarm = -120\nsave";
     char *out = nullptr;
     CHECK(fpv_cli_exec(cmd.c_str(), &out) == FPV_OK, "osd setup: %s", fpv_last_error());
     fpv_free(out);
@@ -2802,8 +2804,12 @@ void testRcLink() {
         }
         return t;
     };
+    // the elements' own columns (warnings such as DISARMED reach further in)
+    auto blank = [](const std::string &t) { return t.substr(0, 7).find_first_not_of(' ') == std::string::npos; };
     s.run(0.5f);
     CHECK(fpv_rc_link_get_state(&st) == FPV_OK && !st.enabled, "off: no link state");
+    CHECK(blank(row(3)) && blank(row(4)) && blank(row(5)), "off: the OSD hides the link elements: [%s] [%s] [%s]",
+          row(3).c_str(), row(4).c_str(), row(5).c_str());
 
     fpv_rc_link_config_defaults(&c);
     c.enabled = 1;
@@ -2840,6 +2846,8 @@ void testRcLink() {
     s.run(2.0f);
     fpv_rc_link_get_state(&st);
     CHECK(!st.enabled, "off again");
+    CHECK(blank(row(3)) && blank(row(4)) && blank(row(5)), "off again: the link elements hidden: [%s] [%s] [%s]",
+          row(3).c_str(), row(4).c_str(), row(5).c_str());
     CHECK(!(s.f.flags & FPV_DRONE_FAILSAFE), "off: the failsafe ends");
     s.destroy();
 }

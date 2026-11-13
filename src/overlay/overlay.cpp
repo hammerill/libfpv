@@ -1053,7 +1053,7 @@ void Overlay::tabDrone() {
     bool rcChanged = ImGui::Checkbox("Simulate the radio link (ExpressLRS)", &L.settings.rcLink);
     ImGui::TextDisabled(L.settings.rcLink
                             ? "Range, walls, trees and the frame cost packets: stale sticks, RXLOSS, failsafe."
-                            : "A perfect link: every packet arrives, however far.");
+                            : "A perfect link: every packet arrives, however far. The OSD hides its link elements.");
     if (L.settings.rcLink) {
         const char *modeName = rcLinkMode(L.settings.rcLinkMode).name;
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16);
