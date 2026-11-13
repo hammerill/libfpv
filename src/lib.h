@@ -80,6 +80,7 @@ struct Lib {
     bool everInitialized = false;
     fpv_global_config config{};
     std::string dataDir, presetDir, eepromDir;
+    std::string hostName, hostBuild, hostUrl;  // fpv_global_config.host_*, About tab
     CoordConverter conv;
 
     CollisionWorld world;

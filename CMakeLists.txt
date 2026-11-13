@@ -60,7 +60,20 @@ set(LIBFPV_SOURCES
   src/video/video_link.cpp
   ${LIBFPV_GEN_DIR}/embedded_presets.cpp
   ${LIBFPV_GEN_DIR}/embedded_fonts.cpp
+  ${LIBFPV_GEN_DIR}/build_info.cpp
 )
+
+# The About tab's build references (commits, dirty flags, dates), refreshed
+# on every build: a commit made without re-running CMake still shows.
+set(_build_info_args
+  -DSRC=${PROJECT_SOURCE_DIR} -DOUT=${LIBFPV_GEN_DIR}/build_info.cpp -DVERSION=${PROJECT_VERSION}
+  -DBF_DIR=${BF_DIR} -DSIMITL_DIR=${SIMITL_DIR})
+execute_process(COMMAND ${CMAKE_COMMAND} ${_build_info_args} -P ${PROJECT_SOURCE_DIR}/cmake/BuildInfo.cmake)
+add_custom_target(libfpv_build_info
+  COMMAND ${CMAKE_COMMAND} ${_build_info_args} -P ${PROJECT_SOURCE_DIR}/cmake/BuildInfo.cmake
+  BYPRODUCTS ${LIBFPV_GEN_DIR}/build_info.cpp
+  COMMENT "libfpv: build references"
+  VERBATIM)
 
 if(EMSCRIPTEN)
   # linked statically into the game's WebAssembly module
@@ -69,6 +82,7 @@ else()
   add_library(fpv SHARED ${LIBFPV_SOURCES})
 endif()
 add_library(libfpv::fpv ALIAS fpv)
+add_dependencies(fpv libfpv_build_info)
 set_target_properties(fpv PROPERTIES
   OUTPUT_NAME fpv
   C_VISIBILITY_PRESET hidden
@@ -78,6 +92,8 @@ set_target_properties(fpv PROPERTIES
   VERSION ${PROJECT_VERSION}
   SOVERSION 0)
 target_compile_definitions(fpv PRIVATE LIBFPV_BUILD FMT_HEADER_ONLY=1)
+# the About tab's build type (multi-config generators decide it at build time)
+target_compile_definitions(fpv PRIVATE LIBFPV_BUILD_CONFIG=$<CONFIG>)
 target_include_directories(fpv
   PUBLIC
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>

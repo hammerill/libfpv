@@ -819,6 +819,40 @@ BetaFPV C03 on its Matrix 1S AIO VTX at 25 mW (1S brownouts).
 Reversing: both settings off is the old picture without its static. The
 old `fpv_video_state` fields remain, derived from the new budget.
 
+### D35. The About tab: what the binary was built from
+
+A bug report from a player has to name two builds: libfpv's and the game
+integration's. F8 > About (the last tab) shows both, plus a "Copy build
+info" button that puts the same lines on the clipboard as plain text.
+
+**libfpv.** `cmake/BuildInfo.cmake` runs as a custom target on every build
+(not only at configure time: a commit made without re-running CMake would
+otherwise show the old hash) and writes `generated/build_info.cpp` only when
+its text changed, so an unchanged tree recompiles and relinks nothing. It
+records the version, the full commit hash, a dirty flag (tracked files
+only), the commit date, and the commits of Betaflight and SimITL with the
+number of libfpv patches on top. Those two submodules are always changed by
+the patch series, so they get the patch count instead of a dirty flag. A
+commit counts only from a repository rooted exactly at that folder: libfpv
+vendored inside a game's repository would otherwise report the game's
+commit. Without git it reads "unknown". The build date has day precision,
+UTC (or `SOURCE_DATE_EPOCH`), because a finer one would relink libfpv on
+every build. "Built for" comes from the compiler's own macros (OS,
+architecture, compiler and version, the input backend) and the CMake
+configuration (`LIBFPV_BUILD_CONFIG=$<CONFIG>`). Build options that are kept
+private don't appear there.
+
+**The integration.** `fpv_global_config.host_name`, `host_build` and
+`host_url` are added after `flags`, so an older host's smaller
+`struct_size` leaves them NULL. They are copied during `fpv_global_init`.
+The section is hidden when all three are empty, as in the standalone
+example, which is the integration itself. libfpv doesn't parse `host_build`:
+each game builds it from whatever its own build system knows.
+
+The tab ends with the credits and licenses: libfpv's GPL-3.0-or-later and
+what it means for mods, Betaflight, SimITL, Dear ImGui, SDL3 (native),
+libwebsockets (native), {fmt} and nlohmann/json.
+
 ## Platforms
 
 ### D19. Windows: MinGW-w64 cross build, fully static runtimes

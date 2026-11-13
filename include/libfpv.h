@@ -214,6 +214,13 @@ typedef struct fpv_global_config {
     float sim_rate_hz;         /* outer simulation rate, default 1000 */
     float auto_pause_seconds;  /* default 0.5 */
     uint32_t flags;            /* fpv_init_flags */
+    /* The game integration, shown in the overlay's About tab next to
+     * libfpv's own build so a player's bug report names both. UTF-8, copied
+     * during fpv_global_init; NULL or "" hides a line, and all three hide
+     * the section. Fill in all three (docs/INTEGRATION.md "The About tab"). */
+    const char *host_name;   /* "SkyDart FPV mod" */
+    const char *host_build;  /* version and commit, e.g. "1.2.0 (3f2a9c1e, dirty)" */
+    const char *host_url;    /* project page, shown as a link */
 } fpv_global_config;
 
 FPV_API void fpv_global_config_defaults(fpv_global_config *config);

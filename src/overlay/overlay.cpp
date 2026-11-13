@@ -11,6 +11,7 @@
 #include "imgui.h"
 #include "lib.h"
 #include "osd/osd.h"
+#include "util/build_info.h"
 #include "util/log.h"
 #include "web/web.h"
 
@@ -1478,6 +1479,148 @@ void Overlay::tabConfigurator() {
     }
 }
 
+namespace {
+
+#define FPV_STR2(x) #x
+#define FPV_STR(x) FPV_STR2(x)
+
+// Platform, architecture, compiler, configuration and input of this binary.
+std::string buildFlavour() {
+    std::string s;
+#if defined(__EMSCRIPTEN__)
+    s = "Web (WebAssembly)";
+#elif defined(_WIN32)
+    s = "Windows";
+#elif defined(__APPLE__)
+    s = "macOS";
+#elif defined(__linux__)
+    s = "Linux";
+#else
+    s = "Unknown OS";
+#endif
+#if defined(__x86_64__) || defined(_M_X64)
+    s += " x86_64";
+#elif defined(__aarch64__) || defined(_M_ARM64)
+    s += " arm64";
+#elif defined(__i386__) || defined(_M_IX86)
+    s += " x86";
+#elif defined(__wasm32__)
+    s += " wasm32";
+#endif
+#if defined(__apple_build_version__)
+    s += ", Apple Clang " __clang_version__;
+#elif defined(__clang__)
+    s += ", Clang " __clang_version__;
+#elif defined(__GNUC__)
+    s += ", GCC " __VERSION__;
+#elif defined(_MSC_VER)
+    s += ", MSVC " FPV_STR(_MSC_VER);
+#endif
+    while (!s.empty() && s.back() == ' ') s.pop_back();  // __clang_version__ may end in a space
+#if defined(LIBFPV_BUILD_CONFIG)
+    s += ", " FPV_STR(LIBFPV_BUILD_CONFIG);
+#elif defined(NDEBUG)
+    s += ", Release";
+#else
+    s += ", Debug";
+#endif
+#if defined(LIBFPV_WITH_SDL)
+    s += ", SDL3 input";
+#elif defined(__EMSCRIPTEN__)
+    s += ", Gamepad API input";
+#else
+    s += ", no device input";
+#endif
+    return s;
+}
+
+std::string refText(const GitRef &r) {
+    std::string s = r.hash;
+    if (r.dirty) s += " (dirty)";
+    return s;
+}
+
+std::string patchedRefText(const GitRef &r, int patches) {
+    std::string s = refText(r);
+    if (patches > 0) s += " + " + std::to_string(patches) + " libfpv patches";
+    if (r.date[0]) s += std::string(", ") + r.date;
+    return s;
+}
+
+// one "label: value" row; empty values are skipped
+void infoRow(std::string &copy, const char *label, const std::string &value) {
+    if (value.empty()) return;
+    ImGui::TextDisabled("%s", label);
+    ImGui::SameLine(150 * ImGui::GetFontSize() / 13.0f);
+    ImGui::TextWrapped("%s", value.c_str());
+    copy += std::string(label) + ": " + value + "\n";
+}
+
+void linkRow(std::string &copy, const char *label, const std::string &url) {
+    if (url.empty()) return;
+    ImGui::TextDisabled("%s", label);
+    ImGui::SameLine(150 * ImGui::GetFontSize() / 13.0f);
+    ImGui::TextLinkOpenURL(url.c_str());
+    copy += std::string(label) + ": " + url + "\n";
+}
+
+void credit(const char *name, const char *license, const char *what) {
+    ImGui::Bullet();
+    ImGui::TextWrapped("%s (%s): %s", name, license, what);
+}
+
+}  // namespace
+
+void Overlay::tabAbout() {
+    Lib &L = lib();
+    const BuildInfo &b = buildInfo();
+    std::string copy;  // what "Copy build info" puts on the clipboard
+
+    sectionTitle("libfpv");
+    copy += "libfpv\n";
+    infoRow(copy, "Version", b.version);
+    infoRow(copy, "Commit", refText(b.libfpv));
+    infoRow(copy, "Commit date", b.libfpv.date);
+    infoRow(copy, "Build date", b.buildDate);
+    infoRow(copy, "Built for", buildFlavour());
+    linkRow(copy, "Project", "https://github.com/hammerill/libfpv");
+
+    if (!L.hostName.empty() || !L.hostBuild.empty() || !L.hostUrl.empty()) {
+        sectionTitle("Game integration");
+        copy += "\nGame integration\n";
+        infoRow(copy, "Name", L.hostName);
+        infoRow(copy, "Build", L.hostBuild);
+        linkRow(copy, "Project", L.hostUrl);
+    }
+
+    sectionTitle("Simulation core");
+    copy += "\nSimulation core\n";
+    infoRow(copy, "Betaflight", patchedRefText(b.betaflight, b.betaflightPatches));
+    infoRow(copy, "SimITL", patchedRefText(b.simitl, b.simitlPatches));
+    infoRow(copy, "Dear ImGui", IMGUI_VERSION);
+
+    ImGui::Spacing();
+    if (ImGui::Button("Copy build info")) ImGui::SetClipboardText(copy.c_str());
+    ImGui::SameLine();
+    ImGui::TextDisabled("(paste it into bug reports)");
+
+    sectionTitle("Credits and licenses");
+    ImGui::TextWrapped("libfpv is free software under GPL-3.0-or-later. It embeds Betaflight, so every game mod that "
+                       "includes it is distributed under GPL-3.0-compatible terms.");
+    ImGui::Spacing();
+    credit("Betaflight", "GPL-3.0", "the flight controller firmware flying the drone");
+    credit("SimITL by AJ92", "GPL-3.0", "runs Betaflight in the loop with the simulated quad");
+    credit("Dear ImGui", "MIT", "this overlay");
+#if defined(LIBFPV_WITH_SDL)
+    credit("SDL3", "zlib", "radios and gamepads");
+#endif
+#if !defined(__EMSCRIPTEN__)
+    credit("libwebsockets", "MIT", "the Betaflight Configurator connection");
+#endif
+    credit("{fmt}", "MIT", "text formatting");
+    credit("nlohmann/json", "MIT", "presets and settings");
+}
+
 #if defined(LIBFPV_KAMIKAZE_PROMOTE)
 // Builds without the kamikaze feature: the tab points to the Kamikaze version.
 void Overlay::tabKamikaze() {
@@ -1581,7 +1724,8 @@ void Overlay::buildUi() {
                                      {"Import & CLI", &Overlay::tabImport},
                                      {"Camera & sound", &Overlay::tabCamera},
                                      {"Controls", &Overlay::tabControls},
-                                     {"Configurator", &Overlay::tabConfigurator}};
+                                     {"Configurator", &Overlay::tabConfigurator},
+                                     {"About", &Overlay::tabAbout}};
             // a tab may ask for another one while it draws: kept for the next frame
             TabFn request = m_requestTab;
             m_requestTab = nullptr;

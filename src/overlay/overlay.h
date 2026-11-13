@@ -56,6 +56,7 @@ private:
     void tabCamera();
     void tabControls();
     void tabConfigurator();
+    void tabAbout();
 #if defined(LIBFPV_KAMIKAZE)
     void tabKamikaze();
     void warheadStatus();

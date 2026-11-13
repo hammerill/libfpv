@@ -663,9 +663,13 @@ FPV_API fpv_result fpv_global_init(const fpv_global_config *cfgIn) {
     }
 #endif
 
-    // The data dir pointer is only valid during this call.
+    // The data dir and host strings are only valid during this call.
     L.dataDir = cfg.data_dir;
     cfg.data_dir = nullptr;
+    L.hostName = cfg.host_name ? cfg.host_name : "";
+    L.hostBuild = cfg.host_build ? cfg.host_build : "";
+    L.hostUrl = cfg.host_url ? cfg.host_url : "";
+    cfg.host_name = cfg.host_build = cfg.host_url = nullptr;
     L.config = cfg;
     fs::path root = pathFromUtf8(L.dataDir);
     std::error_code ec;

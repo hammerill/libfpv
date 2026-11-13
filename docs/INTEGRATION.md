@@ -795,6 +795,32 @@ fpv_portals_set(&l, 1);   /* whenever a portal opens, moves or closes; NULL, 0 =
   carries nothing. With 1 kg rigidly under a 5" freestyle quad, a
   full-throttle climb is about a third of the bare quad's.
 
+## The About tab: name your build
+
+F8 > About shows libfpv's build (version, commit, dirty flag, dates,
+platform and compiler, the Betaflight and SimITL commits) and the
+integration's own, and a "Copy build info" button copies all of it for a
+bug report. libfpv fills in its own part. The game's part comes from three
+fields of `fpv_global_config`. **Fill in all three**: a report that names
+libfpv's commit but not the mod's can't be reproduced.
+
+```c
+cfg.host_name  = "GTA IV FPV";                       /* the mod, as players know it */
+cfg.host_build = "1.4.0 (3f2a9c1e7b0d, dirty)";      /* version + full or short commit */
+cfg.host_url   = "https://github.com/you/gta4-fpv";  /* where players get it, report bugs */
+```
+
+- `host_build` is free text, so put everything that tells your build
+  apart: the mod's version, its commit (`git rev-parse HEAD` at build time,
+  not at configure time, so a new commit shows without re-running the
+  configure step), whether the tree was dirty and, if it matters, the game
+  version it targets. Generate it in the mod's build. Don't type it in by
+  hand: hand-typed versions go stale.
+- The strings are UTF-8 and copied during `fpv_global_init`, so they can be
+  temporaries. A NULL or empty field hides its line, and with all three
+  empty the section is hidden.
+- Older hosts (a smaller `struct_size`) keep working and show no section.
+
 ## Lessons from real integrations
 
 These notes come from integrating libfpv into GTA IV
