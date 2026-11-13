@@ -812,7 +812,7 @@ int main(int argc, char **argv) {
     // the home arrow and distance point at the launch pad, wherever the drone
     // is armed (without this, home is where it last armed)
     fpv_gps_set_home(dd.position);
-    // a 4 m/s breeze from the west (towards +X, east): the buildings shelter
+    // a light 0.4 m/s breeze from the west (towards +X, east): the buildings shelter
     // the air behind them. The scripted flights keep still air.
     bool scripted = autopilot;
 #if defined(LIBFPV_KAMIKAZE)
@@ -821,7 +821,7 @@ int main(int argc, char **argv) {
     if (!scripted) {
         fpv_wind wind;
         fpv_wind_defaults(&wind);
-        wind.velocity[0] = 4.0f;
+        wind.velocity[0] = 0.4f;
         fpv_wind_set(&wind);
     }
 #if defined(LIBFPV_KAMIKAZE)
