@@ -19,6 +19,7 @@
 #include "world/collision.h"
 #include "world/wind.h"
 #include "video/video_link.h"
+#include "rc/rc_link.h"
 #if defined(LIBFPV_KAMIKAZE)
 #include "sim/kamikaze.h"
 #endif
@@ -60,6 +61,9 @@ struct FlightSnapshot {
     float videoNoise = 0, videoBreakup = 0, videoSignal = 1;
     // the link budget (D34): mean received power, Rician K, fade rate
     float videoRxDbm = -40, videoK = 10, videoDoppler = 0;
+    // the RC link (D36), when simulated
+    bool rcLinkOn = false;
+    RcLinkStatus rcLink;
     std::array<uint8_t, 16 * 30> osd{};
     uint32_t osdRevision = 0;
     std::array<float, kChannelCount> channels{};
@@ -156,6 +160,12 @@ public:
         m_hostVideoK = kFactor;
         m_hostVideoLoss = lossDb;
     }
+    // The same for the RC link (D36), at its band: loss in dB, < 0 = none.
+    void setHostRcObstruction(float lossDb) { m_hostRcLoss = lossDb; }
+    // The player's RC link setting (any thread), used from the next step.
+    void setRcLinkConfig(const RcLinkConfig &cfg);
+    // SimITL's receiver asks for each packet (simulation thread).
+    bool rcPacketArrives();
     // Lowest point of the collision shape below the centre of mass (metres).
     float restHeight() const;
 
@@ -174,6 +184,9 @@ private:
     void propStrikes(float dt);
     void updateGroundEffect(float out[4]);
     void updateVideo(float dt);
+    // the RC link around Betaflight's step (D36)
+    void updateRcLink();
+    void pushRcLinkStats();
     Vec3 updateWind(float dt);
     void recordImpact(const Contact &c, float speed, float impulse, int motor);
     // drops the contacts in a portal's hole from m_contacts (from `first` on)
@@ -250,6 +263,17 @@ private:
     } m_videoProbe;
     float m_videoTarget[2] = {0, 10};  // loss dB, K, from the last full cycle
     std::atomic<float> m_hostVideoLoss{-1.0f}, m_hostVideoK{10.0f};
+    // the RC link (D36)
+    std::mutex m_rcMutex;
+    RcLinkConfig m_rcIn;
+    bool m_rcChanged = true;
+    RcLink m_rcLink;               // simulation thread
+    float m_rcLossTarget = 0, m_rcLossDb = 0;  // obstruction, dB
+    float m_rcPathGain = -60, m_rcK = 10, m_rcDoppler = 0;  // from the last step's geometry
+    std::atomic<float> m_hostRcLoss{-1.0f};
+    RcLinkInputs m_rcInputs;       // for this step's packets
+    double m_rcLastPacket = -1;    // sim time of the last packet slot
+    bool m_rcPushed = false;       // Betaflight shows our link statistics
 #if defined(LIBFPV_KAMIKAZE)
     Warhead m_warhead;
     Vec3 m_impactVel;  // velocity before the current contacts resolved

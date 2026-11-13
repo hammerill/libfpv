@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "libfpv.h"
+#include "overlay/osd_element_names.h"  // header-only: the overlay's OSD element names
 
 #if defined(_WIN32)
 #  include <windows.h>
@@ -846,12 +847,16 @@ void testWallCrash() {
     World w = makeLevel(h, 300, 40);
     loadWorld(w);
     Session t;
-    h.pos(0, 5, 39.0f, p);
+    // on the ground: spawned in the air the quad falls, and Betaflight's
+    // ANGLE check kept it from arming, so the full-stick run below was a
+    // disarmed accelerometer-trim stick command instead
+    h.pos(0, 0, 39.0f, p);
     t.spawn(p);
     // Use reset to align, then let the sim run with injected forward speed by
     // repeatedly flying full forward; check substepping at high speed.
     t.rc.ch[5] = 1;
     t.arm();
+    CHECK(t.armed(), "armed in front of the wall: %s", t.f.arming_disable_text);
     t.rc.ch[1] = 1.0f;
     t.rc.ch[2] = 1.0f;
     float maxF = -1e9f;
@@ -1077,6 +1082,46 @@ void testCli() {
     CHECK(fpv_cli_exec("get crashflip_rate", &out) == FPV_OK, "get crashflip_rate");
     CHECK(out && std::strstr(out, "crashflip_rate = 30"), "turtle cut-off on by default: %s", out ? out : "");
     fpv_free(out);
+}
+
+// The overlay's OSD tab lists every osd_*_pos setting the CLI reports; each
+// one this Betaflight build has should have a Configurator name and a group
+// (not the raw-name fallback under "Other").
+void testOsdElementNames() {
+    char *out = nullptr;
+    CHECK(fpv_cli_exec("get osd_", &out) == FPV_OK, "get osd_: %s", fpv_last_error());
+    std::string text = out ? out : "";
+    fpv_free(out);
+    int elements = 0;
+    size_t at = 0;
+    while (at < text.size()) {
+        size_t nl = text.find('\n', at);
+        std::string line = text.substr(at, nl == std::string::npos ? std::string::npos : nl - at);
+        at = nl == std::string::npos ? text.size() : nl + 1;
+        size_t eq = line.find(" = ");
+        if (eq == std::string::npos) continue;
+        std::string name = line.substr(0, eq);
+        name.erase(0, name.find_first_not_of(" \t"));
+        if (!fpv::isOsdElementSetting(name)) continue;
+        elements++;
+        if (std::getenv("LIBFPV_TEST_VERBOSE"))
+            std::printf("    %-34s %-26s %s\n", name.c_str(), fpv::osdElementLabel(name).c_str(),
+                        fpv::osdGroupName(fpv::osdElementGroup(name)));
+        CHECK(fpv::findOsdElementName(name) != nullptr, "%s has no name in osd_element_names.h", name.c_str());
+        CHECK(fpv::osdElementGroup(name) != fpv::OSD_GROUP_OTHER, "%s is not in a group", name.c_str());
+    }
+    CHECK(elements >= 60, "the CLI lists %d OSD elements", elements);
+    for (const char *must : {"osd_vbat_pos", "osd_custom_msg0_pos", "osd_custom_msg3_pos", "osd_warnings_pos"})
+        CHECK(text.find(std::string(must) + " = ") != std::string::npos, "%s in the CLI", must);
+#if defined(LIBFPV_KAMIKAZE)
+    CHECK(fpv::osdElementLabel("osd_custom_msg0_pos") == "Bomb status", "custom message 1 is the bomb status");
+#else
+    CHECK(fpv::osdElementLabel("osd_custom_msg0_pos") == "Custom message 1", "custom message 1");
+#endif
+    CHECK(fpv::osdElementLabel("osd_new_thing_pos") == "New thing", "fallback label");
+    // position bits: HD column bit 10, other profiles and the type kept
+    int p = fpv::osdPosMoved(0xC000 | 0x1000, 40, 7, fpv::osdProfileFlag(1));
+    CHECK(fpv::osdPosColumn(p) == 40 && fpv::osdPosRow(p) == 7 && (p & 0xD800) == 0xD800, "pos 0x%x", p);
 }
 
 // Corpus of real-world style `diff all` outputs in tests/diffs/.
@@ -1449,10 +1494,9 @@ void testGps() {
     CHECK(s.armed(), "armed");
     CHECK(number(3) == 0, "home distance %g m at the arming point", number(3));
 
-    // 30 m east, 40 m north, 10 m up of the arming point, facing north. A
-    // full OSD redraw takes about 0.45 s, so wait for two of them: after only
-    // 0.5 s the reading depended on where in its cycle the earlier tests left
-    // the OSD.
+    // 30 m east, 40 m north, 10 m up of the arming point, facing north.
+    // Wait a second: the OSD redraws at 12 Hz, but the virtual GPS reports
+    // at 10 Hz and Betaflight's home distance follows its fixes.
     h.pos(30, 10, 40, p);
     fpv_drone_reset(s.drone, p, nullptr);
     s.run(1.0f);
@@ -1503,8 +1547,8 @@ void testGps() {
     CHECK(kmh > 20 && worst < 0.1f * kmh + 2, "OSD speed within %.1f km/h of %.0f", worst, kmh);
     CHECK(number(8) > 10, "distance flown %g m", number(8));
 
-    // altitude and vario in a climb. The OSD redraws each element only a few
-    // times a second, so a reading must match the truth of the last second.
+    // altitude and vario in a climb. Betaflight filters both, so a reading
+    // must match the truth of the last second.
     h.pos(0, 5, 0, p);
     fpv_drone_reset(s.drone, p, nullptr);
     s.rc.ch[2] = 0.2f;
@@ -1535,6 +1579,11 @@ void testGps() {
     s.rc.ch[1] = 0;  // pitch from the speed run: with air mode it lifts the quad off at idle
     s.rc.ch[2] = -1;
     s.rc.ch[5] = -1;
+    // disarm before the teleport: armed in air mode at idle on the ground,
+    // the I-term from the climb can tip the quad over in the few
+    // milliseconds the disarm takes to arrive (one RC packet, like ELRS)
+    s.rc.ch[4] = -1;
+    s.run(0.1f);
     h.pos(-20, 0, 0, p);
     fpv_drone_reset(s.drone, p, nullptr);
     armAndShow();
@@ -1731,7 +1780,7 @@ void testGpsElementsAfterReboot() {
                   "osd setup: %s", fpv_last_error());
             fpv_free(o);
         }
-        s.run(2.0f);
+        s.run(4.0f);  // the boot logo shows for 4 s after the reboot
         if (!sats(s.f)) {
             std::printf("    row 3:");
             for (int x = 0; x < 8; x++) std::printf(" %02x", s.f.osd[3 * FPV_OSD_COLS + x]);
@@ -1769,6 +1818,94 @@ void testGpsElementsAfterReboot() {
     s.destroy();
 }
 
+
+// The OSD redraws like a real quad's (Betaflight's osd_framerate_hz, 12 Hz
+// by default), not a few times a second: the SITL receiver once reported a
+// new RC frame on every scheduler pass, and the RX task starved the OSD and
+// MSP tasks. The artificial horizon's sidebars and line are drawn.
+void testOsdRefresh() {
+    Session s;
+    float p[3] = {0, 0, 0};
+    s.spawn(p);
+    s.run(5.0f);  // past the boot logo
+    auto osdPos = [](int x, int y) { return (x & 31) | ((y & 31) << 5) | (1 << 11); };
+    // the horizon's position is the top of its 9 rows, the level line is
+    // 4 rows lower: on the crosshair row (7), as Betaflight's default
+    std::string cmd = "set osd_ah_pos = " + std::to_string(osdPos(14, 3)) + "\n" +
+                      "set osd_ah_sbar_pos = " + std::to_string(osdPos(14, 7)) + "\n" +
+                      "set osd_throttle_pos = " + std::to_string(osdPos(1, 1)) + "\nsave";
+    char *out = nullptr;
+    CHECK(fpv_cli_exec(cmd.c_str(), &out) == FPV_OK, "osd setup: %s", fpv_last_error());
+    fpv_free(out);
+    s.run(5.0f);
+    // an earlier test may have left Betaflight armed: the disarm shows the
+    // post-flight stats for 60 s, and a CLI save does not reboot. Throttle
+    // up dismisses them, as on a real quad.
+    s.rc.ch[2] = 1;
+    s.run(0.2f);
+    s.rc.ch[2] = -1;
+    s.run(0.2f);
+    if (std::getenv("LIBFPV_TEST_VERBOSE"))
+        for (int r = 0; r < FPV_OSD_ROWS; r++) {
+            std::printf("    |");
+            for (int c = 0; c < FPV_OSD_COLS; c++) {
+                uint8_t g = s.f.osd[r * FPV_OSD_COLS + c];
+                std::printf("%c", g >= 0x20 && g < 0x7f ? g : (g ? '#' : ' '));
+            }
+            std::printf("|\n");
+        }
+    int deco = 0, left = 0, right = 0, line = 0;
+    for (uint8_t c : s.f.osd) {
+        deco += c == 0x13;           // SYM_AH_DECORATION
+        left += c == 0x03;           // SYM_AH_LEFT
+        right += c == 0x02;          // SYM_AH_RIGHT
+        line += c >= 0x80 && c <= 0x88;  // SYM_AH_BAR9_0..8
+    }
+    CHECK(deco == 14, "horizon sidebars: %d of 14 marks", deco);
+    CHECK(left == 1 && right == 1, "horizon level markers (%d, %d)", left, right);
+    // 9 bars, the crosshair (on the same row) covers the middle 3
+    CHECK(line >= 6, "horizon line: %d characters", line);
+
+    // the throttle element follows a sweeping stick: count its redraws
+    std::string last;
+    int changes = 0;
+    s.run(2.0f, [&](float t) {
+        s.rc.ch[2] = -1.0f + t;
+        std::string row((const char *)&s.f.osd[1 * FPV_OSD_COLS], 8);
+        if (row != last) changes++;
+        last = row;
+    });
+    std::printf("    throttle element: %d redraws in 2 s\n", changes);
+    CHECK(changes >= 16, "OSD redraws %d times in 2 s, expected about 24 (12 Hz)", changes);
+
+    // the line: each of its 9 columns (10..18) holds one bar glyph, 9 steps
+    // a row. Level, they all sit on the crosshair row; banked right, the
+    // line tilts the other way (left side lower on screen).
+    auto lineHeights = [&](int &leftY, int &rightY) {
+        leftY = rightY = -1;
+        for (int r = 0; r < FPV_OSD_ROWS; r++) {
+            uint8_t a = s.f.osd[r * FPV_OSD_COLS + 10], b = s.f.osd[r * FPV_OSD_COLS + 18];
+            if (a >= 0x80 && a <= 0x88) leftY = r * 9 + (a - 0x80);
+            if (b >= 0x80 && b <= 0x88) rightY = r * 9 + (b - 0x80);
+        }
+    };
+    int ly, ry;
+    lineHeights(ly, ry);
+    CHECK(ly >= 0 && ry >= 0 && std::abs(ly - ry) <= 1 && ly / 9 == 7, "level line on row 7 (%d, %d)", ly, ry);
+    s.rc.ch[5] = 1;  // ANGLE
+    s.arm();
+    s.rc.ch[2] = 0.1f;
+    s.run(1.0f);  // airborne
+    s.rc.ch[0] = 0.4f;  // bank right
+    float bankAt = -1;
+    s.run(1.0f, [&](float t) {
+        lineHeights(ly, ry);
+        if (bankAt < 0 && ly >= 0 && ry >= 0 && ly - ry >= 4) bankAt = t;
+    });
+    std::printf("    banked line: left %d, right %d (ninths of a row), tilted after %.2f s\n", ly, ry, bankAt);
+    CHECK(bankAt >= 0 && bankAt < 0.5f, "horizon tilts with the bank within 0.5 s (%.2f s)", bankAt);
+    s.destroy();
+}
 
 void testOsdAudioOverlay() {
     Session s;
@@ -2633,6 +2770,80 @@ void testVideoHostRaycast() {
     fpv_world_set_raycast_callback(nullptr, nullptr);
 }
 
+// The RC link (D36): off by default; on, Betaflight's OSD shows ELRS's
+// link statistics, and out of range the packets stop: RXLOSS, failsafe.
+void testRcLink() {
+    Host h(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1));
+    loadWorld(makeLevel(h, 300, 0));
+    fpv_rc_link_config c;
+    fpv_rc_link_config_defaults(&c);
+    CHECK(fpv_rc_link_get_config(&c) == FPV_OK && !c.enabled, "the RC link is off by default");
+    fpv_rc_link_state st{};
+    st.struct_size = sizeof st;
+    Session s;
+    float p[3];
+    h.pos(0, 0, 0, p);
+    s.spawn(p);
+    float pilot[3];
+    h.pos(0, 0, -20, pilot);
+    fpv_drone_set_pilot_position(s.drone, pilot);
+    auto osdPos = [](int x, int y) { return (x & 31) | ((y & 31) << 5) | (1 << 11); };
+    std::string cmd = "set osd_link_quality_pos = " + std::to_string(osdPos(1, 3)) + "\n" +
+                      "set osd_rssi_dbm_pos = " + std::to_string(osdPos(1, 4)) + "\n" +
+                      "set osd_link_tx_power_pos = " + std::to_string(osdPos(1, 5)) + "\nsave";
+    char *out = nullptr;
+    CHECK(fpv_cli_exec(cmd.c_str(), &out) == FPV_OK, "osd setup: %s", fpv_last_error());
+    fpv_free(out);
+    auto row = [&](int y) {
+        std::string t;
+        for (int x = 1; x < 14; x++) {
+            uint8_t ch = s.f.osd[y * FPV_OSD_COLS + x];
+            t += ch >= 0x20 && ch < 0x7f ? (char)ch : ' ';
+        }
+        return t;
+    };
+    s.run(0.5f);
+    CHECK(fpv_rc_link_get_state(&st) == FPV_OK && !st.enabled, "off: no link state");
+
+    fpv_rc_link_config_defaults(&c);
+    c.enabled = 1;
+    c.mode = FPV_RC_LINK_2G4_500HZ;
+    c.max_power_mw = 250;
+    c.dynamic_power = 0;
+    CHECK(fpv_rc_link_set_config(&c) == FPV_OK, "set config: %s", fpv_last_error());
+    s.arm();
+    s.rc.ch[2] = -0.8f;
+    s.run(3.0f);  // past the ARMED splash, every element drawn
+    fpv_rc_link_get_state(&st);
+    std::printf("    20 m: LQ %.0f, RSSI %.0f dBm, SNR %.0f dB, %.0f mW; OSD [%s] [%s] [%s]\n", st.link_quality,
+                st.rssi_dbm, st.snr_db, st.tx_power_mw, row(3).c_str(), row(4).c_str(), row(5).c_str());
+    CHECK(st.enabled && st.connected && st.link_quality >= 99, "close: a perfect link, LQ %.0f", st.link_quality);
+    CHECK(st.tx_power_mw == 250 && st.packet_rate_hz == 500, "fixed 250 mW at 500 Hz");
+    CHECK(row(3).find("29:") != std::string::npos, "the OSD's link quality shows RFMD 29: [%s]", row(3).c_str());
+    CHECK(row(4).find("-") != std::string::npos, "the OSD shows RSSI dBm: [%s]", row(4).c_str());
+    CHECK(row(5).find("250") != std::string::npos, "the OSD shows the TX power: [%s]", row(5).c_str());
+    CHECK(s.armed() && !(s.f.flags & FPV_DRONE_FAILSAFE), "armed, no failsafe");
+
+    // 60 km away: nothing gets through, Betaflight goes to failsafe
+    h.pos(0, 0, -60000, pilot);
+    fpv_drone_set_pilot_position(s.drone, pilot);
+    bool failsafe = false;
+    s.run(3.0f, [&](float) { failsafe |= (s.f.flags & FPV_DRONE_FAILSAFE) != 0; });
+    fpv_rc_link_get_state(&st);
+    CHECK(failsafe, "out of range: failsafe");
+    CHECK(!st.connected && st.link_quality == 0, "out of range: no link, LQ %.0f", st.link_quality);
+
+    // the link off again: every packet arrives
+    c.enabled = 0;
+    fpv_rc_link_set_config(&c);
+    s.rc.ch[4] = -1;
+    s.run(2.0f);
+    fpv_rc_link_get_state(&st);
+    CHECK(!st.enabled, "off again");
+    CHECK(!(s.f.flags & FPV_DRONE_FAILSAFE), "off: the failsafe ends");
+    s.destroy();
+}
+
 void testHearing() {
     Host h(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1));
     loadWorld(makeLevel(h, 200, 30));  // a wall 30 m ahead of the drone
@@ -2690,6 +2901,45 @@ void testHearing() {
             break;
         }
     }
+
+    // stereo: right minus left, dB, over 1 s
+    auto balance = [&] {
+        double e[2] = {0, 0};
+        for (int b = 0; b < 13; b++) {
+            s.run(0.1f);
+            fpv_audio_read(buf.data(), 4800);
+            if (b < 3) continue;
+            for (size_t i = 0; i < buf.size(); i++) e[i & 1] += buf[i] * buf[i];
+        }
+        return 10 * std::log10((e[1] + 1e-20) / (e[0] + 1e-20));
+    };
+    // the pilot's head (LOS, no listener) faces a hovering drone: centred
+    h.pos(0, 0, -10, pilot);
+    fpv_drone_set_pilot_position(s.drone, pilot);
+    fpv_set_view(FPV_VIEW_LOS);
+    s.run(1.0f);  // the head turns round (it was behind the wall)
+    double los = balance();
+    // the game's listener, one orientation, on either side of the drone
+    // (close, so the direct sound is well above the room): heard on one
+    // side, then on the other
+    fpv_set_view(FPV_VIEW_PILOT);
+    const float ident[4] = {0, 0, 0, 1};
+    float ear[3];
+    h.pos(-3, 0, 0, ear);
+    fpv_audio_set_listener(ear, ident);
+    double sideA = balance();
+    h.pos(3, 0, 0, ear);
+    fpv_audio_set_listener(ear, ident);
+    double sideB = balance();
+    fpv_audio_set_listener(nullptr, nullptr);
+    fpv_set_view(FPV_VIEW_FPV);
+    double onboardBalance = balance();
+    std::printf("    stereo (R-L): LOS %.2f dB, listener on one side %.1f dB, the other %.1f dB, onboard %.2f dB\n", los,
+                sideA, sideB, onboardBalance);
+    CHECK(std::fabs(los) < 1.0, "LOS: the pilot faces the drone, centred (%.2f dB)", los);
+    CHECK(sideA * sideB < 0 && std::fabs(sideA) > 4 && std::fabs(sideB) > 4 && std::fabs(sideA - sideB) > 12,
+          "the listener hears the drone on its side (%.1f / %.1f dB)", sideA, sideB);
+    CHECK(std::fabs(onboardBalance) < 1.5, "onboard: centred (%.2f dB)", onboardBalance);
 
     // the beeper switch (AUX3) disarmed: beeps through the motors
     s.rc.ch[4] = -1.0f;
@@ -3066,6 +3316,7 @@ int main(int argc, char **argv) {
         {"preset_switch_battery", testPresetSwitchBattery},
         {"preset_switch_rest", testPresetSwitchRest},
         {"cli", testCli},
+        {"osd_element_names", testOsdElementNames},
         {"diff_import", [&] { testDiffImport(corpus); }},
         {"axes_y_up_right", [] { testAxes(FPV_COORDS_Y_UP_RIGHT_HANDED, 1, "Y-up right-handed"); }},
         {"axes_y_up_left", [] { testAxes(FPV_COORDS_Y_UP_LEFT_HANDED, 1, "Y-up left-handed"); }},
@@ -3079,10 +3330,12 @@ int main(int argc, char **argv) {
         {"gps", testGps},
         {"gps_elements_after_reboot", testGpsElementsAfterReboot},
         {"osd_audio_overlay", testOsdAudioOverlay},
+        {"osd_refresh", testOsdRefresh},
         {"sim_options", testSimOptions},
         {"pilot_config", testPilotConfig},
         {"hearing", testHearing},
         {"video_host_raycast", testVideoHostRaycast},
+        {"rc_link", testRcLink},
         {"pinned", testPinned},
         {"terminate_reinit", testTerminateReinit},
         {"threaded", testThreadedMode},

@@ -87,6 +87,7 @@ void wsSetEnabled(int enabled) { UNUSED(enabled); }
 void wsSetBasePort(int basePort) { wsBasePort = basePort; }
 int wsGetBasePort(void) { return wsBasePort; }
 int wsGetClientCount(void) { return 0; }
+int wsActivePortCount(void) { return 0; }
 
 static const struct serialPortVTable wsVTable = {
     .serialWrite = wsWrite,

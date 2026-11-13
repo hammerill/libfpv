@@ -58,6 +58,7 @@ set(LIBFPV_SOURCES
   src/osd/osd.cpp
   src/audio/synth.cpp
   src/video/video_link.cpp
+  src/rc/rc_link.cpp
   ${LIBFPV_GEN_DIR}/embedded_presets.cpp
   ${LIBFPV_GEN_DIR}/embedded_fonts.cpp
   ${LIBFPV_GEN_DIR}/build_info.cpp

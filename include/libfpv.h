@@ -757,6 +757,66 @@ FPV_API void fpv_sim_set_options(uint32_t options);  /* fpv_sim_options */
 FPV_API uint32_t fpv_sim_get_options(void);
 
 /* ===========================================================================
+ * The RC link
+ *
+ * Optional, off by default: the link between the pilot's radio and the
+ * drone's receiver simulated like ExpressLRS. Distance, the antennas,
+ * the ground, walls and trees between the pilot position
+ * (fpv_drone_set_pilot_position) and the drone (the same rays as the video
+ * link, the raycast callback included) and fading decide which packets
+ * arrive. Lost packets leave Betaflight with the sticks of the last one;
+ * when nothing arrives for long, Betaflight shows RXLOSS and goes to
+ * failsafe. Betaflight's OSD shows the link quality (RFMD:LQ), RSSI dBm,
+ * RSNR and the transmitter's power, which follows ELRS's dynamic power.
+ * The player's choice (F8 > Drone > RC link), saved in settings.json; games
+ * normally leave it to the player. See docs/INTEGRATION.md#the-rc-link.
+ * ======================================================================== */
+
+typedef enum fpv_rc_link_mode {
+    FPV_RC_LINK_2G4_F1000 = 0,  /* 2.4 GHz FLRC 1000 Hz, racing: -104 dBm */
+    FPV_RC_LINK_2G4_500HZ = 1,  /* 2.4 GHz LoRa 500 Hz, freestyle: -105 dBm (default) */
+    FPV_RC_LINK_2G4_250HZ = 2,  /* -108 dBm */
+    FPV_RC_LINK_2G4_150HZ = 3,  /* -112 dBm */
+    FPV_RC_LINK_2G4_50HZ = 4,   /* 2.4 GHz long range: -115 dBm */
+    FPV_RC_LINK_900_200HZ = 5,  /* 900 MHz (868/915) 200 Hz: -112 dBm */
+    FPV_RC_LINK_900_100HZ = 6,  /* -117 dBm */
+    FPV_RC_LINK_900_50HZ = 7,   /* 900 MHz long range: -120 dBm */
+    FPV_RC_LINK_900_25HZ = 8,   /* -123 dBm */
+    FPV_RC_LINK_MODE_COUNT = 9
+} fpv_rc_link_mode;
+
+typedef struct fpv_rc_link_config {
+    uint32_t struct_size;
+    int32_t enabled;          /* 0 = a perfect link (the default) */
+    uint32_t mode;            /* fpv_rc_link_mode */
+    /* The transmitter's (maximum) power, mW: 10, 25, 50, 100, 250, 500 or
+     * 1000; other values round down to one of those. Default 250. */
+    uint32_t max_power_mw;
+    /* ELRS dynamic power: from 10 mW up to max_power_mw as the link needs
+     * it (default on); off = always max_power_mw. */
+    int32_t dynamic_power;
+} fpv_rc_link_config;
+
+typedef struct fpv_rc_link_state {
+    uint32_t struct_size;
+    int32_t enabled;
+    int32_t connected;        /* the receiver is in sync with the transmitter */
+    float link_quality;       /* % of the last 100 packets received */
+    float rssi_dbm;           /* the receiver's, averaged */
+    float snr_db;
+    float tx_power_mw;        /* the transmitter's power now */
+    float sensitivity_dbm;    /* the mode's sensitivity limit */
+    float packet_rate_hz;
+} fpv_rc_link_state;
+
+FPV_API void fpv_rc_link_config_defaults(fpv_rc_link_config *config);
+/* Sets and saves the player's RC link setting. */
+FPV_API fpv_result fpv_rc_link_set_config(const fpv_rc_link_config *config);
+FPV_API fpv_result fpv_rc_link_get_config(fpv_rc_link_config *config);
+/* The link as the simulation left it at its last step. */
+FPV_API fpv_result fpv_rc_link_get_state(fpv_rc_link_state *state);
+
+/* ===========================================================================
  * The pilot (the game's character)
  *
  * What the game does with its pilot character, as the player chose in the
@@ -1321,8 +1381,11 @@ FPV_API fpv_result fpv_osd_render_rgba(const fpv_frame *frame, uint8_t *rgba, ui
 /* Optional built-in drone sound: the motors and Betaflight's beeper. Pull
  * interleaved float samples from your audio thread; returns the number of
  * frames written (always `frames`). Heard onboard or from the pilot (with
- * distance, walls in between, Doppler, the ground's reflection and echoes),
- * see fpv_set_view and docs/INTEGRATION.md#audio. */
+ * distance, walls in between, Doppler, the ground's reflection and echoes,
+ * and in stereo its side, left or right, and whether it is behind the ear),
+ * see fpv_set_view and docs/INTEGRATION.md#audio. `channels`: 2 = stereo
+ * (left, right; the default), 1 = a mono mix, more = channels 3 and up
+ * silent. */
 FPV_API fpv_result fpv_audio_configure(uint32_t sample_rate, uint32_t channels);
 FPV_API uint32_t fpv_audio_read(float *out, uint32_t frames);
 /* The motors, with the beeper switch's beeps: those come from the motors
@@ -1331,8 +1394,9 @@ FPV_API void fpv_audio_set_volume(float volume);
 /* Betaflight's other beeps (arming, low battery, failsafe...). 0..2. */
 FPV_API void fpv_audio_set_beep_volume(float volume);
 /* The ear when the drone is heard from the pilot: host coords and rotation
- * (like a camera's). The game passes its camera in FPV_VIEW_PILOT; NULL
- * position (the default) = the pilot's head, facing the drone. */
+ * (like a camera's); the drone is panned to where it is from there. The
+ * game passes its camera in FPV_VIEW_PILOT; NULL position (the default) =
+ * the pilot's head, turning to follow the drone a little behind it. */
 FPV_API void fpv_audio_set_listener(const float position[3], const float rotation[4]);
 
 /* ===========================================================================

@@ -1,0 +1,200 @@
+diff --git a/extern/betaflightext/src/main/drivers/serial_ws.c b/extern/betaflightext/src/main/drivers/serial_ws.c
+--- a/extern/betaflightext/src/main/drivers/serial_ws.c
++++ b/extern/betaflightext/src/main/drivers/serial_ws.c
+@@ -187,6 +187,12 @@
+     break;
+ 
+   case LWS_CALLBACK_EVENT_WAIT_CANCELLED:
++    // woken by wsWrite(): send Betaflight's reply now instead of at the
++    // next poll of the websocket thread
++    wsPort->txWakePending = false;
++    if (wsPort->wsi) {
++      lws_callback_on_writable(wsPort->wsi);
++    }
+     break;
+ 
+   default:
+@@ -376,6 +382,13 @@
+   {
+     s->port.txBufferHead++;
+   }
++  // Wake the websocket thread once per reply: it sleeps in lws_service()
++  // until something happens, and the Configurator waits for each reply
++  // before it sends the next request.
++  if (!s->txWakePending && wsPortInitialized[s->id] && s->context && s->wsi) {
++    s->txWakePending = true;
++    lws_cancel_service(s->context);
++  }
+ }
+ 
+ void wsUpdate(void){
+@@ -404,6 +417,15 @@
+   }
+ }
+ 
++int wsActivePortCount(void)
++{
++  int count = 0;
++  for (int i = 0; i < SERIAL_PORT_COUNT; i++) {
++    count += wsPortInitialized[i] ? 1 : 0;
++  }
++  return count;
++}
++
+ void wsCancel(void)
+ {
+   for (int i = 0; i < SERIAL_PORT_COUNT; i++) {
+diff --git a/extern/betaflightext/src/main/drivers/serial_ws.h b/extern/betaflightext/src/main/drivers/serial_ws.h
+--- a/extern/betaflightext/src/main/drivers/serial_ws.h
++++ b/extern/betaflightext/src/main/drivers/serial_ws.h
+@@ -44,6 +44,8 @@
+ 
+     bool connected;
+     uint16_t clientCount;
++    // Betaflight wrote a reply the websocket thread has not been woken for
++    volatile bool txWakePending;
+     uint8_t id;
+ } wsPort_t;
+ 
+@@ -59,6 +61,8 @@
+ void wsDataOut(wsPort_t *instance);
+ 
+ void wsUpdate(void);
++// ports with a running websocket server
++int wsActivePortCount(void);
+ // wakes a wsUpdate() blocked in lws_service(), callable from any thread
+ void wsCancel(void);
+ // destroys all contexts; call only once the thread running wsUpdate() is joined
+diff --git a/extern/sitl.h b/extern/sitl.h
+--- a/extern/sitl.h
++++ b/extern/sitl.h
+@@ -68,10 +68,29 @@
+       // set when the radio link is lost, so Betaflight enters failsafe
+       static bool rcFrameFailsafe = false;
+ 
++      // RC packets arrive at the radio link's packet rate, not on every
++      // scheduler pass: reporting a new frame on every check kept
++      // Betaflight's RX task running ~6000 times a second, starving the OSD
++      // and MSP (serial) tasks. Each packet is reported once.
++      static uint32_t rcPacketIntervalUs = 2000;  // 500 Hz, ELRS freestyle
++      static uint64_t rcLastPacketUs = 0;
++      static bool rcFrameReady = false;
++      static bool rcFrameDropped = false;  // the packet was lost on the way
++      // the host decides whether each packet gets through (link simulation)
++      static bool (*rcPacketLossHook)(void) = nullptr;
++
+       static uint8_t rxRcFrameStatus(BF::rxRuntimeState_t *rxRuntimeState)
+       {
+         UNUSED(rxRuntimeState);
+-        return rcFrameFailsafe ? BF::RX_FRAME_PENDING : BF::RX_FRAME_COMPLETE;
++        if (rcFrameDropped) {
++          rcFrameDropped = false;
++          return BF::RX_FRAME_DROPPED;
++        }
++        if (rcFrameReady) {
++          rcFrameReady = false;
++          return BF::RX_FRAME_COMPLETE;
++        }
++        return BF::RX_FRAME_PENDING;
+       }
+ 
+       static void updateSerialWs(){
+diff --git a/src/sim/bf.cpp b/src/sim/bf.cpp
+--- a/src/sim/bf.cpp
++++ b/src/sim/bf.cpp
+@@ -27,7 +27,21 @@
+     {
+       uint32_t timeUs = BF::micros_passed & 0xFFFFFFFF;
+ 
+-      std::array<uint16_t, 16> rcData;
++      // only at the link's packet rate: between packets Betaflight keeps
++      // the last sticks it received, like a real receiver
++      if (rcLastPacketUs != 0 && BF::micros_passed - rcLastPacketUs < rcPacketIntervalUs &&
++          BF::micros_passed >= rcLastPacketUs) {
++        return;
++      }
++      rcLastPacketUs = BF::micros_passed;
++      // radio lost (failsafe) or this packet lost by the link simulation
++      if (rcFrameFailsafe || (rcPacketLossHook && rcPacketLossHook())) {
++        rcFrameDropped = true;  // lost: Betaflight keeps the old sticks
++        rcFrameReady = false;
++        return;
++      }
++      rcFrameReady = true;
++
+       for (int i = 0; i < 16; i++)
+       {
+         rcDataCache[i] = uint16_t(1500 + data[i] * 500);
+@@ -174,6 +188,11 @@
+       BF::updateSerialWs();
+     }
+ 
++    int activeSerialPorts()
++    {
++      return BF::wsActivePortCount();
++    }
++
+     void cancelSerial()
+     {
+       BF::wsCancel();
+@@ -193,5 +212,18 @@
+     {
+       BF::rcFrameFailsafe = failsafe;
+     }
++
++    void setRcPacketRate(float hz)
++    {
++      if (hz < 1.0f) {
++        hz = 1.0f;
++      }
++      BF::rcPacketIntervalUs = (uint32_t)(1e6f / hz);
++    }
++
++    void setRcPacketLossHook(bool (*lost)(void))
++    {
++      BF::rcPacketLossHook = lost;
++    }
+   } // namespace bf
+ } // namespace SimITL
+\ No newline at end of file
+diff --git a/src/sim/bf.h b/src/sim/bf.h
+--- a/src/sim/bf.h
++++ b/src/sim/bf.h
+@@ -56,6 +56,8 @@
+     void setDebugValue(uint8_t mode, uint8_t index, int16_t value);
+ 
+     void updateSerial();
++    // websocket servers running (0: nothing for the serial thread to do)
++    int activeSerialPorts();
+     void cancelSerial();
+     void stopSerial();
+     void restartSerial();
+@@ -64,6 +66,10 @@
+      * \brief Marks received RC frames as failsafe (radio lost) or complete.
+      */
+     void setRcFailsafe(bool failsafe);
++    // RC packet rate of the simulated radio link (default 500 Hz).
++    void setRcPacketRate(float hz);
++    // Called once per RC packet: return true to lose that packet.
++    void setRcPacketLossHook(bool (*lost)(void));
+   }
+ }
+ 
+diff --git a/src/sim/sim.cpp b/src/sim/sim.cpp
+--- a/src/sim/sim.cpp
++++ b/src/sim/sim.cpp
+@@ -35,7 +35,13 @@
+   void wsUpdateThread(Sim * sim){
+     while (sim->running) {
+       BF::updateSerial();
+-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
++      // lws_service() sleeps until a client or Betaflight's next reply
++      // (wsWrite() wakes it) needs it; a fixed sleep here added up to 10 ms
++      // to every Configurator request. Without a server there is nothing
++      // to wait on, so poll slowly.
++      if (BF::activeSerialPorts() == 0) {
++        std::this_thread::sleep_for(std::chrono::milliseconds(10));
++      }
+     }
+     sim->wsThreadRunning = false;
+     simitl_log("wsThread end!!\n");

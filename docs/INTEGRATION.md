@@ -151,6 +151,67 @@ file gives `powerMw`, `powerNoise` (0..1, motor noise reaching the video),
 `minCellVoltage` (brownouts) and, for digital links, `height`, `fps`,
 `freezes` and `sensitivityDbm`.
 
+## The RC link
+
+By default the radio link is perfect: every stick movement reaches
+Betaflight, however far the drone flies. The player can turn on a
+simulated ExpressLRS link in F8 > Drone > "RC link". It is off by default,
+and a game needs nothing for it beyond what the video link uses: the pilot
+position (`fpv_drone_set_pilot_position`) and, if it has one, the raycast
+callback.
+
+With it on, each packet from the radio has to get through:
+
+- **The link budget.** The transmitter's power, the antennas (the
+  receiver's dipole at the back of the frame, with the frame, battery and
+  stack shadowing it when the pilot is ahead of the drone), free-space loss
+  at 2.4 GHz or 900 MHz, the ground's reflection when flying low and far,
+  and what stands between the pilot and the drone. That last part comes
+  from the same rays as the video link (static surfaces, objects and the
+  raycast callback), costed at the link's band: walls and trees take less
+  at 900 MHz than at 2.4 GHz.
+- **Fading.** The signal fades with the drone's speed, deeper behind
+  obstacles where only scattered paths remain.
+- **Packets.** Each packet at the mode's rate (1000 to 25 Hz) arrives or
+  is lost, depending on the signal against the mode's sensitivity
+  (-104 dBm at F1000 down to -123 dBm at 900 MHz 25 Hz). A lost packet
+  leaves Betaflight with the sticks of the last one. After 150 ms without
+  packets Betaflight shows RXLOSS and starts its failsafe stages. After 1 s
+  the receiver loses the sync and needs a moment of good signal to find it
+  again.
+- **Power.** The player picks the transmitter's power (10 mW to 1 W) and
+  ELRS's dynamic power. Dynamic power starts at 10 mW and steps up and
+  down on the receiver's telemetry (SNR, or RSSI for F1000, and LQ). It
+  jumps to the maximum when the LQ drops below 50 %, drops suddenly, or the
+  telemetry is lost while armed.
+
+Betaflight gets the link statistics the way it gets them from an ELRS
+receiver over CRSF. The OSD's link quality element shows `RFMD:LQ` (for
+example `29:100` at 500 Hz), and the RSSI dBm, RSNR and TX power
+(`osd_link_tx_power_pos`) elements and the LQ, RSSI and RSNR warnings
+work. The player places them in F8 > OSD or in the Configurator.
+
+The packet rates, from the overlay or `fpv_rc_link_mode`:
+
+| Mode | Rate | Sensitivity | For |
+|---|---|---|---|
+| 2.4 GHz F1000 | 1000 Hz | -104 dBm | racing |
+| 2.4 GHz 500 Hz | 500 Hz | -105 dBm | freestyle (default) |
+| 2.4 GHz 250 / 150 Hz | 250 / 150 Hz | -108 / -112 dBm | freestyle, more range |
+| 2.4 GHz 50 Hz | 50 Hz | -115 dBm | long range |
+| 900 MHz 200 / 100 Hz | 200 / 100 Hz | -112 / -117 dBm | through walls and trees |
+| 900 MHz 50 / 25 Hz | 50 / 25 Hz | -120 / -123 dBm | long range |
+
+In the open, with the drone 30 m up and 100 mW, packets start to drop at
+about 4.5 km at 2.4 GHz 500 Hz, 9 km at 2.4 GHz 50 Hz and 15 km at 900 MHz
+50 Hz. Indoors and behind buildings it is much less, as with a real link.
+
+Games normally leave the setting to the player. A game can still read or
+set it with `fpv_rc_link_get_config` and `fpv_rc_link_set_config` (it is
+saved like the player's choice), and read the link's state (LQ, RSSI, SNR,
+TX power, whether the receiver is in sync) with `fpv_rc_link_get_state`,
+for its own HUD, for example.
+
 ## GPS and the home point
 
 Every simulated quad has a GPS and a barometer, so Betaflight's GPS OSD
@@ -1287,6 +1348,14 @@ A `waveOut` thread (44.1 kHz, stereo, 16-bit, 4 × 512-frame buffers) that
 pulls `fpv_audio_read` is enough, and the sound plays through the game's
 output device. Stop and join it before deleting the drone.
 
+- The sound is stereo: configure it with `fpv_audio_configure(rate, 2)` and
+  `fpv_audio_read` writes interleaved left/right floats. Heard from the
+  pilot, the drone is panned to its side, the far ear hears it a little
+  later and duller, and behind the ear it is a little quieter and duller.
+  With 1 channel you get a mono mix (no sides); with more than 2, channels
+  3 and up are silent. The pilot's head (no listener set) turns to follow
+  the drone a little behind it, so a hovering drone is centred and a fast
+  pass is heard crossing.
 - Call `fpv_set_view` whenever the view changes. The player chooses where
   the drone is heard from (F8 > Camera & sound): Auto (the default) hears it
   onboard in the FPV and chase views and from the pilot in the LOS and pilot

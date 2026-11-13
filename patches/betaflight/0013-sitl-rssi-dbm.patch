@@ -1,0 +1,14 @@
+diff --git a/src/main/target/common_post.h b/src/main/target/common_post.h
+index 9972867b4..0eb9d43f7 100644
+--- a/src/main/target/common_post.h
++++ b/src/main/target/common_post.h
+@@ -316,7 +316,8 @@
+ #undef USE_CRSF_V3
+ #endif
+ 
+-#if !defined(USE_RX_EXPRESSLRS) && !defined(USE_SERIALRX_CRSF)
++// SITL: the host simulates an ELRS link and reports its RSSI in dBm
++#if !defined(USE_RX_EXPRESSLRS) && !defined(USE_SERIALRX_CRSF) && !defined(SIMULATOR_BUILD)
+ #undef USE_RX_RSSI_DBM
+ #endif
+ 

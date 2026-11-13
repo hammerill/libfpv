@@ -1,5 +1,6 @@
 add_executable(fpv_tests test_main.cpp)
 target_link_libraries(fpv_tests PRIVATE libfpv::fpv)
+target_include_directories(fpv_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)  # overlay/osd_element_names.h
 target_compile_definitions(fpv_tests PRIVATE LIBFPV_TEST_DIFF_DIR="${CMAKE_CURRENT_SOURCE_DIR}/diffs")
 if(EMSCRIPTEN)
   # Node: real files (the diff corpus, a temporary data folder)
@@ -31,3 +32,11 @@ target_include_directories(fpv_video_tests PRIVATE ${PROJECT_SOURCE_DIR}/src ${P
   ${PROJECT_SOURCE_DIR}/third_party/SimITL/src)
 target_compile_features(fpv_video_tests PRIVATE cxx_std_17)
 add_test(NAME fpv_video_tests COMMAND fpv_video_tests)
+
+# The RC link's model, without the library: budget, packets, LQ, dynamic power.
+add_executable(fpv_rc_link_tests test_rc_link.cpp ${PROJECT_SOURCE_DIR}/src/rc/rc_link.cpp
+  ${PROJECT_SOURCE_DIR}/src/video/video_link.cpp)
+target_include_directories(fpv_rc_link_tests PRIVATE ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/include
+  ${PROJECT_SOURCE_DIR}/third_party/SimITL/src)
+target_compile_features(fpv_rc_link_tests PRIVATE cxx_std_17)
+add_test(NAME fpv_rc_link_tests COMMAND fpv_rc_link_tests)

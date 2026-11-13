@@ -90,7 +90,8 @@ private:
 
     std::string m_importText, m_importReport;
     std::string m_cliInput, m_cliOutput;
-    int m_osdSelected = 0;
+    std::string m_osdSelected = "osd_vbat_pos";  // the OSD element setting being placed
+    std::string m_osdFilter;
     int m_rateAxis = 0;
     bool m_rebindingToggle = false;
     std::string m_rebindingControl;  // the game control whose key is being changed

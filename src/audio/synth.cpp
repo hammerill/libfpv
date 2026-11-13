@@ -19,6 +19,21 @@ constexpr float kMaxDelay = 2.0f;
 // Freeverb's comb and all-pass lengths at 44.1 kHz
 constexpr uint32_t kCombLen[] = {1116, 1188, 1277, 1356};
 constexpr uint32_t kAllpassLen[] = {556, 441};
+constexpr uint32_t kStereoSpread = 23;  // the right ear's all-passes are this much longer
+// The two ears (heard from the pilot): a head of 8.75 cm radius gives
+// Woodworth's interaural time difference (r / c)(theta + sin theta), 0.66 ms
+// for a drone straight to one side. The level difference is an equal-power
+// pan narrowed a little (the far ear keeps -13 dB of the sound, as a real
+// head's does in the lows) plus the far ear's head shadow, a high-shelf cut
+// above about 2 kHz. Behind the head the pinnae dull the highs of both ears
+// and the level drops by about 2 dB: the front/back cue.
+constexpr float kHeadRadius = 0.0875f;
+constexpr float kSpeedOfSound = 343.0f;
+constexpr float kPanWidth = 0.8f;
+constexpr float kShadowHz = 2000.0f;
+constexpr float kShadowSide = 0.5f;    // the far ear's share of highs lost, drone to one side
+constexpr float kShadowBehind = 0.4f;  // both ears', drone behind
+constexpr float kBehindLoss = 0.2f;    // level lost, drone behind
 
 float onePole(float cutoff, uint32_t rate) {
     return 1.0f - std::exp(-(float)kTwoPi * std::min(cutoff, rate * 0.45f) / rate);
@@ -30,7 +45,9 @@ float onePole(float cutoff, uint32_t rate) {
 AudioSynth::AudioSynth() {
     m_line.assign(kLineSize, 0.0f);
     for (int i = 0; i < kCombs; i++) m_comb[i].assign(kCombLen[i] * 192000 / 44100 + 1, 0.0f);
-    for (int i = 0; i < kAllpasses; i++) m_allpass[i].assign(kAllpassLen[i] * 192000 / 44100 + 1, 0.0f);
+    for (int c = 0; c < 2; c++)
+        for (int i = 0; i < kAllpasses; i++)
+            m_allpass[c][i].assign((kAllpassLen[i] + kStereoSpread) * 192000 / 44100 + 1, 0.0f);
     configure(m_rate, m_channels);
 }
 
@@ -42,10 +59,11 @@ void AudioSynth::configure(uint32_t sampleRate, uint32_t channels) {
         m_combLen[i] = std::max<uint32_t>(1, kCombLen[i] * m_rate / 44100);
         m_combPos[i] = 0;
     }
-    for (int i = 0; i < kAllpasses; i++) {
-        m_allpassLen[i] = std::max<uint32_t>(1, kAllpassLen[i] * m_rate / 44100);
-        m_allpassPos[i] = 0;
-    }
+    for (int c = 0; c < 2; c++)
+        for (int i = 0; i < kAllpasses; i++) {
+            m_allpassLen[c][i] = std::max<uint32_t>(1, (kAllpassLen[i] + c * kStereoSpread) * m_rate / 44100);
+            m_allpassPos[c][i] = 0;
+        }
     m_delay = -1;
 }
 
@@ -67,6 +85,17 @@ float AudioSynth::delayTap(double delaySamples) const {
     float frac = (float)(pos - fl);
     uint32_t i = (uint32_t)(int64_t)fl & (kLineSize - 1);
     return m_line[i] + (m_line[(i + 1) & (kLineSize - 1)] - m_line[i]) * frac;
+}
+
+// The direct sound at one ear, `delaySamples` (fractional) after it reached
+// the near one.
+float AudioSynth::earTap(float delaySamples) const {
+    // relative to a wrapped index: the write counter itself outgrows a float's precision
+    float pos = (float)(((m_earWrite - 1) & (kEarLineSize - 1)) + kEarLineSize) - delaySamples;
+    float fl = std::floor(pos);
+    float frac = pos - fl;
+    uint32_t i = (uint32_t)fl & (kEarLineSize - 1);
+    return m_earLine[i] + (m_earLine[(i + 1) & (kEarLineSize - 1)] - m_earLine[i]) * frac;
 }
 
 uint32_t AudioSynth::read(float *out, uint32_t frames) {
@@ -106,6 +135,7 @@ uint32_t AudioSynth::read(float *out, uint32_t frames) {
     toward(h.airCutoff, th.airCutoff);
     toward(h.wallCutoff, th.wallCutoff);
     toward(h.pan, th.pan);
+    toward(h.front, th.front);
     toward(h.groundGain, th.groundGain);
     toward(h.echoGain, th.echoGain);
     toward(h.reverb, th.reverb);
@@ -139,6 +169,10 @@ uint32_t AudioSynth::read(float *out, uint32_t frames) {
     const float aGround = onePole(1500.0f, rate);
 
     const float aAir = onePole(h.airCutoff, rate), aWall = onePole(h.wallCutoff, rate);
+    const float aShadow = onePole(kShadowHz, rate);
+    // one channel: no sides (the ears' delay would only comb-filter the sum)
+    const bool stereo = channels >= 2;
+    const float itdScale = kHeadRadius / kSpeedOfSound * rate;  // Woodworth: samples per (theta + sin theta)
     const float beepRamp = 1.0f - std::exp(-(float)dt / 0.002f);
     const float mixRamp = 1.0f - std::exp(-(float)dt / 0.15f);
     float combFb[kCombs];
@@ -180,9 +214,13 @@ uint32_t AudioSynth::read(float *out, uint32_t frames) {
             float wobble = 1.0f + dmg * 0.6f * (float)std::sin(kTwoPi * m_wobble[m]);
             float amp = spin * spin * (0.35f + 0.65f * load);
             float s = (buzz * 0.55f + whine * 0.08f * (0.3f + load) + m_noiseLp[m] * (0.6f + dmg * 1.5f)) * amp * wobble;
+            // onboard the ear is the drone's own camera, between the motors:
+            // a slight width, so one motor's damage is heard on its side,
+            // but the drone stays centred (wider, the arms' rpm differences
+            // pulled the whole sound a few dB to one side)
             float pan = std::clamp(cur.pan[m], -1.0f, 1.0f);
-            left += s * (0.5f - 0.35f * pan);
-            right += s * (0.5f + 0.35f * pan);
+            left += s * (0.5f - 0.15f * pan);
+            right += s * (0.5f + 0.15f * pan);
         }
         // the beeper switch: the ESCs beep through the windings, so it is
         // part of the motor sound (and its volume)
@@ -228,10 +266,26 @@ uint32_t AudioSynth::read(float *out, uint32_t frames) {
         m_wall2 += (m_wall1 - m_wall2) * aWall;
         float gain = hf.gain + (h.gain - hf.gain) * t;
         float direct = m_wall2 * gain;
-        float pan = std::clamp(hf.pan + (h.pan - hf.pan) * t, -1.0f, 1.0f);
-        float ang = (pan + 1) * 0.25f * (float)kTwoPi * 0.5f;  // 0 .. pi/2, equal power
-        float pilotL = direct * std::cos(ang) * 1.41421356f;
-        float pilotR = direct * std::sin(ang) * 1.41421356f;
+        // the two ears. pan and front glide per block and are interpolated
+        // per sample, so the ears' delays and filters move without zipper
+        // noise; the delay passes from one ear to the other through zero
+        float pan = stereo ? std::clamp(hf.pan + (h.pan - hf.pan) * t, -1.0f, 1.0f) : 0.0f;
+        float behind = std::clamp(-(hf.front + (h.front - hf.front) * t), 0.0f, 1.0f);
+        direct *= 1.0f - kBehindLoss * behind;
+        m_earLine[m_earWrite & (kEarLineSize - 1)] = direct;
+        m_earWrite++;
+        float itd = itdScale * (std::asin(std::fabs(pan)) + std::fabs(pan));
+        float earL = earTap(pan > 0 ? itd : 0.0f);
+        float earR = earTap(pan < 0 ? itd : 0.0f);
+        m_shadowL += (earL - m_shadowL) * aShadow;
+        m_shadowR += (earR - m_shadowR) * aShadow;
+        float shadeL = kShadowSide * std::max(0.0f, pan) + kShadowBehind * behind;
+        float shadeR = kShadowSide * std::max(0.0f, -pan) + kShadowBehind * behind;
+        earL -= std::min(0.8f, shadeL) * (earL - m_shadowL);
+        earR -= std::min(0.8f, shadeR) * (earR - m_shadowR);
+        float ang = (pan * kPanWidth + 1) * 0.25f * (float)kTwoPi * 0.5f;  // 0 .. pi/2, equal power
+        float pilotL = earL * std::cos(ang) * 1.41421356f;
+        float pilotR = earR * std::sin(ang) * 1.41421356f;
 
         // the room, fed by what the ear would hear (or by the drone onboard)
         m_mix += (h.fromPilot - m_mix) * mixRamp;
@@ -240,26 +294,34 @@ uint32_t AudioSynth::read(float *out, uint32_t frames) {
         float wetL = 0, wetR = 0;
         if (send > 1e-4f || std::fabs(m_combLp[0]) > 1e-6f) {
             float in = (m_mix * m_wall2 + (1 - m_mix) * mono) * send * 0.25f;
-            float acc = 0;
+            // two orthogonal sums of the combs (alternating signs: wider,
+            // less coloured), each through its own all-passes. One chain
+            // tapped after one and two stages made the room 3-4 dB louder
+            // on the right.
+            float sum[2] = {0, 0};
             for (int i = 0; i < kCombs; i++) {
                 float &cell = m_comb[i][m_combPos[i]];
                 float y = cell;
                 m_combLp[i] = y * (1 - kCombDamp) + m_combLp[i] * kCombDamp;
                 cell = in + m_combLp[i] * combFb[i];
                 m_combPos[i] = (m_combPos[i] + 1) % m_combLen[i];
-                acc += (i & 1) ? -y : y;  // alternating signs: wider, less coloured
+                sum[0] += (i & 1) ? -y : y;
+                sum[1] += (i & 2) ? -y : y;
             }
-            float y = acc;
-            for (int i = 0; i < kAllpasses; i++) {
-                float &cell = m_allpass[i][m_allpassPos[i]];
-                float b = cell;
-                cell = y + b * kAllpassFb;
-                float o = b - y;
-                m_allpassPos[i] = (m_allpassPos[i] + 1) % m_allpassLen[i];
-                if (i == 0) wetL = o;  // left after the first, right after both
-                y = o;
+            float wet[2];
+            for (int c = 0; c < 2; c++) {
+                float y = sum[c];
+                for (int i = 0; i < kAllpasses; i++) {
+                    float &cell = m_allpass[c][i][m_allpassPos[c][i]];
+                    float b = cell;
+                    cell = y + b * kAllpassFb;
+                    y = b - y;
+                    m_allpassPos[c][i] = (m_allpassPos[c][i] + 1) % m_allpassLen[c][i];
+                }
+                wet[c] = y;
             }
-            wetR = y;
+            wetL = wet[0];
+            wetR = wet[1];
         }
 
         left = (onL * (1 - m_mix) + pilotL * m_mix + wetL) * pausedGain;

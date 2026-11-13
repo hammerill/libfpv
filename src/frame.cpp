@@ -11,7 +11,7 @@
 
 namespace fpv {
 
-void updatePresentation(const fpv_frame &f, Vec3 dronePos, Vec3 droneVel, bool beeperSwitch);  // api_present.cpp
+void updatePresentation(const fpv_frame &f, Vec3 dronePos, Vec3 droneVel, bool beeperSwitch, float frameDt);  // api_present.cpp
 
 static_assert(FPV_CHANNEL_COUNT == kChannelCount, "fpv_frame.channels matches the input channels");
 
@@ -143,7 +143,10 @@ static void refreshVideoProbe(const FlightSnapshot &s) {
     Lib &L = lib();
     Lib::HostVideoProbe &v = L.hostVideoProbe;
     if (!L.raycast || !s.active) {
-        if (v.on) L.flight.setHostVideoObstruction(-1.0f, 10.0f);
+        if (v.on) {
+            L.flight.setHostVideoObstruction(-1.0f, 10.0f);
+            L.flight.setHostRcObstruction(-1.0f);
+        }
         v = Lib::HostVideoProbe{};
         return;
     }
@@ -155,6 +158,7 @@ static void refreshVideoProbe(const FlightSnapshot &s) {
     if (dist < 1.0f) {
         if (slot == 6) {
             L.flight.setHostVideoObstruction(0.0f, 10.0f);
+            L.flight.setHostRcObstruction(0.0f);
             v.on = true;
         }
         return;
@@ -195,6 +199,8 @@ static void refreshVideoProbe(const FlightSnapshot &s) {
         float loss, k;
         videoObstruction(v.centre, v.offsets, depth, loss, k);
         L.flight.setHostVideoObstruction(loss, k);
+        // and the RC link's, at its band (D36)
+        L.flight.setHostRcObstruction(rcObstructionDb(rcLinkMode(L.settings.rcLinkMode).band, v.centre, v.offsets, depth));
         v.on = true;
     }
 }
@@ -579,7 +585,7 @@ extern "C" FPV_API fpv_result fpv_drone_tick(fpv_drone *d, float frameDt, fpv_fr
                                    cv.unitsPerMeter());
     }
 
-    updatePresentation(f, pos, vel, cur.beeperSwitch);
+    updatePresentation(f, pos, vel, cur.beeperSwitch, frameDt);
     L.lastFrame = f;
     L.lastFrameValid = true;
     memcpy(frameOut, &f, std::min<size_t>(frameOut->struct_size, sizeof(f)));

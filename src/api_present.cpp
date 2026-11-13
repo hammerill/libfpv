@@ -30,6 +30,37 @@ constexpr float kReferenceDistance = 2.0f;
 // 70 % humidity: 4.7, 9.7, 33 and 117 dB/km at 1, 2, 4 and 8 kHz), so the
 // highs go first: a low-pass where the loss over the distance is 3 dB.
 constexpr float kAirAbsorption = 2.0e-9f;  // dB per metre per Hz^2
+// The pilot's head turns to follow the drone this far behind it (s), so a
+// fast pass is heard moving across, and the drone settles in the middle.
+constexpr float kHeadLag = 0.3f;
+// Closer than this to the ear the drone has no side (the game's listener at
+// the drone's own camera hears it centred).
+constexpr float kNoSideWithin = 1.0f;
+
+// The pilot's head (yaw, internal frame), when the game sets no listener.
+float g_headYaw = 0;
+bool g_headValid = false;
+
+// The drone's direction for the ear (unit, the ear's frame: x right, y up, z
+// forward): the game's listener, or the pilot's head turning after it over
+// the host's frames (like the chase camera).
+Vec3 earDirection(Vec3 d, float r, float frameDt) {
+    Lib &L = lib();
+    Vec3 u = d / r;
+    // the head keeps following while the game's listener is set, so the
+    // sound is where it should be when the game unsets it
+    if (d.x * d.x + d.z * d.z > 1e-4f) {
+        float want = std::atan2(d.x, d.z);
+        float diff = std::remainder(want - g_headYaw, 2 * kPi);
+        // the first frame faces it at once
+        g_headYaw += g_headValid ? diff * (1.0f - std::exp(-frameDt / kHeadLag)) : diff;
+        g_headYaw = std::remainder(g_headYaw, 2 * kPi);
+        g_headValid = true;
+    }
+    if (L.listenerSet) return rotate(conj(L.listenerRot), u);
+    Vec3 fwd{std::sin(g_headYaw), 0, std::cos(g_headYaw)}, right{fwd.z, 0, -fwd.x};
+    return {dot(u, right), u.y, dot(u, fwd)};
+}
 }  // namespace
 
 AudioSynth &audioSynth() {
@@ -62,7 +93,7 @@ bool hearsFromPilot() {
 
 // How the drone sounds at the ear (internal frame, metres). See
 // docs/DECISIONS.md "Hearing the drone from the pilot".
-static Hearing hearing(Vec3 dronePos, Vec3 droneVel) {
+static Hearing hearing(Vec3 dronePos, Vec3 droneVel, float frameDt) {
     Lib &L = lib();
     const Lib::HearingProbe &pr = L.hearingProbe;
     Hearing h;
@@ -88,8 +119,14 @@ static Hearing hearing(Vec3 dronePos, Vec3 droneVel) {
     h.gain = spread * std::pow(10.0f, -wallDb / 20.0f);
     h.wallCutoff = 20000.0f / (1.0f + 11.5f * std::pow(walls, 1.5f));
     h.airCutoff = std::min(20000.0f, std::sqrt(3.0f / (kAirAbsorption * rr)));
-    // where the drone is for the ear: the game's listener, or facing it
-    if (L.listenerSet && r > 1e-3f) h.pan = std::clamp(rotate(conj(L.listenerRot), d / r).x, -1.0f, 1.0f);
+    // where the drone is for the ear (the game's listener, or the pilot's
+    // head turning after it): left or right, ahead or behind
+    if (r > 1e-3f) {
+        Vec3 dir = earDirection(d, r, frameDt);
+        float side = std::min(1.0f, r / kNoSideWithin);
+        h.pan = std::clamp(dir.x * side, -1.0f, 1.0f);
+        h.front = std::clamp(dir.z * side + (1 - side), -1.0f, 1.0f);
+    }
     // the ground's reflection (an image source under the ground below the
     // ear): a copy that arrives a little later, comb-filtering the direct
     // sound as the drone climbs or comes closer
@@ -119,7 +156,7 @@ static Hearing hearing(Vec3 dronePos, Vec3 droneVel) {
 }
 
 // Called by fpv_drone_tick with the API mutex held.
-void updatePresentation(const fpv_frame &f, Vec3 dronePos, Vec3 droneVel, bool beeperSwitch) {
+void updatePresentation(const fpv_frame &f, Vec3 dronePos, Vec3 droneVel, bool beeperSwitch, float frameDt) {
     Lib &L = lib();
     const DronePreset &p = currentPreset();
     AudioParams ap;
@@ -136,7 +173,7 @@ void updatePresentation(const fpv_frame &f, Vec3 dronePos, Vec3 droneVel, bool b
     ap.beeper = (f.flags & FPV_DRONE_BEEPER) != 0;
     ap.motorBeep = ap.beeper && beeperSwitch;
     ap.paused = (f.flags & FPV_DRONE_PAUSED) != 0;
-    ap.hearing = hearing(dronePos, droneVel);
+    ap.hearing = hearing(dronePos, droneVel, frameDt);
     audioSynth().setParams(ap);
     audioSynth().setVolume(L.settings.audioVolume, L.settings.beepVolume);
 }

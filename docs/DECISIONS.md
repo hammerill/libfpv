@@ -578,6 +578,41 @@ format as the overlay, so a host needs only one renderer.
 texture. SimITL's OSD canvas is the 30×16 analog grid. "HD look" uses the
 bold font in a 16:9 viewport; it does not add an HD (53×20) canvas.
 
+### D15b. RC packets at a link's rate; a fast Configurator (Betaflight patch `0011`, SimITL patch `0018`)
+
+SimITL's receiver used to answer "new frame" on every scheduler pass.
+Betaflight runs one non-realtime task per pass after the gyro and PID, so
+its event-driven RX task took about 6000 slots a second (three states per
+frame) and starved everything else. Measured per simulated second:
+OSD 12 calls (0 to 3 finished frames, a full redraw every 0.3 to 0.5 s),
+SERIAL (MSP) 33 instead of 100, ATTITUDE 50 instead of 100.
+
+- RC packets now arrive at a packet rate, 500 Hz by default (ELRS
+  freestyle; `SimITL::BF::setRcPacketRate`). Each packet is reported once
+  and Betaflight keeps the last sticks between packets, like a real
+  receiver, which adds 0 to 2 ms of realistic RC latency. Every task now
+  runs at its rate, and the OSD redraws at `osd_framerate_hz` (Betaflight's
+  default 12 Hz), like a real quad's.
+- A lost packet (radio lost, or the link simulation's loss hook,
+  `setRcPacketLossHook`) is reported as `RX_FRAME_DROPPED`. Betaflight
+  patch `0011` keeps a pass with no packet from counting as a lost one, so
+  Betaflight's own link quality is that of the packets.
+- The Configurator sends one MSP request, waits for the reply, then sends
+  the next, so the round trip sets how fast it navigates. It was 20 ms
+  (measured with the RX fix already in): the websocket thread slept 10 ms
+  between `lws_service()` calls, and a request waited for the next run of
+  the SERIAL task (100 Hz). Now `wsWrite()` wakes the websocket thread with
+  `lws_cancel_service()` once per reply (the thread sleeps only while no
+  server runs), and simulator builds run the SERIAL task at
+  `serial_update_rate_hz` or 1 kHz, whichever is higher. The setting and
+  everyone's EEPROMs stay as they are. A round trip is now 1 ms, at about
+  4 % of one core for the whole simulation.
+- With the RX task at a real packet rate, Betaflight's stick commands work
+  as on a real quad. Before, the RX task's interval rounded to 0 ms, so
+  the 50 ms hold never added up. Disarmed in ANGLE mode, full throttle plus
+  pitch or roll trims the accelerometer and saves; throttle low with yaw
+  left, pitch down and roll right saves; and so on.
+
 ### D16. Audio
 
 `fpv_audio_read` is called from the host's audio thread. It never takes
@@ -621,7 +656,7 @@ before. The two are always both computed and cross-faded over 150 ms, so
 switching views does not click.
 
 **From the pilot.** The ear is the pilot's head (1.6 m above
-`pilot_position`, facing the drone) or the game's listener
+`pilot_position`, turning to follow the drone) or the game's listener
 (`fpv_audio_set_listener`, its camera in the pilot view). The model, from
 the literature on outdoor sound propagation:
 
@@ -683,9 +718,46 @@ the literature on outdoor sound propagation:
   Onboard, a quarter of the send: a room around the drone is audible, but
   the props are close.
 
+- *The two ears.* The output is stereo (`fpv_audio_configure(rate, 2)`).
+  The drone's direction in the ear's frame (the listener's rotation, or
+  the pilot's head) gives its side and whether it is ahead or behind.
+  The pilot's head, with no listener, turns after the drone with a 0.3 s
+  lag (a first-order follow of its yaw, in simulated time), as a real
+  pilot's head does: a hovering drone is in the middle, a fast pass is
+  heard crossing from one side to the other before the head catches up,
+  and when it flies straight overhead the head turns round. Three cues,
+  all on the direct sound (with its ground reflection and echo):
+  - an equal-power pan, narrowed to 80 % so the far ear keeps -13 dB, as a
+    real head lets the lows round to it;
+  - the interaural time difference, Woodworth's `(a / c)(theta + sin theta)`
+    with a head radius of 8.75 cm: up to 0.66 ms, the far ear reading a
+    short delay line (fractional, linearly interpolated). The delay passes
+    from one ear to the other through zero, so a crossing drone never
+    jumps;
+  - head shadow: the far ear loses up to half of what is above 2 kHz (a
+    one-pole high-shelf cut, `x - k (x - lowpass(x))`). Behind the head
+    both ears lose 40 % of the highs and the level 2 dB (the pinnae face
+    forward): the front/back cue, which equal-power panning alone cannot
+    give.
+
+  The side and the front glide over 60 ms per audio block and are
+  interpolated per sample within it, so moving them does not zipper
+  (`fpv_synth_tests` checks the largest sample step while the drone jumps
+  round the head stays the tone's own). Within 1 m of the ear the side
+  fades out, so a listener at the drone (its own camera) hears it centred,
+  like onboard. Onboard the left motors are a little left and the right ones
+  a little right (30 % of the way, was 70 %: the arms' rpm differences
+  pulled the whole drone a few dB to one side), so a damaged prop is heard
+  on its side and the drone stays centred. With one channel there are no
+  sides (the ears' delay would only comb-filter the sum); the behind cue
+  stays. The reverberation's two outputs are two orthogonal sums of its
+  combs, each through its own pair of all-passes (Freeverb's stereo spread,
+  23 samples): one chain tapped after one and after two all-passes made the
+  room 3 to 4 dB louder on the right.
+
 Probing costs nothing until the host pulls audio (`fpv_audio_read`).
-Directivity (the rotors are louder below) and the ear's head shadow are
-left out. Sources: ISO 9613-1:1993; Z. Maekawa, "Noise reduction by
+Directivity (the rotors are louder below), the pinnae's elevation cues and
+HRTFs are left out. Sources: ISO 9613-1:1993; Z. Maekawa, "Noise reduction by
 screens" (1965); the mass law of sound insulation; and quadcopter noise
 measurements (blade-pass harmonics dominate up to about 6 kHz, broadband
 above).
@@ -852,6 +924,109 @@ each game builds it from whatever its own build system knows.
 The tab ends with the credits and licenses: libfpv's GPL-3.0-or-later and
 what it means for mods, Betaflight, SimITL, Dear ImGui, SDL3 (native),
 libwebsockets (native), {fmt} and nlohmann/json.
+
+### D36. The RC link: ExpressLRS packets, LQ and dynamic power (`src/rc/rc_link.*`, patch `0013`)
+
+Before this the radio link was perfect unless the radio was unplugged
+(`radioLost`). The option (off by default, like the video noise) simulates
+an ExpressLRS link packet by packet. A real link degrades through stale
+sticks and a falling LQ before it fails, and that is what pilots learn to
+read.
+
+**The budget** (`Flight::updateVideo`, every step, for the next step's
+packets): TX power + 2 dBi (the radio's dipole, at the pilot's chest, 1.3 m)
++ the receiver's antenna − free-space loss − the two-ray ground loss (both
+at the band's wavelength, the video link's functions) − obstruction − 8 dB
+system loss (polarisation, the carbon frame detuning, hands round the
+radio). The receiver's dipole sits at the back of the frame pointing back
+and down. Its doughnut null is along that axis, and the frame, battery and
+stack shadow it by up to 8 dB at 2.4 GHz (3 dB at 900 MHz) when the pilot
+is ahead of the drone. 900 MHz bends round obstacles of the size of the
+frame and a body, about 3 to 5 dB better than 2.4 GHz in the off-body
+measurements. With these numbers, 100 mW at 2.4 GHz 500 Hz reaches the
+sensitivity limit at about 4.5 km in the open (drone 30 m up). Fades take
+packets before that, and pilots report a few km.
+
+**Obstruction** reuses the video link's rays (D34), both the simulation's
+own world and the host raycast probe in `fpv_drone_tick`: the direct ray's
+blockage, the four Fresnel-zone paths and the obstacle's depth. Only the
+cost is per band. At 2.4 GHz it is 8 dB plus 0.35 dB/m of depth, capped at
+35 dB. At 900 MHz it is 4 dB plus 0.17 dB/m, capped at 25 dB. A wall at
+2.4 GHz costs 2.5-4 dB for drywall, 3-8 for brick and 10-22 for concrete;
+at 900 MHz about half (1-2, 2-3.5, 10-12). Vegetation is 0.34 dB/m at
+2.1 GHz and 0.17 dB/m at 950 MHz (ITU-R P.833), which matches Weissberger's
+~10 dB vs ~7.5 dB through 20 m of trees. The caps follow P.833's maximum
+attenuation (26-34 dB). The Fresnel offsets are at the 5.8 GHz zone's
+radius, narrower than 2.4 GHz's (1.5×) and 900 MHz's (2.5×), so partial
+blockage at the lower bands is a little under-counted. That is the price
+of sharing the rays.
+
+**Packets** (`RcLink`). SimITL's receiver delivers one packet per interval
+at the mode's rate (`setRcPacketRate`, patch SimITL `0018`) and asks libfpv
+for each one (`setRcPacketLossHook`). The packet sees the mean received
+power plus fading: a Gauss-Markov sum of scattered paths with the Doppler's
+coherence time (Clarke, `0.423 / f_d`), the direct path on top with the
+probe's Rician K, and 2 dB of log-normal shadowing over 0.5 s. Its chance
+of arriving is a logistic of the margin over the mode's sensitivity limit,
+84 % at the limit, 99 % 2 dB above, under 1 % 4 dB below. LoRa's
+packet-error waterfall is about that steep. A lost packet reports
+`RX_FRAME_DROPPED`, so Betaflight keeps the last sticks. Its own RXLOSS
+(150 ms) and failsafe stages follow without libfpv doing anything more. As
+in ELRS, the receiver drops the sync after 1 s without a packet, reports
+LQ 0, and needs 0.3 s of good link to find it again.
+
+The modes (`fpv_rc_link_mode`) are ELRS's: sensitivity limits and the RFMD
+numbers the OSD shows come from the ELRS 4.x table on expresslrs.org
+(Signal Health). F1000 is -104 dBm (RFMD 33). 2.4 GHz 500/250/150/50 Hz are
+-105/-108/-112/-115 (29/27/24/21). 900 MHz 200/100/50/25 Hz are
+-112/-117/-120/-123 (5/2/1/0). The SNR a LoRa packet needs follows the
+spreading factor (SF5 -2.5 dB, each step 2.5 dB lower), so the reported SNR
+is the RSSI over `sensitivity − that`, saturating at +13 dB like the
+radios' estimate.
+
+**Dynamic power** follows expresslrs.org (Dynamic Transmit Power). The TX
+starts at the lowest level and acts on each telemetry packet the receiver
+sends back. libfpv sends 4 a second, at the TX's power up to 100 mW, over
+the same, reciprocal path, which can also be lost:
+
+- it lowers one level when SNR ≥ the mode's down threshold (FLRC: RSSI ≥
+  -83 dBm) at LQ ≥ 95;
+- it raises one level when SNR ≤ the up threshold (FLRC: ≤ -89 dBm), or
+  when LQ < 85;
+- it jumps to the maximum when LQ < 50, on a sudden drop (15 points under
+  its average), or when telemetry is lost while armed;
+- after a missed telemetry packet, the next one changes nothing, and each
+  miss after the second raises a level;
+- while disarmed it holds its level without telemetry (a battery swap).
+
+The thresholds for 500/250/150 Hz and 900 MHz 200 Hz are the documented
+ones. The slower rates keep the same spacing above their lower SNR floor.
+Fixed power (dynamic off) sits at the maximum. Levels are ELRS's: 10, 25,
+50, 100, 250, 500, 1000 mW.
+
+**Betaflight** gets the statistics like an ELRS receiver's CRSF link
+statistics frame: `bfb_rc_link_stats` switches `rssiSource` and
+`linkQualitySource` to CRSF while the link is simulated (restored when it
+is off, so the default LQ stays the one Betaflight counts itself), then
+sets LQ, the RF mode, RSSI %, RSSI dBm, RSNR and the uplink TX power. The
+OSD's `RFMD:LQ`, RSSI dBm, RSNR and TX power elements, their warnings and
+the post-flight minimums all work. The SITL target has no CRSF receiver, so
+Betaflight compiled `USE_RX_RSSI_DBM` out. Patch `0013` keeps it in
+simulator builds. It is one line in `common_post.h` and does not change
+any parameter group's layout (the alarm field is unconditional).
+
+Not modelled: the pilot's own body between the radio and the drone (libfpv
+doesn't know which way he faces; up to ~10 dB at 2.4 GHz behind him),
+antenna diversity, interference from other links, and ELRS's
+switch/telemetry ratio settings.
+
+Sources: expresslrs.org, "Signal Health" (packet rates, sensitivity
+limits, RFMD, LQ/RSSI/SNR) and "Dynamic Transmit Power"; ITU-R P.833
+(vegetation); Weissberger's model; wall losses from vendor and Wi-Fi
+design tables (MaxStream 900 MHz note, NHS wireless building guidance,
+Network World 2.4 GHz); Mellios et al. (Bristol), 2.4 GHz vs 868 MHz
+off-body channels; SMU UAV ground-link measurements at 900 MHz / 2.5 GHz
+(body effect on K).
 
 ## Platforms
 

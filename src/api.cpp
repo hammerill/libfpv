@@ -82,6 +82,10 @@ void loadSettings() {
         s.windStrength = std::clamp(j.value("windStrength", s.windStrength), 0.0f, 2.0f);
         s.batteryDrain = j.value("batteryDrain", s.batteryDrain);
         s.damage = j.value("damage", s.damage);
+        s.rcLink = j.value("rcLink", s.rcLink);
+        s.rcLinkMode = std::clamp(j.value("rcLinkMode", s.rcLinkMode), 0, FPV_RC_LINK_MODE_COUNT - 1);
+        s.rcLinkMaxPowerMw = std::clamp(j.value("rcLinkMaxPowerMw", s.rcLinkMaxPowerMw), 10, 1000);
+        s.rcLinkDynamic = j.value("rcLinkDynamic", s.rcLinkDynamic);
         s.pilotStandIn = j.value("pilotStandIn", s.pilotStandIn);
         s.pilotPose = j.value("pilotPose", s.pilotPose);
         s.standInDistance = j.value("standInDistance", s.standInDistance);
@@ -146,6 +150,10 @@ void saveSettings() {
               {"windStrength", s.windStrength},
               {"batteryDrain", s.batteryDrain},
               {"damage", s.damage},
+              {"rcLink", s.rcLink},
+              {"rcLinkMode", s.rcLinkMode},
+              {"rcLinkMaxPowerMw", s.rcLinkMaxPowerMw},
+              {"rcLinkDynamic", s.rcLinkDynamic},
               {"pilotStandIn", s.pilotStandIn},
               {"pilotPose", s.pilotPose},
               {"standInDistance", s.standInDistance},
@@ -439,6 +447,12 @@ void applySimOptions() {
     Lib &L = lib();
     L.flight.setBatteryDrain(L.settings.batteryDrain);
     L.flight.setDamage(L.settings.damage);
+    RcLinkConfig rc;
+    rc.enabled = L.settings.rcLink;
+    rc.mode = L.settings.rcLinkMode;
+    rc.maxPowerMw = L.settings.rcLinkMaxPowerMw;
+    rc.dynamicPower = L.settings.rcLinkDynamic;
+    L.flight.setRcLinkConfig(rc);
 }
 
 fpv_result resetCurrentPreset() {
@@ -1025,6 +1039,66 @@ FPV_API uint32_t fpv_sim_get_options(void) {
     std::lock_guard<std::recursive_mutex> lock(L.mutex);
     return (L.settings.batteryDrain ? 0u : (uint32_t)FPV_SIM_NO_BATTERY_DRAIN) |
            (L.settings.damage ? 0u : (uint32_t)FPV_SIM_NO_DAMAGE);
+}
+
+// --- the RC link (D36) -------------------------------------------------------------
+
+FPV_API void fpv_rc_link_config_defaults(fpv_rc_link_config *c) {
+    if (!c) return;
+    std::memset(c, 0, sizeof(*c));
+    c->struct_size = sizeof(*c);
+    c->enabled = 0;
+    c->mode = FPV_RC_LINK_2G4_500HZ;
+    c->max_power_mw = 250;
+    c->dynamic_power = 1;
+}
+
+FPV_API fpv_result fpv_rc_link_set_config(const fpv_rc_link_config *c) {
+    Lib &L = lib();
+    std::lock_guard<std::recursive_mutex> lock(L.mutex);
+    if (!c || c->struct_size < sizeof(fpv_rc_link_config))
+        return setError(FPV_ERROR_ABI_MISMATCH, "set config->struct_size = sizeof(fpv_rc_link_config)");
+    if (c->mode >= FPV_RC_LINK_MODE_COUNT) return setError(FPV_ERROR_INVALID_ARGUMENT, "unknown RC link mode %u", c->mode);
+    L.settings.rcLink = c->enabled != 0;
+    L.settings.rcLinkMode = (int)c->mode;
+    L.settings.rcLinkMaxPowerMw = std::clamp((int)std::min<uint32_t>(c->max_power_mw, 1000), 10, 1000);
+    L.settings.rcLinkDynamic = c->dynamic_power != 0;
+    applySimOptions();
+    if (L.initialized) saveSettings();
+    return FPV_OK;
+}
+
+FPV_API fpv_result fpv_rc_link_get_config(fpv_rc_link_config *c) {
+    Lib &L = lib();
+    std::lock_guard<std::recursive_mutex> lock(L.mutex);
+    if (!c || c->struct_size < sizeof(fpv_rc_link_config))
+        return setError(FPV_ERROR_ABI_MISMATCH, "set config->struct_size = sizeof(fpv_rc_link_config)");
+    c->enabled = L.settings.rcLink ? 1 : 0;
+    c->mode = (uint32_t)L.settings.rcLinkMode;
+    c->max_power_mw = (uint32_t)kRcPowerLevels[rcPowerLevel(L.settings.rcLinkMaxPowerMw)];
+    c->dynamic_power = L.settings.rcLinkDynamic ? 1 : 0;
+    return FPV_OK;
+}
+
+FPV_API fpv_result fpv_rc_link_get_state(fpv_rc_link_state *st) {
+    Lib &L = lib();
+    std::lock_guard<std::recursive_mutex> lock(L.mutex);
+    if (!st || st->struct_size < sizeof(fpv_rc_link_state))
+        return setError(FPV_ERROR_ABI_MISMATCH, "set state->struct_size = sizeof(fpv_rc_link_state)");
+    FlightSnapshot prev, cur;
+    double prevWall, curWall;
+    L.runner.snapshots(prev, prevWall, cur, curWall);
+    const RcLinkStatus &r = cur.rcLink;
+    const RcLinkMode &m = rcLinkMode(L.settings.rcLinkMode);
+    st->enabled = cur.rcLinkOn ? 1 : 0;
+    st->connected = r.connected ? 1 : 0;
+    st->link_quality = r.lq;
+    st->rssi_dbm = r.rssiDbm;
+    st->snr_db = r.snrDb;
+    st->tx_power_mw = (float)r.txPowerMw;
+    st->sensitivity_dbm = m.sensitivityDbm;
+    st->packet_rate_hz = m.rateHz;
+    return FPV_OK;
 }
 
 FPV_API fpv_result fpv_pilot_set_support(uint32_t features, float standIn, float standInReturn) {

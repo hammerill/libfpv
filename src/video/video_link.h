@@ -57,10 +57,11 @@ struct VideoSpec {
 VideoSpec videoSpec(const DronePreset &p);
 
 // --- the link budget (pure, tested) ---------------------------------------
-float freeSpaceLossDb(float distM);
+// Shared with the RC link (rc/rc_link.h), which passes its own wavelength.
+float freeSpaceLossDb(float distM, float wavelengthM = kVideoWavelength);
 // Ground reflection: beyond the two-ray breakpoint (4 h1 h2 / lambda) the
 // loss grows at 40 dB/decade instead of 20 (rough ground, 0.7 of it).
-float groundLossDb(float distM, float txHeightM, float rxHeightM);
+float groundLossDb(float distM, float txHeightM, float rxHeightM, float wavelengthM = kVideoWavelength);
 // The VTX antenna, on the back of the frame pointing up and back: a dipole's
 // doughnut with its null along the antenna (drone-local direction to the
 // pilot, X right, Y up, Z forward).

@@ -31,6 +31,7 @@
 #include "osd/osd.h"
 #include "osd/osd_elements.h"
 #include "drivers/barometer/barometer_virtual.h"
+#include "rx/rx.h"
 #include "pg/pg.h"
 #include "sensors/battery.h"
 #include "scheduler/scheduler.h"
@@ -438,4 +439,65 @@ void bfb_baro_update(float up)
 {
     const float pressure = 101325.0f * powf(1.0f - up * 100.0f / 4433000.0f, 1.0f / 0.190295f);
     virtualBaroSet((int32_t)lrintf(pressure), 2500);
+}
+
+/* ---------------------------------------------------------------------------
+ * The simulated RC link (D36). Betaflight takes link statistics from the
+ * receiver protocol only when the sources say so (rx/crsf.c sets them for a
+ * CRSF receiver); the SITL receiver has none, so the sources are switched to
+ * CRSF while libfpv reports, and restored after.
+ * ------------------------------------------------------------------------- */
+
+static bool rcLinkReporting = false;
+static rssiSource_e rcLinkSavedRssiSource;
+static linkQualitySource_e rcLinkSavedLqSource;
+
+void bfb_rc_link_stats(int lq, int rfMode, int rssiDbm, int snrDb, int txPowerMw)
+{
+    if (!rcLinkReporting) {
+        rcLinkSavedRssiSource = rssiSource;
+        rcLinkSavedLqSource = linkQualitySource;
+        rcLinkReporting = true;
+    }
+    /* every step: a reboot's rxInit may have set them again */
+    rssiSource = RSSI_SOURCE_RX_PROTOCOL_CRSF;
+    linkQualitySource = LQ_SOURCE_RX_PROTOCOL_CRSF;
+    rssiDbm = constrain(rssiDbm, -130, 0);
+    setRssi(scaleRange(rssiDbm, -130, 0, 0, RSSI_MAX_VALUE), RSSI_SOURCE_RX_PROTOCOL_CRSF);
+#ifdef USE_RX_RSSI_DBM
+    setRssiDbm(rssiDbm, RSSI_SOURCE_RX_PROTOCOL_CRSF);
+#endif
+#ifdef USE_RX_RSNR
+    setRsnr(constrain(snrDb, -30, 20));
+#else
+    UNUSED(snrDb);
+#endif
+    setLinkQualityDirect(constrain(lq, 0, 100));
+#ifdef USE_RX_LINK_QUALITY_INFO
+    rxSetRfMode(constrain(rfMode, 0, 255));
+#else
+    UNUSED(rfMode);
+#endif
+#ifdef USE_RX_LINK_UPLINK_POWER
+    rxSetUplinkTxPwrMw(constrain(txPowerMw, 0, 65535));
+#else
+    UNUSED(txPowerMw);
+#endif
+}
+
+void bfb_rc_link_release(void)
+{
+    if (!rcLinkReporting) {
+        return;
+    }
+    rcLinkReporting = false;
+    rssiSource = rcLinkSavedRssiSource;
+    linkQualitySource = rcLinkSavedLqSource;
+    setRssiDirect(0, rssiSource);
+#ifdef USE_RX_LINK_QUALITY_INFO
+    rxSetRfMode(0);
+#endif
+#ifdef USE_RX_LINK_UPLINK_POWER
+    rxSetUplinkTxPwrMw(0);
+#endif
 }

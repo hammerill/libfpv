@@ -84,13 +84,13 @@ VideoSpec videoSpec(const DronePreset &p) {
 
 // --- link budget -------------------------------------------------------------
 
-float freeSpaceLossDb(float distM) {
+float freeSpaceLossDb(float distM, float wavelengthM) {
     float d = std::max(distM, 0.05f);
-    return 20.0f * std::log10(4 * kPi * d / kVideoWavelength);
+    return 20.0f * std::log10(4 * kPi * d / wavelengthM);
 }
 
-float groundLossDb(float distM, float txHeightM, float rxHeightM) {
-    float bp = 4.0f * std::max(txHeightM, 0.05f) * std::max(rxHeightM, 0.05f) / kVideoWavelength;
+float groundLossDb(float distM, float txHeightM, float rxHeightM, float wavelengthM) {
+    float bp = 4.0f * std::max(txHeightM, 0.05f) * std::max(rxHeightM, 0.05f) / wavelengthM;
     if (distM <= bp) return 0.0f;
     return 0.7f * 20.0f * std::log10(distM / bp);
 }

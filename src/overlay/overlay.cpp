@@ -3,6 +3,7 @@
 #include "overlay/overlay.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -11,6 +12,7 @@
 #include "imgui.h"
 #include "lib.h"
 #include "osd/osd.h"
+#include "overlay/osd_element_names.h"
 #include "util/build_info.h"
 #include "util/log.h"
 #include "web/web.h"
@@ -1046,6 +1048,57 @@ void Overlay::tabDrone() {
         saveSettings();
     }
 
+    // the RC link (D36), off by default
+    sectionTitle("RC link");
+    bool rcChanged = ImGui::Checkbox("Simulate the radio link (ExpressLRS)", &L.settings.rcLink);
+    ImGui::TextDisabled(L.settings.rcLink
+                            ? "Range, walls, trees and the frame cost packets: stale sticks, RXLOSS, failsafe."
+                            : "A perfect link: every packet arrives, however far.");
+    if (L.settings.rcLink) {
+        const char *modeName = rcLinkMode(L.settings.rcLinkMode).name;
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16);
+        if (ImGui::BeginCombo("Packet rate", modeName)) {
+            for (int m = 0; m < FPV_RC_LINK_MODE_COUNT; m++) {
+                const RcLinkMode &mode = rcLinkMode(m);
+                char label[96];
+                std::snprintf(label, sizeof label, "%s, %.0f dBm", mode.name, mode.sensitivityDbm);
+                if (ImGui::Selectable(label, m == L.settings.rcLinkMode)) {
+                    L.settings.rcLinkMode = m;
+                    rcChanged = true;
+                }
+            }
+            ImGui::EndCombo();
+        }
+        int level = rcPowerLevel(L.settings.rcLinkMaxPowerMw);
+        char power[16];
+        std::snprintf(power, sizeof power, "%d mW", kRcPowerLevels[level]);
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16);
+        if (ImGui::SliderInt(L.settings.rcLinkDynamic ? "Max power" : "Power", &level, 0, kRcPowerLevelCount - 1, power)) {
+            L.settings.rcLinkMaxPowerMw = kRcPowerLevels[level];
+            rcChanged = true;
+        }
+        rcChanged |= ImGui::Checkbox("Dynamic power", &L.settings.rcLinkDynamic);
+        ImGui::TextDisabled(L.settings.rcLinkDynamic ? "From 10 mW close by up to the maximum as the link needs it."
+                                                     : "Always at that power.");
+        FlightSnapshot prev, cur;
+        double prevWall, curWall;
+        L.runner.snapshots(prev, prevWall, cur, curWall);
+        if (cur.rcLinkOn) {
+            const RcLinkStatus &st = cur.rcLink;
+            if (st.connected)
+                ImGui::Text("LQ %3.0f%%   RSSI %4.0f dBm   SNR %3.0f dB   %d mW", st.lq, st.rssiDbm, st.snrDb,
+                            st.txPowerMw);
+            else
+                ImGui::TextColored(ImVec4(1, 0.4f, 0.3f, 1), "No link: the receiver is searching (%d mW)",
+                                   st.txPowerMw);
+        }
+        ImGui::TextDisabled("Show it in the OSD: Link quality, RSSI dBm, RSNR and TX uplink power.");
+    }
+    if (rcChanged) {
+        applySimOptions();
+        saveSettings();
+    }
+
     sectionTitle("Reset");
     // confirmation popups; `what` returns the status line
     auto confirm = [&](const char *button, const char *title, const char *text, fpv_result (*what)(),
@@ -1218,35 +1271,71 @@ void Overlay::tabOsd() {
         L.settings.osdStyle = style;
         saveSettings();
     }
+    // Every element this Betaflight build has: the osd_*_pos settings its
+    // CLI reports (the cache watches "osd_"), named and grouped as in the
+    // Configurator (osd_element_names.h); unknown ones fall back to "Other".
     struct E {
-        const char *label, *name;
-    } static const elems[] = {
-        {"Battery voltage", "osd_vbat_pos"},     {"Cell voltage", "osd_avg_cell_voltage_pos"},
-        {"Current", "osd_current_pos"},          {"mAh used", "osd_mah_drawn_pos"},
-        {"Flight time", "osd_tim_2_pos"},        {"On time", "osd_tim_1_pos"},
-        {"Flight mode", "osd_flymode_pos"},      {"Throttle", "osd_throttle_pos"},
-        {"Crosshairs", "osd_crosshairs_pos"},    {"Artificial horizon", "osd_ah_pos"},
-        {"Horizon sidebars", "osd_ah_sbar_pos"}, {"Warnings", "osd_warnings_pos"},
-        {"Craft name", "osd_craft_name_pos"},    {"Speed", "osd_gps_speed_pos"},
-        {"Altitude", "osd_altitude_pos"},        {"Disarmed", "osd_disarmed_pos"},
-        {"G-force", "osd_g_force_pos"},          {"Power", "osd_power_pos"},
-        {"Stick overlay L", "osd_stick_overlay_left_pos"}, {"Stick overlay R", "osd_stick_overlay_right_pos"},
-#if defined(LIBFPV_KAMIKAZE)
-        {"Bomb status", "osd_custom_msg0_pos"},  // the warhead state (Flight::step)
-#endif
+        std::string name, label;
+        int group, pos;
     };
-    const int n = (int)(sizeof(elems) / sizeof(elems[0]));
-    ImGui::BeginChild("elems", ImVec2(ImGui::GetFontSize() * 13, 0), ImGuiChildFlags_Borders);
-    for (int i = 0; i < n; i++) {
-        int pos = m_bf.num(elems[i].name, 0);
-        bool vis = (pos & 0x800) != 0;
-        ImGui::PushID(i);
-        if (ImGui::Checkbox("##v", &vis)) m_bf.set(elems[i].name, vis ? (pos | 0x800) : (pos & ~0x800), true);
-        ImGui::SameLine();
-        if (ImGui::Selectable(elems[i].label, m_osdSelected == i)) m_osdSelected = i;
-        ImGui::PopID();
+    std::vector<E> elems;
+    for (auto &kv : m_bf.values()) {
+        if (!isOsdElementSetting(kv.first)) continue;
+        elems.push_back({kv.first, osdElementLabel(kv.first), osdElementGroup(kv.first), m_bf.num(kv.first, 0)});
+    }
+    std::sort(elems.begin(), elems.end(), [](const E &a, const E &b) {
+        if (a.group != b.group) return a.group < b.group;
+        int oa = osdElementOrder(a.name), ob = osdElementOrder(b.name);
+        return oa != ob ? oa < ob : a.label < b.label;
+    });
+    // visible = the active OSD profile's bit (osd.h OSD_PROFILE_FLAG)
+    const int profileFlag = osdProfileFlag(m_bf.has("osd_profile") ? m_bf.num("osd_profile", 1) : 1);
+    auto lower = [](std::string s) {
+        for (char &c : s) c = (char)std::tolower((unsigned char)c);
+        return s;
+    };
+    const std::string filter = lower(m_osdFilter);
+    auto matches = [&](const E &e) {
+        return filter.empty() || lower(e.label).find(filter) != std::string::npos ||
+               e.name.find(filter) != std::string::npos;
+    };
+    const float listW = ImGui::GetFontSize() * 16;
+    ImGui::BeginGroup();
+    char fbuf[64];
+    std::snprintf(fbuf, sizeof fbuf, "%s", m_osdFilter.c_str());
+    ImGui::SetNextItemWidth(listW);
+    if (ImGui::InputTextWithHint("##osdfilter", "Filter elements", fbuf, sizeof fbuf)) m_osdFilter = fbuf;
+    ImGui::BeginChild("elems", ImVec2(listW, 0), ImGuiChildFlags_Borders);
+    if (elems.empty())
+        ImGui::TextWrapped("%s", m_bf.busy() ? "The Betaflight Configurator is in CLI mode; leave its CLI tab to edit "
+                                               "the OSD here."
+                                             : "Reading Betaflight's OSD elements...");
+    for (int g = 0; g < OSD_GROUP_COUNT; g++) {
+        int shown = 0, on = 0;
+        for (auto &e : elems) {
+            if (e.group != g || !matches(e)) continue;
+            shown++;
+            if (e.pos & profileFlag) on++;
+        }
+        if (!shown) continue;
+        char head[96];
+        std::snprintf(head, sizeof head, "%s (%d/%d shown)###osdgroup%d", osdGroupName(g), on, shown, g);
+        if (!filter.empty()) ImGui::SetNextItemOpen(true, ImGuiCond_Always);
+        if (!ImGui::CollapsingHeader(head, g == OSD_GROUP_GOGGLES || g == OSD_GROUP_OTHER ? 0 : ImGuiTreeNodeFlags_DefaultOpen))
+            continue;
+        for (auto &e : elems) {
+            if (e.group != g || !matches(e)) continue;
+            bool vis = (e.pos & profileFlag) != 0;
+            ImGui::PushID(e.name.c_str());
+            if (ImGui::Checkbox("##v", &vis)) m_bf.set(e.name, vis ? (e.pos | profileFlag) : (e.pos & ~profileFlag), true);
+            ImGui::SameLine();
+            if (ImGui::Selectable(e.label.c_str(), m_osdSelected == e.name)) m_osdSelected = e.name;
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", e.name.c_str());
+            ImGui::PopID();
+        }
     }
     ImGui::EndChild();
+    ImGui::EndGroup();
     ImGui::SameLine();
     ImGui::BeginGroup();
     ImGui::TextWrapped("Select an element, then click where it should go. Live preview:");
@@ -1268,17 +1357,27 @@ void Overlay::tabOsd() {
             dl->AddImage(ImTextureRef((ImTextureID)FPV_TEXTURE_OSD_FONT), a, b, uv0, uv1);
         }
     }
+    const bool haveSel = m_bf.has(m_osdSelected);
+    if (haveSel) {
+        // outline the selected element's cell
+        int sp = m_bf.num(m_osdSelected, 0), sc = osdPosColumn(sp), sr = osdPosRow(sp);
+        if ((sp & profileFlag) && sc < FPV_OSD_COLS && sr < FPV_OSD_ROWS) {
+            ImVec2 a(p0.x + sc * cw, p0.y + sr * chh);
+            dl->AddRect(a, ImVec2(a.x + cw, a.y + chh), IM_COL32(255, 220, 60, 255));
+        }
+    }
     ImGui::InvisibleButton("osdgrid", size);
-    if (ImGui::IsItemClicked()) {
+    if (ImGui::IsItemClicked() && haveSel) {
         ImVec2 m = ImGui::GetIO().MousePos;
         int c = std::clamp((int)((m.x - p0.x) / cw), 0, FPV_OSD_COLS - 1);
         int r = std::clamp((int)((m.y - p0.y) / chh), 0, FPV_OSD_ROWS - 1);
-        int pos = c | (r << 5) | 0x800;
-        m_bf.set(elems[m_osdSelected].name, pos, true);
+        m_bf.set(m_osdSelected, osdPosMoved(m_bf.num(m_osdSelected, 0), c, r, profileFlag), true);
     }
-    int pos = m_bf.num(elems[m_osdSelected].name, 0);
-    ImGui::Text("%s: column %d, row %d%s", elems[m_osdSelected].label, pos & 31, (pos >> 5) & 31,
-                (pos & 0x800) ? "" : " (hidden)");
+    if (haveSel) {
+        int pos = m_bf.num(m_osdSelected, 0);
+        ImGui::Text("%s: column %d, row %d%s", osdElementLabel(m_osdSelected).c_str(), osdPosColumn(pos),
+                    osdPosRow(pos), (pos & profileFlag) ? "" : " (hidden)");
+    }
     ImGui::EndGroup();
 }
 

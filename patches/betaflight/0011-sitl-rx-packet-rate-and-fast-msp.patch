@@ -1,0 +1,35 @@
+diff --git a/src/main/fc/tasks.c b/src/main/fc/tasks.c
+--- a/src/main/fc/tasks.c
++++ b/src/main/fc/tasks.c
+@@ -502,7 +502,14 @@
+     setTaskEnabled(TASK_MAIN, true);
+ 
+     setTaskEnabled(TASK_SERIAL, true);
++#if defined(SIMULATOR_BUILD)
++    // The Configurator waits for each MSP reply before its next request, so
++    // every request cost one serial period (10 ms at the default 100 Hz).
++    // The simulator has the time to spare: 1 kHz at least.
++    rescheduleTask(TASK_SERIAL, TASK_PERIOD_HZ(MAX(serialConfig()->serial_update_rate_hz, 1000)));
++#else
+     rescheduleTask(TASK_SERIAL, TASK_PERIOD_HZ(serialConfig()->serial_update_rate_hz));
++#endif
+ 
+     const bool useBatteryVoltage = batteryConfig()->voltageMeterSource != VOLTAGE_METER_NONE;
+     setTaskEnabled(TASK_BATTERY_VOLTAGE, useBatteryVoltage);
+diff --git a/src/main/rx/rx.c b/src/main/rx/rx.c
+--- a/src/main/rx/rx.c
++++ b/src/main/rx/rx.c
+@@ -542,6 +542,13 @@
+             const uint8_t frameStatus = rxRuntimeState.rcFrameStatusFn(&rxRuntimeState);
+             DEBUG_SET(DEBUG_RX_SIGNAL_LOSS, 1, (frameStatus & RX_FRAME_FAILSAFE));
+             rxDataReceived = (frameStatus & RX_FRAME_COMPLETE) && !(frameStatus & (RX_FRAME_FAILSAFE | RX_FRAME_DROPPED));
++#if defined(SIMULATOR_BUILD)
++            // The simulator's receiver is checked on every scheduler pass
++            // but delivers packets at the link's packet rate: a pass with no
++            // news is neither a good nor a lost packet. Lost packets come
++            // back as RX_FRAME_DROPPED.
++            if (frameStatus != RX_FRAME_PENDING || rxRuntimeState.rxProvider != RX_PROVIDER_UDP)
++#endif
+             setLinkQuality(rxDataReceived, currentDeltaTimeUs);
+             auxiliaryProcessingRequired |= (frameStatus & RX_FRAME_PROCESSING_REQUIRED);
+         }

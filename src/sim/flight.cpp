@@ -185,6 +185,10 @@ void Flight::spawn(const DronePreset &preset, Vec3 pos, Quat rot, Vec3 pilotPos)
     m_pilotPos = pilotPos;
     m_portalPasses = 0;  // counted per drone
     m_lastPortal = -1;
+    m_rcLink.reset(m_rcLink.config(), 0x5eed + m_teleports);  // a new drone: a fresh link
+    m_rcPathGain = -60;
+    m_rcLossDb = m_rcLossTarget = 0;
+    m_rcLastPacket = -1;
     teleport(pos, rot);
 }
 
@@ -729,6 +733,8 @@ void Flight::updateVideo(float dt) {
             videoObstruction(v.centre, v.offsets, depth, targetLoss, targetK);
             m_videoTarget[0] = targetLoss;
             m_videoTarget[1] = targetK;
+            // the RC link sees the same obstacles at its own band (D36)
+            m_rcLossTarget = rcObstructionDb(rcLinkMode(m_rcLink.config().mode).band, v.centre, v.offsets, depth);
         }
         // the game's world, probed through its raycast on the host thread:
         // whichever blocks more
@@ -737,13 +743,17 @@ void Flight::updateVideo(float dt) {
             m_videoTarget[0] = std::max(m_videoTarget[0], hostLoss);
             m_videoTarget[1] = std::min(m_videoTarget[1], (float)m_hostVideoK);
         }
+        float hostRcLoss = m_hostRcLoss;
+        if (hostRcLoss >= 0) m_rcLossTarget = std::max(m_rcLossTarget, hostRcLoss);
     } else {
         m_videoTarget[0] = 0;
         m_videoTarget[1] = 10;
+        m_rcLossTarget = 0;
     }
     float a = 1 - std::exp(-std::max(dt, 0.0f) / 0.12f);
     v.lossDb += (m_videoTarget[0] - v.lossDb) * a;
     v.kFactor += (m_videoTarget[1] - v.kFactor) * a;
+    m_rcLossDb += (m_rcLossTarget - m_rcLossDb) * a;
 
     const VtxSettings &vtx = m_preset.vtx;
     float powerDbm = 10.0f * std::log10(std::max(vtx.powerMw, 0.01f));
@@ -763,6 +773,78 @@ void Flight::updateVideo(float dt) {
     m_snap.videoSignal = signal;
     m_snap.videoNoise = 1.0f - signal;
     m_snap.videoBreakup = std::clamp((10.0f - cnr) / 12.0f, 0.0f, 1.0f);
+
+    // The RC link's path (D36), for the next step's packets: the radio at
+    // the pilot's chest, the receiver's antenna on the frame, the same
+    // ground and obstacles at the link's wavelength.
+    const RcBand band = rcLinkMode(m_rcLink.config().mode).band;
+    const float lambda = rcWavelength(band);
+    Vec3 dr = m_pos - (m_pilotPos + Vec3{0, kRcTxHeight, 0});
+    float rdist = length(dr);
+    m_rcPathGain = kRcTxGainDbi + rcRxAntennaGainDb(band, rotate(conj(m_rot), -dr)) - freeSpaceLossDb(rdist, lambda) -
+                   groundLossDb(rdist, std::max(height, 0.1f), kRcTxHeight, lambda) - m_rcLossDb - kRcSystemLossDb;
+    m_rcK = k;
+    m_rcDoppler = length(m_vel) / lambda;
+}
+
+void Flight::setRcLinkConfig(const RcLinkConfig &cfg) {
+    std::lock_guard<std::mutex> lock(m_rcMutex);
+    m_rcIn = cfg;
+    m_rcChanged = true;
+}
+
+// The simulated link decides each packet SimITL's receiver delivers (D36).
+static Flight *g_rcFlight = nullptr;
+static bool rcPacketLost() { return g_rcFlight && !g_rcFlight->rcPacketArrives(); }
+
+// Before Betaflight's step: the player's setting, the packet rate, and the
+// inputs the packets of this step see.
+void Flight::updateRcLink() {
+    bool changed;
+    {
+        std::lock_guard<std::mutex> lock(m_rcMutex);
+        changed = m_rcChanged;
+        if (changed) m_rcLink.configure(m_rcIn);
+        m_rcChanged = false;
+    }
+    if (changed) {
+        g_rcFlight = this;
+        SimITL::BF::setRcPacketLossHook(&rcPacketLost);
+        const RcLinkConfig &c = m_rcLink.config();
+        SimITL::BF::setRcPacketRate(c.enabled ? rcLinkMode(c.mode).rateHz : 500.0f);
+    }
+    m_rcInputs = RcLinkInputs{};
+    m_rcInputs.pathGainDb = m_rcPathGain;
+    m_rcInputs.kFactor = m_rcK;
+    m_rcInputs.dopplerHz = m_rcDoppler;
+    m_rcInputs.armed = bfb_is_armed();
+#if defined(LIBFPV_KAMIKAZE)
+    m_rcInputs.alive = !m_warhead.detonated();
+#endif
+    if (!m_rcLink.config().enabled || !m_active) m_rcLink.packet(RcLinkInputs{});  // a perfect link's status
+}
+
+// SimITL's packet slot (inside simitl_update): whether this packet gets
+// through. Lost: Betaflight keeps the last sticks; long enough, RXLOSS.
+bool Flight::rcPacketArrives() {
+    if (!m_rcLink.config().enabled || !m_active) return true;
+    float elapsed = m_rcLastPacket >= 0 ? (float)(m_simTime - m_rcLastPacket) : 0.0f;
+    m_rcLastPacket = m_simTime;
+    return m_rcLink.packet(m_rcInputs, elapsed);
+}
+
+// The link statistics an ELRS receiver reports over CRSF, for Betaflight's
+// OSD (link quality as RFMD:LQ, RSSI dBm, RSNR, TX power) and warnings.
+void Flight::pushRcLinkStats() {
+    if (!m_rcLink.config().enabled || !m_active) {
+        if (m_rcPushed) bfb_rc_link_release();
+        m_rcPushed = false;
+        return;
+    }
+    const RcLinkStatus &st = m_rcLink.status();
+    bfb_rc_link_stats((int)std::lround(st.lq), rcLinkMode(m_rcLink.config().mode).rfMode, (int)std::lround(st.rssiDbm),
+                      (int)std::lround(st.snrDb), st.txPowerMw);
+    m_rcPushed = true;
 }
 
 void Flight::setHome(const Vec3 *home) {
@@ -826,6 +908,7 @@ void Flight::step(float dt, const float channels[kChannelCount], bool radioLost)
         }
     }
     // --- inputs for SimITL ----------------------------------------------
+    updateRcLink();
     for (int i = 0; i < kChannelCount; i++) m_input.rcData[i] = std::clamp(channels[i], -1.0f, 1.0f);
     for (int i = kChannelCount; i < 16; i++) m_input.rcData[i] = -1.0f;  // unused channels
 #if defined(LIBFPV_KAMIKAZE)
@@ -869,6 +952,7 @@ void Flight::step(float dt, const float channels[kChannelCount], bool radioLost)
     const double charge = SimITL::Sim::getInstance().mSimState.batteryState.batCapacity;
     if (!m_damage) keepMotors();
     simitl_update(m_input);
+    pushRcLinkStats();
     if (!drain) keepBattery(charge);
     if (!m_damage) keepMotors();
     // after the update: arming inside it may have just moved home
@@ -990,6 +1074,8 @@ void Flight::step(float dt, const float channels[kChannelCount], bool radioLost)
         m_snap.osdRevision++;
     }
     for (int i = 0; i < kChannelCount; i++) m_snap.channels[i] = m_input.rcData[i];
+    m_snap.rcLinkOn = m_active && m_rcLink.config().enabled;
+    m_snap.rcLink = m_rcLink.status();
     if (m_active) {
         float t;
         Vec3 n;

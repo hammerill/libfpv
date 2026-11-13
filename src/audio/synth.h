@@ -18,7 +18,8 @@ struct Hearing {
     float gain = 1;           // spherical spreading, and the walls' broadband loss
     float airCutoff = 20000;  // Hz, air absorption over the distance
     float wallCutoff = 20000; // Hz, what gets through or around the walls
-    float pan = 0;            // -1 left .. 1 right of the ear
+    float pan = 0;            // -1 left .. 1 right of the ear (the drone's direction, sideways component)
+    float front = 1;          // 1 ahead of the ear .. -1 behind it (the direction's forward component)
     float groundDelay = 0;    // s, extra path of the reflection off the ground
     float groundGain = 0;
     float echoDelay = 0;      // s, extra path of a slap echo off walls near the ear
@@ -53,6 +54,7 @@ public:
 
 private:
     float delayTap(double delaySamples) const;
+    float earTap(float delaySamples) const;
 
     std::mutex m_mutex;  // short critical sections only (parameter copy)
     AudioParams m_target, m_cur;
@@ -82,11 +84,19 @@ private:
     float m_groundLp = 0;  // the ground keeps the lows of its reflection
     float m_air = 0, m_wall1 = 0, m_wall2 = 0;  // one-pole low-pass states
     float m_mix = 0;      // glides to hearing.fromPilot
+    // the two ears: the far one hears the direct sound a little later (the
+    // interaural time difference, up to 0.66 ms) and duller (head shadow)
+    static constexpr uint32_t kEarLineSize = 256;  // power of two, > 0.66 ms at 192 kHz
+    float m_earLine[kEarLineSize] = {};
+    uint32_t m_earWrite = 0;
+    float m_shadowL = 0, m_shadowR = 0;  // one-pole low-pass states of each ear
     // reverberation: Schroeder/Freeverb, four damped combs and two all-passes
     static constexpr int kCombs = 4, kAllpasses = 2;
-    std::vector<float> m_comb[kCombs], m_allpass[kAllpasses];
-    uint32_t m_combLen[kCombs] = {}, m_allpassLen[kAllpasses] = {};
-    uint32_t m_combPos[kCombs] = {}, m_allpassPos[kAllpasses] = {};
+    // the all-passes twice, one chain per ear (Freeverb's stereo spread), fed
+    // by two orthogonal sums of the combs: equally loud, decorrelated
+    std::vector<float> m_comb[kCombs], m_allpass[2][kAllpasses];
+    uint32_t m_combLen[kCombs] = {}, m_allpassLen[2][kAllpasses] = {};
+    uint32_t m_combPos[kCombs] = {}, m_allpassPos[2][kAllpasses] = {};
     float m_combLp[kCombs] = {};
 };
 

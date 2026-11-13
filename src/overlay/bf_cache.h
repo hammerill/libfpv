@@ -21,6 +21,8 @@ public:
     bool has(const std::string &name) const { return m_values.count(name) != 0; }
     std::string str(const std::string &name, const std::string &def = "") const;
     int num(const std::string &name, int def = 0) const;
+    // Every setting read so far (the watched queries' matches), by name.
+    const std::map<std::string, std::string> &values() const { return m_values; }
 
     // Writes a value; `save` persists the EEPROM (use on slider release).
     // Returns false while the Configurator owns the CLI.

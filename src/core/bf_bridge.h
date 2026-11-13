@@ -89,6 +89,14 @@ int bfb_features_pending(void);
 void bfb_gps_update(float east, float north, float up, float vEast, float vNorth, float vUp);
 /* Feeds Betaflight's virtual barometer: altitude in metres. */
 void bfb_baro_update(float up);
+/* The simulated RC link's statistics (D36), like an ExpressLRS receiver
+ * reports them over CRSF: link quality 0..100 %, the RF mode (RFMD) the
+ * link quality element shows, RSSI dBm, SNR dB and the transmitter's power
+ * in mW. Call every step while the link is simulated; Betaflight's OSD,
+ * warnings and statistics read them. */
+void bfb_rc_link_stats(int lq, int rfMode, int rssiDbm, int snrDb, int txPowerMw);
+/* Hands link quality and RSSI back to Betaflight's own sources. */
+void bfb_rc_link_release(void);
 /* Makes the home point (same frame) override the one Betaflight sets when
  * arming. Call every step while the host's home applies; when it stops,
  * Betaflight takes the next arming point again. */

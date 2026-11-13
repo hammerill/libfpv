@@ -54,6 +54,11 @@ struct Settings {
     float windStrength = 1.0f;  // scales the weather's wind, 0..2
     bool batteryDrain = true;   // off: FPV_SIM_NO_BATTERY_DRAIN
     bool damage = true;         // off: FPV_SIM_NO_DAMAGE
+    // the RC link (fpv_rc_link_*, D36): off = a perfect link
+    bool rcLink = false;
+    int rcLinkMode = FPV_RC_LINK_2G4_500HZ;
+    int rcLinkMaxPowerMw = 250;
+    bool rcLinkDynamic = true;
     // the pilot character (fpv_pilot_*): the player's choices, applied
     // only where the game supports them; distances in metres, < 0 = the game's
     bool pilotStandIn = true, pilotPose = true;
