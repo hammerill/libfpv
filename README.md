@@ -274,6 +274,9 @@ fpv_global_terminate();                       // on unload / exit
   post-process shader, and lessons from real integrations (GTA IV).
 - `docs/renderers/fpv_render_gl3.h`: a single-header OpenGL 3.3 / ES 3.0
   renderer for the OSD and the overlay.
+- `docs/renderers/fpv_video_gl3.h` and `fpv_video_gl2.h`: the goggles (the
+  fisheye and the video feed) for OpenGL 3.3 / ES 3.0 / WebGL 2, and the same
+  for OpenGL 2.1 / ES 2.0 / WebGL 1 renderers.
 - `examples/standalone/main.cpp`: a complete integration, with a comment at
   the top listing every hook in order.
 - `docs/WEB.md`: compiling a game and its mod into a web page.

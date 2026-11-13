@@ -119,7 +119,8 @@ Draw the OSD and the overlay with `docs/renderers/fpv_render_gl3.h`, and
 define `FPV_GL3_GLES` before including it: OpenGL ES 3.0 and WebGL 2 have
 no base-vertex draws and need the `#version 300 es` shaders. The same
 define makes `docs/renderers/fpv_video_gl3.h` (the lens and the video feed,
-INTEGRATION.md "The video feed") work in WebGL 2. The lens distortion
+INTEGRATION.md "The video feed") work in WebGL 2; a game that renders with
+WebGL 1 or GLES 2 shaders uses `fpv_video_gl2.h` with `FPV_VIDEO_GL2_GLES`. The lens distortion
 shader in INTEGRATION.md works as it is after a `#version 300 es` /
 `precision highp float;` header.
 

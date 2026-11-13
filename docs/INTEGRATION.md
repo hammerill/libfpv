@@ -104,6 +104,13 @@ fpv_video_gl3_draw(&v, &ui, &frame, scene_tex, scene_w, scene_h, fb_w, fb_h, 1);
 fpv_gl3_render(&ui, fpv_overlay_render(dt), fb_w, fb_h);
 ```
 
+A game whose renderer runs on an older context (OpenGL 2.1, which is all a
+legacy macOS context gives, GLES 2 or WebGL 1) uses
+`docs/renderers/fpv_video_gl2.h` instead: the same shaders in GLSL 1.20 /
+GLSL ES 1.00, with no VAOs, `texelFetch` or `gl_VertexID`, and the OSD drawn
+through a callback with the host's own OSD renderer (Super Mario 64 FPV uses
+it). Keep the two headers' shaders in step.
+
 Render the scene with `fov_y_degrees` as the vertical FOV at the screen's
 aspect, as usual. When the picture is 4:3, its middle is used. With the
 resolution effect on, the lens works on the camera's own aspect
