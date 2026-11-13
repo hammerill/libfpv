@@ -53,10 +53,15 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* The one place the version is set: CMakeLists.txt reads these three. */
 #define LIBFPV_VERSION_MAJOR 0
-#define LIBFPV_VERSION_MINOR 1
+#define LIBFPV_VERSION_MINOR 2
 #define LIBFPV_VERSION_PATCH 0
-#define LIBFPV_VERSION_STRING "0.1.0"
+#define LIBFPV_STRINGIFY_(x) #x
+#define LIBFPV_STRINGIFY(x) LIBFPV_STRINGIFY_(x)
+#define LIBFPV_VERSION_STRING                                                  \
+    LIBFPV_STRINGIFY(LIBFPV_VERSION_MAJOR) "." LIBFPV_STRINGIFY(              \
+        LIBFPV_VERSION_MINOR) "." LIBFPV_STRINGIFY(LIBFPV_VERSION_PATCH)
 /* Bumped on any incompatible ABI change. Compare with fpv_abi_version(). */
 #define LIBFPV_ABI_VERSION 1
 

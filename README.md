@@ -292,7 +292,7 @@ third_party/  SimITL, Betaflight, libwebsockets, fmt, SDL, Dear ImGui, nlohmann/
 examples/     fpv_minimal and fpv_standalone
 tests/        test suite and real-quad `diff all` fixtures
 cmake/        core build, file embedding, toolchains, symbol export lists
-tools/        patch series helper, WebAssembly symbol localizer
+tools/        patch series helper, version bump, WebAssembly symbol localizer
 ```
 
 ## License

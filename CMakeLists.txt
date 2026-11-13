@@ -1,5 +1,20 @@
 cmake_minimum_required(VERSION 3.24)
-project(libfpv VERSION 0.1.0 LANGUAGES C CXX)
+
+# The version lives only in include/libfpv.h; bump it there.
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/include/libfpv.h" LIBFPV_VERSION_LINES
+  REGEX "^#define LIBFPV_VERSION_(MAJOR|MINOR|PATCH) +[0-9]+$")
+foreach(part MAJOR MINOR PATCH)
+  string(REGEX MATCH "LIBFPV_VERSION_${part} +([0-9]+)" _ "${LIBFPV_VERSION_LINES}")
+  set(LIBFPV_VERSION_${part} "${CMAKE_MATCH_1}")
+  if(LIBFPV_VERSION_${part} STREQUAL "")
+    message(FATAL_ERROR "Can't read LIBFPV_VERSION_${part} from include/libfpv.h")
+  endif()
+endforeach()
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS include/libfpv.h)
+
+project(libfpv
+  VERSION ${LIBFPV_VERSION_MAJOR}.${LIBFPV_VERSION_MINOR}.${LIBFPV_VERSION_PATCH}
+  LANGUAGES C CXX)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
