@@ -201,6 +201,23 @@ FPV_API fpv_result fpv_texture_get(uint64_t id, fpv_texture *out) {
     return setError(FPV_ERROR_NOT_FOUND, "unknown texture id %llu", (unsigned long long)id);
 }
 
+FPV_API float fpv_camera_get_fov(void) {
+    Lib &L = lib();
+    std::lock_guard<std::recursive_mutex> lock(L.mutex);
+    return L.settings.cameraFov > 0 ? L.settings.cameraFov : currentPreset().camera.fovYDeg;
+}
+
+FPV_API fpv_result fpv_camera_set_fov(float degrees) {
+    Lib &L = lib();
+    std::lock_guard<std::recursive_mutex> lock(L.mutex);
+    if (degrees != 0 && !(degrees >= 60 && degrees <= 150))
+        return setError(FPV_ERROR_INVALID_ARGUMENT, "field of view %.1f outside 60..150", degrees);
+    if (degrees == L.settings.cameraFov || (degrees == 0 && L.settings.cameraFov < 0)) return FPV_OK;
+    L.settings.cameraFov = degrees == 0 ? -1 : degrees;
+    saveSettings();
+    return FPV_OK;
+}
+
 FPV_API const fpv_draw_data *fpv_osd_draw_data(const fpv_frame *frame, float width, float height,
                                               fpv_osd_style style) {
     Lib &L = lib();
