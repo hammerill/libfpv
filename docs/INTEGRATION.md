@@ -281,6 +281,57 @@ On the OSD, values update a few times a second and altitude trails the
 drone by up to about a second (DECISIONS D22). Don't build gameplay on
 reading them back; use `fpv_frame` (position, speed, altitude) instead.
 
+## No game UI in FPV
+
+**While the player flies in FPV, the game draws none of its own UI over
+the view.** The FPV view is what the drone's camera sends to the goggles,
+and the only thing a real pilot sees on top of it is the OSD. Hide the
+HUD, the minimap or radar, health, money and wanted level, the crosshair,
+the speedometer, district, street and vehicle names, radio station names,
+pickup and notification text, help boxes, stats boxes and the mod's own
+hint text. Engines draw these from many places (gtasa-fpv hooks the HUD,
+the radio name, pickup text, garage messages and, inside SA's after-fade
+pass, the district name, vehicle name and stats box separately), so check
+every 2D pass the game runs, not only its main HUD call. Show it all again
+when the view leaves FPV (the pilot view, a cutscene, the pause menu).
+
+Leave an element on screen only when the user (the integration's
+maintainer) explicitly asks to keep that element, such as mission
+subtitles or a race timer the game can't be played without. Every element
+kept this way:
+
+- **goes through the video noise, under libfpv's OSD.** While the video
+  feed is on ([The video feed](#the-video-feed)), the element is part of
+  the signal: it gets the same grain, sparklies, softening, roll, digital
+  breakup and colour as the rest of the picture, and goes to snow with it.
+  It must never be drawn crisp on top of a noisy picture. libfpv's OSD
+  stays on top of it.
+- **does not go through the fisheye.** It is flat UI, not something the
+  camera sees, so the lens must not bend it. Most engines draw their UI
+  onto the frame before the integration's lens pass runs, and then it gets
+  the fisheye with the scene. Draw the element into its own transparent
+  screen-sized layer instead (redirect the game's 2D drawing of that
+  element to a render target), and add that layer where the signal pass
+  samples the picture: after the lens (sample the scene at the lens's
+  coordinate, the layer at the undistorted picture coordinate), before
+  the noise and before the OSD. In `fpv_video_gl3.h` terms, the layer is
+  mixed into the colour that `tap()` returns, sampled at `p` rather than
+  at `sceneUv(p)`. With the video feed off it goes over the lens's
+  picture and under the OSD.
+- **disappears with the OSD disable switch** ([OSD disable switch](#osd-disable-switch)).
+- is listed in the mod's README with why it stays.
+
+gtasa-fpv keeps one: the collectibles' message ("Oysters 3 of 50" and the
+horseshoes, tags and snapshots), drawn by `CGarages::PrintMessages`. Its
+hook points the render target at the layer, calls the original, flushes
+`CFont`'s buffer and puts the back buffer back. A layer drawn with the
+game's `SRCALPHA / INVSRCALPHA` blend and the alpha blended
+`ONE / INVSRCALPHA` (`D3DRS_SEPARATEALPHABLENDENABLE`) comes out
+premultiplied with its true coverage, ready to mix in.
+
+The overlay (F8), the pause menu and loading screens are not game UI over
+the flight and are unaffected.
+
 ## OSD disable switch
 
 Pilots put Betaflight's OSD DISABLE mode on a switch to get a clean view
@@ -290,13 +341,12 @@ OSD, so `frame.osd` is blank, and `frame.flags` has
 `FPV_DRONE_OSD_DISABLED`.
 
 **While `FPV_DRONE_OSD_DISABLED` is set, the game must hide all of its own
-UI over the FPV view too.** Normally the game's HUD is already hidden in
-FPV ([Drawing the OSD and the overlay](#drawing-the-osd-and-the-overlay-d3d9-and-other-hooked-renderers)),
-but most games keep a few things on screen while flying: a lap or race
-timer, checkpoint markers, objective text, subtitles, notifications, a
-crosshair, a speedometer, a watermark or the mod's own hint text. The
-switch means "nothing on top of the video", so hide all of it, every frame
-the flag is set, and show it again as soon as the flag clears. The flag
+UI over the FPV view too.** The game's UI is already hidden in FPV
+([No game UI in FPV](#no-game-ui-in-fpv)), but an element the maintainer
+chose to keep (subtitles, a race timer, checkpoint markers) still draws
+with the OSD. The switch means "nothing on top of the video", so hide
+those too, every frame the flag is set, and show them again as soon as the
+flag clears. The flag
 follows the switch whether or not the drone is armed.
 
 Keep showing:
@@ -1106,9 +1156,11 @@ hit. What worked in GTA IV:
   restarts every script thread when a save is loaded, and the D3D hook went
   with it (no OSD after "Load Game"). Detect the restart, and register the
   draw hook again if no frame arrives soon after.
-- Hide the game's own HUD and minimap while flying (every frame, if that
-  is how the engine does it). Whatever stays on screen in FPV must go too
-  while `FPV_DRONE_OSD_DISABLED` is set ([OSD disable switch](#osd-disable-switch)).
+- Hide all of the game's own UI while flying in FPV (every frame, if that
+  is how the engine does it; [No game UI in FPV](#no-game-ui-in-fpv)). An
+  element the maintainer asked to keep goes into the video signal after
+  the lens (noise, no fisheye), under the OSD, and goes with the OSD
+  disable switch ([OSD disable switch](#osd-disable-switch)).
 - **Draw the drone model with the game's own transforms.** In the chase,
   LOS and pilot views the drone is an object in the world. gtasa-fpv draws
   it with fixed-function triangles right after the 3D scene. It uses the
