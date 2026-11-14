@@ -55,8 +55,8 @@
 
 /* The one place the version is set: CMakeLists.txt reads these three. */
 #define LIBFPV_VERSION_MAJOR 0
-#define LIBFPV_VERSION_MINOR 2
-#define LIBFPV_VERSION_PATCH 7
+#define LIBFPV_VERSION_MINOR 3
+#define LIBFPV_VERSION_PATCH 0
 #define LIBFPV_STRINGIFY_(x) #x
 #define LIBFPV_STRINGIFY(x) LIBFPV_STRINGIFY_(x)
 #define LIBFPV_VERSION_STRING                                                  \
@@ -360,17 +360,21 @@ FPV_API fpv_result fpv_drone_delete(fpv_drone *drone);
 /* Teleports to a pose with zero velocity. The drone stays armed only if the
  * player's arm switch is still on. NULL rotation keeps the current yaw upright. */
 FPV_API fpv_result fpv_drone_reset(fpv_drone *drone, const float position[3], const float rotation[4]);
-/* Fresh battery, cool undamaged motors and new propellers.
+/* Fresh battery, cool undamaged motors, new propellers and an undamaged
+ * video transmitter.
  * A repaired or reset drone takes no prop damage for 0.25 s (from the
  * world or fpv_drone_damage_props): repair then reset a drone that sits in
  * water and the new one starts whole, while the game's world still
  * describes the old spot for a frame or two. */
 FPV_API fpv_result fpv_drone_repair(fpv_drone *drone);
-/* The game damages the propellers: fire, water, a bullet through the props,
- * anything that would hurt a real one (docs/INTEGRATION.md#damage).
+/* The game damages the drone: fire, water, a bullet through the props, an
+ * explosion, anything that would hurt a real one (docs/INTEGRATION.md#damage).
  * `motor_index` 0..3, or -1 for all four; `amount` 0..1 is added to each
- * one's prop_damage (1 breaks it). Does nothing while the player has damage
- * off (FPV_SIM_NO_DAMAGE), so the game can call it whatever the setting. */
+ * one's prop_damage (1 breaks it). The video transmitter takes it too
+ * (`amount` for -1, a quarter of it for one prop): a damaged one loses up
+ * to 20 dB, the picture breaks up much closer, until fpv_drone_repair().
+ * Does nothing while the player has damage off (FPV_SIM_NO_DAMAGE), so the
+ * game can call it whatever the setting. */
 FPV_API fpv_result fpv_drone_damage_props(fpv_drone *drone, int32_t motor_index, float amount);
 /* Moves the pilot (the LOS camera, the video link's receiver and the ear
  * when the drone is heard from the pilot), host coords of the feet. For a
@@ -757,8 +761,10 @@ enum fpv_sim_options {
      * option is turned on (a drone spawned or repaired after it gets a full
      * pack) and still sags under load (the OSD voltage dips in a punch). */
     FPV_SIM_NO_BATTERY_DRAIN = 1u << 0,
-    /* Props and motors are never damaged: no broken props from hits,
-     * prop-killing materials or fpv_drone_damage_props, no burned motors. */
+    /* Props, motors and the video transmitter are never damaged: no broken
+     * props from hits, prop-killing materials or fpv_drone_damage_props, no
+     * burned motors, no lasting VTX damage from hard hits or
+     * fpv_drone_damage_props. A hit still shakes the picture for a moment. */
     FPV_SIM_NO_DAMAGE = 1u << 1
 };
 
@@ -973,7 +979,7 @@ FPV_API fpv_result fpv_wind_add_blast(const float position[3], float radius);
  *     motors with it off, then turn it on in flight. After a refused arm,
  *     the arm switch must be cycled, like Betaflight's ARMSWITCH safety.
  *   - Bomb arm switch on with the motors armed makes the warhead live
- *     (FPV_WARHEAD_ARMED, OSD "BOMB_ARMED"), after the arming delay if one is
+ *     (FPV_WARHEAD_ARMED, OSD "!ACTIVE!"), after the arming delay if one is
  *     set (none by default; FPV_WARHEAD_ARMING, OSD "ARMING 3"). Off at any
  *     time safes it ("BOMB_SAFE"). The OSD line is Betaflight's "Custom message
  *     1" element: players move or hide it in the overlay (F8 > OSD) or the
@@ -984,6 +990,16 @@ FPV_API fpv_result fpv_wind_add_blast(const float position[3], float radius);
  *     does not report; resting on the ground does not fire it), on the explode
  *     switch (off to on), or on fpv_kamikaze_detonate(). With the bomb arm switch off, nothing
  *     explodes; the explode switch only shows "NOT ARMED".
+ *   - An impact or the explode switch lights the fuse (FPV_WARHEAD_IGNITING):
+ *     the motors are cut at once (silent, it falls and bounces) and the
+ *     blast comes ignition_delay seconds later (0.15 s by default, 0..1),
+ *     where the drone is then. Nothing stops it, the switches included; the
+ *     video still works (with the impact's jolt) and the OSD shows only
+ *     "!...BOOM...!" in its centre, even with the OSD disable switch on.
+ *     fpv_kamikaze_detonate() still blows it up at once.
+ *   - While the warhead is live (or igniting) the OSD hides the crosshairs
+ *     and the artificial horizon and shows an aiming dot in its centre,
+ *     even with the OSD disable switch on.
  *   - A switch that is already on when the drone spawns or is repaired
  *     must be turned off first.
  *   - After the explosion (OSD blank) the drone is destroyed: frame.flags
@@ -1004,7 +1020,8 @@ typedef enum fpv_warhead_state {
     FPV_WARHEAD_SAFE = 0,      /* bomb arm switch off (or not cycled yet) */
     FPV_WARHEAD_ARMING = 1,    /* switch on, arming delay running */
     FPV_WARHEAD_ARMED = 2,     /* live: explodes on impact or the explode switch */
-    FPV_WARHEAD_DETONATED = 3  /* exploded; the drone is destroyed until repaired */
+    FPV_WARHEAD_DETONATED = 3, /* exploded; the drone is destroyed until repaired */
+    FPV_WARHEAD_IGNITING = 4   /* fuse lit (impact, explode switch): motors cut, blast after ignition_delay */
 } fpv_warhead_state;
 
 enum fpv_kamikaze_state_flags {
@@ -1026,6 +1043,7 @@ typedef struct fpv_kamikaze_state {
     uint32_t detonation_count;  /* since fpv_global_init */
     float payload_mass;         /* kg, the warhead the drone carries */
     float total_mass;           /* kg, all-up weight with the payload */
+    float ignition_remaining;   /* seconds to the blast, while IGNITING */
 } fpv_kamikaze_state;
 
 /* State as of the last fpv_drone_tick(). */
@@ -1039,10 +1057,12 @@ typedef enum fpv_detonation_cause {
 
 typedef struct fpv_detonation {
     uint32_t struct_size;
-    double sim_time;
+    double sim_time;     /* the blast (after the ignition delay) */
     fpv_detonation_cause cause;
-    float position[3];   /* host coords: the impact point, or the drone */
-    float velocity[3];   /* drone velocity at the moment, host units / s */
+    /* host coords: the impact point (moved along with the drone during the
+     * ignition delay), or the drone */
+    float position[3];
+    float velocity[3];   /* drone velocity at the boom command, host units / s */
     float normal[3];     /* surface hit, towards the drone; zero unless an impact */
     uint8_t material;    /* surface hit (impacts) */
     uint32_t object_id;  /* surface object hit, 0 = static world, raycast or none */
@@ -1071,8 +1091,8 @@ FPV_API int fpv_kamikaze_is_installed(void);
 FPV_API fpv_result fpv_kamikaze_detonate(fpv_drone *drone, int even_if_safe);
 
 enum fpv_kamikaze_config_flags {
-    /* Do not draw the warhead state into frame.osd nor blank it after the
-     * explosion; the game shows it. */
+    /* Do not draw the warhead state into frame.osd (state line, aiming dot,
+     * "!...BOOM...!") nor blank it after the explosion; the game shows it. */
     FPV_KAMIKAZE_NO_OSD = 1u << 0
 };
 
@@ -1120,6 +1140,11 @@ typedef struct fpv_kamikaze_config {
     float ending_duration;
     uint32_t ending_view;   /* fpv_kamikaze_ending_view, default SIGNAL_LOST */
     uint32_t ending_then;   /* fpv_kamikaze_ending_then, default RESPAWN */
+    /* Seconds from the boom command (an impact or the explode switch) to
+     * the blast, 0..1, default 0.15; 0 = at once. Players set it in the
+     * overlay (F8 > Kamikaze, in ms). Leave it out (a smaller struct_size)
+     * to keep the player's. */
+    float ignition_delay;
 } fpv_kamikaze_config;
 
 /* Fills the defaults (struct_size included): the ending is the host's

@@ -1,0 +1,52 @@
+{
+    "version": 1,
+    "name": "Nomade (7\" long range)",
+    "fileName": "nomade-7",
+    "buildIn": true,
+    "description": "A classic analog long range quad, made to go far: over the ridge, down the valley, up the mountain and back. A 315 mm 7\" frame, 2806.5 1300kV motors on 7x3.5x3 props, a 6S1P 4200mAh Li-ion pack, a Caddx Ratel 2 and a TBS Unify Pro32 HV at 1 W, its antenna up and back behind the frame. About 940 g ready to fly, around 9:1 on a fresh pack, some 20 minutes of gentle cruise. The video holds far on the way out; on the way back, nose toward you, the frame and the pack are in the way: come back high.",
+    "frameDragArea": {
+        "x": 0.012,
+        "y": 0.015,
+        "z": 0.012
+    },
+    "frameDragConstant": 1.2,
+    "rotorDragFactor": 0.6,
+    "electronicsPower": 9.0,
+    "mass": 0.27,
+    "invInertia": {
+        "x": 220.0,
+        "y": 130.0,
+        "z": 220.0
+    },
+    "gyroBaseNoiseAmp": 0.005,
+    "gyrobaseNoiseFreq": 180.0,
+    "frameHarmonic1Amp": 0.02,
+    "frameHarmonic1Freq": 150.0,
+    "frameHarmonic2Amp": 0.005,
+    "frameHarmonic2Freq": 300.0,
+    "minPropWashSpeed": 1.0,
+    "maxPropWashSpeed": 16.0,
+    "propWashAngleOfAttack": 0.1,
+    "propWashFactor": 1.2,
+    "maxGroundEffectDist": 0.45,
+    "motor1Pos": { "x": 0.1114, "y": 0.006, "z": -0.1114 },
+    "motor2Pos": { "x": 0.1114, "y": 0.006, "z": 0.1114 },
+    "motor3Pos": { "x": -0.1114, "y": 0.006, "z": -0.1114 },
+    "motor4Pos": { "x": -0.1114, "y": 0.006, "z": 0.1114 },
+    "motorVariance": {
+        "x": 0.99,
+        "y": 0.995,
+        "z": 0.985,
+        "w": 1.0
+    },
+    "motor": "Generic 2806.5 1300kV",
+    "propeller": "Generic 7x3.5x3",
+    "battery": "Generic 6S1P 4200mAh Li-ion",
+    "vtx": "TBS Unify Pro32 HV (1 W)",
+    "vtxAntennaShadowDb": 10.0,
+    "soundMaxRpm": 25000.0,
+    "camera": {
+        "model": "Caddx Ratel 2",
+        "uptiltDeg": 20.0
+    }
+}

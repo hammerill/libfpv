@@ -64,6 +64,10 @@ struct DronePreset {
     float propBladeCount = 3;
     CameraSettings camera;
     VtxSettings vtx;
+    // dB the frame and battery cost the VTX's signal toward the front
+    // (txAntennaGainDb); "vtxAntennaShadowDb" in the quad JSON, else from
+    // the frame's size
+    float vtxShadowDb = 8.0f;
     CollisionSettings collision;
     // Betaflight CLI tune applied when the player first uses this preset.
     std::string betaflightDiff;

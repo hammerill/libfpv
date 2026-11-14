@@ -1,0 +1,19 @@
+{
+    "version": 3,
+    "name": "Generic 2806.5 1300kV",
+    "fileName": "generic-2806.5-1300kV",
+    "buildIn": true,
+    "description": "The classic 7\" long range motor on 6S: a 2806.5 1300kV, about 2.1 kgf on a 7x3.5x3 at full throttle and a cool, quiet cruise at a third of it. 50 g.",
+    "motorKV": 1300.0,
+    "motorR": 0.075,
+    "motorI0": 0.9,
+    "motorRth": 6.0,
+    "motorCth": 26.0,
+    "motorMaxT": 128.0,
+    "motorImbalance": {
+        "x": 8.0,
+        "y": 5.0,
+        "z": 4.0
+    },
+    "mass": 0.050
+}

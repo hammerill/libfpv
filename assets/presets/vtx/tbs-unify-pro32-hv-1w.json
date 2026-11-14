@@ -1,0 +1,13 @@
+{
+    "version": 1,
+    "name": "TBS Unify Pro32 HV (1 W)",
+    "fileName": "tbs-unify-pro32-hv-1w",
+    "buildIn": true,
+    "description": "TBS Unify Pro32 HV set to its top power, 1 W, as long range flights use it: several kilometres of analog video in the open, with a good antenna behind the frame.",
+    "type": "analog",
+    "powerMw": 1000,
+    "powerNoise": 0.12,
+    "noiseFloor": 0.01,
+    "noiseFactor": 1.0,
+    "range": 6000.0
+}

@@ -95,13 +95,19 @@ float groundLossDb(float distM, float txHeightM, float rxHeightM, float waveleng
     return 0.7f * 20.0f * std::log10(distM / bp);
 }
 
-float txAntennaGainDb(Vec3 d) {
+float txAntennaGainDb(Vec3 d, float frameShadowDb) {
     d = normalize(d, {0, 0, -1});
     // up and 30 degrees back
     Vec3 axis{0, 0.866f, -0.5f};
     float c = dot(d, axis);
     float s2 = std::max(1 - c * c, 0.0f);
-    return kVideoTxGainDbi + 10.0f * std::log10(std::max(s2, 0.03f));
+    // The antenna sits at the back: forward it looks through the frame and
+    // the battery (carbon and a LiPo block 5.8 GHz), sideways partly past
+    // the rear arms; behind it, and well above the top plate, it is clear.
+    float ahead = smoothstep(-0.3f, 0.6f, d.z);
+    float over = smoothstep(0.2f, 0.6f, d.y);
+    float shadow = std::max(frameShadowDb, 0.0f) * ahead * (1 - over);
+    return kVideoTxGainDbi + 10.0f * std::log10(std::max(s2, 0.03f)) - shadow;
 }
 
 float rxAntennaGainDb(float elevation) {

@@ -353,6 +353,15 @@ void Overlay::tabFly() {
             ImGui::Text("Motor %d: %5.0f rpm  %4.1f A  %3.0f C  prop %3.0f%%", i + 1, f.motors[i].rpm,
                         f.motors[i].current_amp, f.motors[i].temperature_c, (1 - f.motors[i].prop_damage) * 100);
         }
+        {
+            FlightSnapshot prev, cur;
+            double pw, cw;
+            L.runner.snapshots(prev, pw, cur, cw);
+            ImGui::Text("VTX %3.0f%%", (1 - cur.vtxDamage) * 100);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("The video transmitter's health: hard hits, fire and blasts bend its antenna and "
+                                  "crack its connector, and the picture breaks up sooner. Repair fixes it.");
+        }
         if (ImGui::Button("Repair")) fpv_drone_repair(&L.drone);
         ImGui::SameLine();
         if (ImGui::Button("Respawn")) {
@@ -821,12 +830,17 @@ void Overlay::warheadStatus() {
     ks.struct_size = sizeof ks;
     if (!L.droneExists || fpv_kamikaze_get_state(&L.drone, &ks) != FPV_OK) return;
     if (!(ks.flags & FPV_KAMIKAZE_INSTALLED) && ks.warhead != FPV_WARHEAD_DETONATED) return;
-    static const char *names[] = {"SAFE", "ARMING", "ARMED (live)", "DETONATED"};
+    static const char *names[] = {"SAFE", "ARMING", "ARMED (live)", "DETONATED", "IGNITING"};
+    if ((uint32_t)ks.warhead > FPV_WARHEAD_IGNITING) return;
     ImVec4 col = ks.warhead == FPV_WARHEAD_SAFE ? ImVec4(0.5f, 1, 0.5f, 1) : ImVec4(1, 0.4f, 0.3f, 1);
     ImGui::TextColored(col, "Warhead: %s", names[ks.warhead]);
     if (ks.warhead == FPV_WARHEAD_ARMING) {
         ImGui::SameLine();
         ImGui::Text("(%.1f s)", ks.arming_remaining);
+    }
+    if (ks.warhead == FPV_WARHEAD_IGNITING) {
+        ImGui::SameLine();
+        ImGui::Text("(%.0f ms)", ks.ignition_remaining * 1000);
     }
     if (ks.warhead == FPV_WARHEAD_DETONATED) {
         ImGui::SameLine();
@@ -886,6 +900,15 @@ void Overlay::tabKamikaze() {
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("The slowest touch that sets the live warhead off. 0.25 = a light tap on the ground; higher "
                           "needs a real hit.");
+    int ignitionMs = (int)std::lround(st.kamikazeIgnitionDelay * 1000);
+    ImGui::SetNextItemWidth(w);
+    if (ImGui::SliderInt("Ignition delay (ms)", &ignitionMs, 0, 1000, "%d", ImGuiSliderFlags_AlwaysClamp)) {
+        st.kamikazeIgnitionDelay = ignitionMs / 1000.0f;
+        changed = true;
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("From the impact or the explode switch to the blast. The motors are cut at once and the OSD "
+                          "shows \"!...BOOM...!\". 0 = at once.");
     if (ImGui::Checkbox("Warhead state on the OSD", &st.kamikazeOsd)) changed = true;
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Its place: \"Bomb status\" in the OSD tab (\"Custom message 1\" in the Betaflight "
@@ -1040,9 +1063,10 @@ void Overlay::tabDrone() {
     bool changed = ImGui::Checkbox("Battery drains", &L.settings.batteryDrain);
     ImGui::TextDisabled(L.settings.batteryDrain ? "The pack empties as you fly."
                                                 : "The pack stays at its current charge (a respawn brings a full one); its voltage still dips under load.");
-    changed |= ImGui::Checkbox("Props and motors take damage", &L.settings.damage);
-    ImGui::TextDisabled(L.settings.damage ? "Hits, water, fire and bullets break props; overheated motors burn out."
-                                          : "Props and motors are never damaged.");
+    changed |= ImGui::Checkbox("Props, motors and VTX take damage", &L.settings.damage);
+    ImGui::TextDisabled(L.settings.damage ? "Hits, water, fire and bullets break props; overheated motors burn out; hard "
+                                            "hits, fire and blasts weaken the video transmitter."
+                                          : "Props, motors and the VTX are never damaged (a hit still shakes the picture).");
     if (changed) {
         applySimOptions();
         saveSettings();

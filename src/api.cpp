@@ -101,6 +101,7 @@ void loadSettings() {
         s.kamikazePayloadKg = j.value("kamikazePayloadKg", s.kamikazePayloadKg);
         s.kamikazePayloadDrop = j.value("kamikazePayloadDrop", s.kamikazePayloadDrop);
         s.kamikazeEndingDuration = std::clamp(j.value("kamikazeEndingDuration", s.kamikazeEndingDuration), 0.0f, 30.0f);
+        s.kamikazeIgnitionDelay = std::clamp(j.value("kamikazeIgnitionDelay", s.kamikazeIgnitionDelay), 0.0f, 1.0f);
         // by name; absent or unknown = the host's default
         std::string view = j.value("kamikazeEndingView", std::string());
         s.kamikazeEndingView = view == "signal_lost" ? FPV_KAMIKAZE_VIEW_SIGNAL_LOST
@@ -165,6 +166,7 @@ void saveSettings() {
     j["kamikazePayloadKg"] = s.kamikazePayloadKg;
     j["kamikazePayloadDrop"] = s.kamikazePayloadDrop;
     j["kamikazeEndingDuration"] = s.kamikazeEndingDuration;
+    j["kamikazeIgnitionDelay"] = s.kamikazeIgnitionDelay;
     static const char *const views[] = {"signal_lost", "cutscene"};
     static const char *const thens[] = {"respawn", "recall", "nothing"};
     if (s.kamikazeEndingView >= 0 && s.kamikazeEndingView < 2) j["kamikazeEndingView"] = views[s.kamikazeEndingView];

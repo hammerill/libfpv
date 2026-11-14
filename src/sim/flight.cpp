@@ -35,6 +35,12 @@ constexpr float kMaxAngularSpeed = 100.0f;   // rad/s, SimITL's own clamp
 // world (a water plane following the drone, its own damage checks) still
 // describes the old spot. Spawned straight into lava, the props still go.
 constexpr double kRespawnDamageGrace = 0.25;
+// A hit this hard (m/s) or harder hurts the video transmitter for good: its
+// antenna bends, the connector cracks. 1/kVtxHitScale of its health per m/s
+// above it (a 10 m/s crash ~12 %, a 45 m/s one the whole of it).
+constexpr float kVtxHitSpeed = 5.0f, kVtxHitScale = 40.0f;
+// What a fully damaged VTX costs the link budget, dB (a tenth of the range).
+constexpr float kVtxDamageLossDb = 20.0f;
 #if defined(LIBFPV_KAMIKAZE)
 constexpr float kPayloadRadius = 0.035f;     // the warhead's size (its own inertia)
 constexpr float kAutoPayloadRatio = 0.6f;    // automatic payload: 60% of the quad's mass
@@ -244,6 +250,7 @@ void Flight::resetFlightTime() {
 void Flight::repair() {
     simitl_command(CommandType::Repair);
     for (float &d : m_propDamage) d = 0;
+    m_vtxDamage = 0;
     rcRespawnGrace();
     m_damageGraceUntil = m_simTime + kRespawnDamageGrace;
 #if defined(LIBFPV_KAMIKAZE)
@@ -255,6 +262,14 @@ void Flight::damageProps(int motor, float amount) {
     if (!canDamage() || !m_active || !(amount > 0)) return;
     for (int i = 0; i < 4; i++)
         if (motor < 0 || motor == i) m_propDamage[i] = std::min(1.0f, m_propDamage[i] + amount);
+    // fire, a blast, a bullet: the whole drone takes it, VTX included; one
+    // prop's hit reaches it less
+    damageVtx(motor < 0 ? amount : 0.25f * amount);
+}
+
+void Flight::damageVtx(float amount) {
+    if (!canDamage() || !m_active || !(amount > 0)) return;
+    m_vtxDamage = std::min(1.0f, m_vtxDamage + amount);
 }
 
 // The charge a step drew is put back after it, so the pack stays at the
@@ -530,6 +545,9 @@ void Flight::recordImpact(const Contact &c, float speed, float impulse, int moto
     int slot = motor == kCargoMotorIndex ? 5 : motor + 1;
     if (m_simTime - m_lastMotorStrike[slot] < 0.05) return;  // debounce per sphere
     m_lastMotorStrike[slot] = m_simTime;
+    // a hard hit damages the VTX for good (with damage on); the jolt every
+    // hit gives the picture is the feed's (VideoFeed), damage or not
+    if (motor != kCargoMotorIndex && speed > kVtxHitSpeed) damageVtx((speed - kVtxHitSpeed) / kVtxHitScale);
     if (m_impacts.size() >= 64) m_impacts.erase(m_impacts.begin());
     ImpactEvent e;
     e.point = c.point;
@@ -779,8 +797,9 @@ void Flight::updateVideo(float dt) {
     Vec3 toPilotLocal = rotate(conj(m_rot), -d);
     float elevation = dist > 0.01f ? std::asin(std::clamp(d.y / dist, -1.0f, 1.0f)) : 0.0f;
     float height = m_snap.altitude >= 0 ? m_snap.altitude : 10.0f;
-    float rxDbm = powerDbm + txAntennaGainDb(toPilotLocal) + rxAntennaGainDb(elevation) - freeSpaceLossDb(dist) -
-                  groundLossDb(dist, std::max(height, 0.1f), kVideoRxHeight) - v.lossDb - kVideoSystemLossDb;
+    float rxDbm = powerDbm + txAntennaGainDb(toPilotLocal, m_preset.vtxShadowDb) + rxAntennaGainDb(elevation) - freeSpaceLossDb(dist) -
+                  groundLossDb(dist, std::max(height, 0.1f), kVideoRxHeight) - v.lossDb - kVideoSystemLossDb -
+                  kVtxDamageLossDb * m_vtxDamage;
     // low over the ground the reflection is a strong second path
     float k = v.kFactor * std::clamp(height / 3.0f, 0.3f, 1.0f);
     m_snap.videoRxDbm = rxDbm;
@@ -963,6 +982,11 @@ void Flight::step(float dt, const float channels[kChannelCount], bool radioLost)
         m_input.groundEffect[i] = ge[i];
         m_input.propDamage[i] = m_propDamage[i];
     }
+#if defined(LIBFPV_KAMIKAZE)
+    // the fuse is lit: the motors are cut, no last-moment thrust
+    if (m_active && m_warhead.igniting())
+        for (float &d : m_input.propDamage) d = 1.0f;
+#endif
 
     // internal X right, Y up, Z forward = east, up, north
     bfb_gps_update(m_pos.x, m_pos.z, m_pos.y, m_vel.x, m_vel.z, m_vel.y);
@@ -1031,13 +1055,19 @@ void Flight::step(float dt, const float channels[kChannelCount], bool radioLost)
     }
 #if defined(LIBFPV_KAMIKAZE)
     if (m_active && m_warhead.update(dt, m_simTime, m_input.rcData, bfb_is_armed(), m_pos, m_vel)) onDetonated();
+    // the fuse is lit (an impact or the explode switch): the motors are cut
+    // until the blast (no noise, no escape in the last milliseconds); it
+    // still falls and bounces
+    if (m_active && m_warhead.igniting()) stopMotors();
     // the warhead state is Betaflight's custom message 1 element: placed,
     // layered and hidden (OSD disable switch) like any other element
     char bombText[24] = "";
     if (m_active) m_warhead.statusText(bombText, sizeof bombText, m_simTime, bfb_is_armed());
     bfb_osd_set_host_message(0, bombText);
-    // a live bomb: the crosshairs become an aiming dot, no artificial horizon
-    bfb_osd_set_aim_dot(m_active && m_warhead.snapshot().state == WarheadState::Armed);
+    // a live bomb: no crosshairs, no artificial horizon; libfpv draws the
+    // aiming dot (fpv_drone_tick), unless the game draws the warhead's OSD
+    WarheadState ws = m_warhead.snapshot().state;
+    bfb_osd_set_aim_dot(m_active && m_warhead.config().osd && (ws == WarheadState::Armed || ws == WarheadState::Igniting));
 #endif
 
     // --- snapshot -----------------------------------------------------------
@@ -1103,6 +1133,7 @@ void Flight::step(float dt, const float channels[kChannelCount], bool radioLost)
         m_snap.osdRevision++;
     }
     for (int i = 0; i < kChannelCount; i++) m_snap.channels[i] = m_input.rcData[i];
+    m_snap.vtxDamage = m_vtxDamage;
     m_snap.rcLinkOn = m_active && m_rcLink.config().enabled;
     m_snap.rcLink = m_rcLink.status();
     if (m_active) {
@@ -1130,6 +1161,11 @@ void Flight::step(float dt, const float channels[kChannelCount], bool radioLost)
             m.rpm = m.thrust = m.current = m.command = 0;
         }
         m_snap.beeper = m_snap.beeperSwitch = false;
+    } else if (m_active && m_warhead.igniting()) {
+        // the motors are cut while the fuse burns: silent, no thrust
+        for (MotorSnapshot &m : m_snap.motors) {
+            m.rpm = m.thrust = m.current = m.command = 0;
+        }
     }
 #endif
 }

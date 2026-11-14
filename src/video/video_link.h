@@ -21,9 +21,11 @@ constexpr float kVideoWavelength = 299792458.0f / 5.8e9f;  // m
 // ~10 dB) and lost sync at about -106 dBm on a good receiver.
 constexpr float kVideoNoiseFloorDbm = -104.0f;
 // What a real installation loses against the ideal free-space budget:
-// polarisation mismatch, the frame and battery in the way, connectors,
-// detuned antennas. Puts a 25 mW VTX's first sparkles near 1 km in the open.
-constexpr float kVideoSystemLossDb = 10.0f;
+// polarisation mismatch, connectors, detuned antennas. The frame and the
+// battery in the way are directional, in txAntennaGainDb. Puts a 25 mW VTX's
+// first sparkles near 1.4 km in the open with the antenna in clear view
+// (flying away), well under 1 km with the frame in between (coming back).
+constexpr float kVideoSystemLossDb = 7.0f;
 constexpr float kVideoTxGainDbi = 2.1f;   // dipole / lollipop, at its best
 constexpr float kVideoRxPatchDbi = 8.0f;  // goggles: a patch facing the drone...
 constexpr float kVideoRxOmniDbi = 2.1f;   // ...and an omni, diversity
@@ -64,8 +66,15 @@ float freeSpaceLossDb(float distM, float wavelengthM = kVideoWavelength);
 float groundLossDb(float distM, float txHeightM, float rxHeightM, float wavelengthM = kVideoWavelength);
 // The VTX antenna, on the back of the frame pointing up and back: a dipole's
 // doughnut with its null along the antenna (drone-local direction to the
-// pilot, X right, Y up, Z forward).
-float txAntennaGainDb(Vec3 dirToPilotLocal);
+// pilot, X right, Y up, Z forward). Toward the front the carbon frame, the
+// stack, the camera and the battery stand between it and the pilot: up to
+// `frameShadowDb` less (all of it straight ahead, none behind or high up).
+// So the link is best with the pilot behind the drone (flying out) and
+// worst with the nose pointed at him (flying back).
+float txAntennaGainDb(Vec3 dirToPilotLocal, float frameShadowDb = 0);
+// The frame's shadow of a quad with arms (motor to centre) this long, m:
+// ~4 dB on a whoop, ~8 dB on a 5", ~10 dB on a 7" (bigger plates, bigger pack).
+inline float defaultVtxShadowDb(float armLengthM) { return std::clamp(2.0f + 50.0f * armLengthM, 2.0f, 10.0f); }
 // The goggles' diversity: a patch facing the drone's bearing and an omni
 // standing up; elevation of the drone seen from the pilot, radians. Right
 // overhead both are weak.

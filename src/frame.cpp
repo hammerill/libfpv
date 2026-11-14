@@ -25,6 +25,29 @@ constexpr double kRadioActiveSeconds = 3.0;
 // show only static, with no OSD, until repaired. The warhead state before
 // that is Betaflight's custom message 1 element (Flight::step).
 static void clearOsd(uint8_t *osd) { std::memset(osd, ' ', FPV_OSD_ROWS * FPV_OSD_COLS); }
+
+// Betaflight's font: the stick overlay's centre sprite, a small dot
+constexpr uint8_t kAimDotGlyph = 0x09;
+
+// The warhead's own OSD over Betaflight's, drawn whatever the OSD disable
+// switch: a live warhead hides the crosshairs and the artificial horizon
+// (Betaflight, patch 0016) and gets an aiming dot in the centre, where the
+// crosshairs' centre sits by default; a lit fuse clears the OSD for
+// "!...BOOM...!" in the middle, like Betaflight's own "ARMED" screen;
+// after the blast the feed is gone, OSD and all.
+static void warheadOsd(uint8_t *osd, WarheadState state) {
+    if (state == WarheadState::Detonated) {
+        clearOsd(osd);
+    } else if (state == WarheadState::Igniting) {
+        clearOsd(osd);
+        static const char kBoom[] = "!...BOOM...!";
+        int n = (int)sizeof(kBoom) - 1;
+        int row = FPV_OSD_ROWS / 2, col = FPV_OSD_COLS / 2 - n / 2;  // as osdShowArmed()
+        std::memcpy(osd + row * FPV_OSD_COLS + col, kBoom, n);
+    } else if (state == WarheadState::Armed) {
+        osd[(FPV_OSD_ROWS / 2 - 1) * FPV_OSD_COLS + FPV_OSD_COLS / 2 - 1] = kAimDotGlyph;
+    }
+}
 #endif
 
 static void put3(float out[3], Vec3 v) {
@@ -562,8 +585,7 @@ extern "C" FPV_API fpv_result fpv_drone_tick(fpv_drone *d, float frameDt, fpv_fr
     memcpy(f.osd, cur.osd.data(), sizeof(f.osd));
     f.osd_revision = cur.osdRevision;
 #if defined(LIBFPV_KAMIKAZE)
-    // no flight controller OSD over the lost feed, whatever the OSD disable switch
-    if (cur.active && L.settings.kamikazeOsd && cur.warhead.state == WarheadState::Detonated) clearOsd(f.osd);
+    if (cur.active && L.settings.kamikazeOsd) warheadOsd(f.osd, cur.warhead.state);
     // Betaflight's revision cannot see the cleared grid: count changes here
     if (memcmp(L.kamikazeOsd, f.osd, sizeof(f.osd)) != 0) {
         memcpy(L.kamikazeOsd, f.osd, sizeof(f.osd));

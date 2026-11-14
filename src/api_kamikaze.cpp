@@ -27,6 +27,7 @@ void applyKamikazeSettings() {
     WarheadConfig w;
     w.armingDelay = s.kamikazeArmingDelay;
     w.minImpactSpeed = s.kamikazeMinImpactSpeed;
+    w.ignitionDelay = s.kamikazeIgnitionDelay;
     w.osd = s.kamikazeOsd;
     L.flight.warhead().setConfig(w);
     float kg = s.kamikazePayloadKg, drop = s.kamikazePayloadDrop;
@@ -80,6 +81,7 @@ FPV_API fpv_result fpv_kamikaze_get_state(fpv_drone *d, fpv_kamikaze_state *stat
     if (w.explodeSwitch) out.flags |= FPV_KAMIKAZE_EXPLODE_SWITCH;
     if (w.blocksArming) out.flags |= FPV_KAMIKAZE_BLOCKS_ARMING;
     if (w.needsCycle && w.bombSwitch) out.flags |= FPV_KAMIKAZE_NEEDS_SWITCH_CYCLE;
+    out.ignition_remaining = w.ignitionRemaining;
     out.detonation_count = w.detonations;
     out.payload_mass = cur.payloadMass;
     out.total_mass = cur.totalMass;
@@ -155,6 +157,7 @@ FPV_API void fpv_kamikaze_config_defaults(fpv_kamikaze_config *c) {
     c->ending_duration = def.kamikazeEndingDuration;
     c->ending_view = L.kamikazeDefaultView;
     c->ending_then = L.kamikazeDefaultThen;
+    c->ignition_delay = def.kamikazeIgnitionDelay;
 }
 
 FPV_API fpv_result fpv_kamikaze_set_config(const fpv_kamikaze_config *in) {
@@ -172,6 +175,8 @@ FPV_API fpv_result fpv_kamikaze_set_config(const fpv_kamikaze_config *in) {
         c.ending_duration = s.kamikazeEndingDuration;
     bool hasView = size >= offsetof(fpv_kamikaze_config, ending_view) + sizeof(c.ending_view);
     bool hasThen = size >= offsetof(fpv_kamikaze_config, ending_then) + sizeof(c.ending_then);
+    if (size < offsetof(fpv_kamikaze_config, ignition_delay) + sizeof(c.ignition_delay))
+        c.ignition_delay = s.kamikazeIgnitionDelay;
     if (!std::isfinite(c.arming_delay) || c.arming_delay < 0 || c.arming_delay > 600)
         return setError(FPV_ERROR_INVALID_ARGUMENT, "arming_delay must be 0..600 s");
     float fuse = L.conv.lenToInternal(c.min_impact_speed);
@@ -182,6 +187,8 @@ FPV_API fpv_result fpv_kamikaze_set_config(const fpv_kamikaze_config *in) {
     if (!std::isfinite(c.payload_drop)) return setError(FPV_ERROR_INVALID_ARGUMENT, "payload_drop is not finite");
     if (!std::isfinite(c.ending_duration) || c.ending_duration < 0 || c.ending_duration > 30)
         return setError(FPV_ERROR_INVALID_ARGUMENT, "ending_duration must be 0..30 s");
+    if (!std::isfinite(c.ignition_delay) || c.ignition_delay < 0 || c.ignition_delay > 1)
+        return setError(FPV_ERROR_INVALID_ARGUMENT, "ignition_delay must be 0..1 s");
     if (hasView && c.ending_view > FPV_KAMIKAZE_VIEW_CUTSCENE)
         return setError(FPV_ERROR_INVALID_ARGUMENT, "ending_view is not a fpv_kamikaze_ending_view");
     if (hasThen && c.ending_then > FPV_KAMIKAZE_THEN_NOTHING)
@@ -191,6 +198,7 @@ FPV_API fpv_result fpv_kamikaze_set_config(const fpv_kamikaze_config *in) {
     s.kamikazePayloadKg = c.payload_mass < 0 ? -1.0f : c.payload_mass;
     s.kamikazePayloadDrop = c.payload_drop < 0 ? -1.0f : std::min(L.conv.lenToInternal(c.payload_drop), 1.0f);
     s.kamikazeEndingDuration = c.ending_duration;
+    s.kamikazeIgnitionDelay = c.ignition_delay;
     // a choice the host does not support reads back as its default
     if (hasView) s.kamikazeEndingView = (int)c.ending_view;
     if (hasThen) s.kamikazeEndingThen = (int)c.ending_then;
@@ -217,6 +225,7 @@ FPV_API fpv_result fpv_kamikaze_get_config(fpv_kamikaze_config *out) {
     c.ending_duration = s.kamikazeEndingDuration;
     c.ending_view = kamikazeEndingView();
     c.ending_then = kamikazeEndingThen();
+    c.ignition_delay = s.kamikazeIgnitionDelay;
     uint32_t size = std::min<uint32_t>(out->struct_size, sizeof(c));
     memcpy(out, &c, size);
     out->struct_size = size;

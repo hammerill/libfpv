@@ -62,6 +62,17 @@ static void testBudget() {
     CHECK(low > 5 && low < 25, "1 m over the ground at 1 km: %.1f dB, expected a few dB to 20", low);
     float side = txAntennaGainDb({0, 0, -1}), along = txAntennaGainDb({0, 0.866f, -0.5f});
     CHECK(side > 0 && along < -10, "VTX dipole: %.1f dBi broadside, %.1f dBi along its axis", side, along);
+    // the antenna at the back: the pilot behind (flying out) is in clear view,
+    // ahead (flying back) the frame and battery are in the way, high up clears them
+    float behind = txAntennaGainDb({0, -0.2f, -1}, 8), ahead = txAntennaGainDb({0, -0.2f, 1}, 8);
+    float aheadOpen = txAntennaGainDb({0, -0.2f, 1}, 0), aheadHigh = txAntennaGainDb({0, 0.7f, 0.7f}, 8);
+    CHECK(behind > ahead + 6, "frame shadow: %.1f dBi behind, %.1f dBi ahead", behind, ahead);
+    CHECK(std::fabs(aheadOpen - ahead - 8) < 0.5f, "the whole shadow straight ahead: %.1f dB", aheadOpen - ahead);
+    CHECK(aheadHigh > txAntennaGainDb({0, 0.7f, 0.7f}, 0) - 0.5f, "high above the frame: no shadow");
+    CHECK(std::fabs(txAntennaGainDb({0, -0.2f, -1}, 8) - txAntennaGainDb({0, -0.2f, -1}, 0)) < 0.1f, "behind: no shadow");
+    CHECK(defaultVtxShadowDb(0.04f) < defaultVtxShadowDb(0.11f) && defaultVtxShadowDb(0.16f) <= 10,
+          "a bigger frame shades more (%.1f / %.1f / %.1f dB)", defaultVtxShadowDb(0.04f), defaultVtxShadowDb(0.11f),
+          defaultVtxShadowDb(0.16f));
     CHECK(rxAntennaGainDb(0) > 7 && rxAntennaGainDb(1.5f) < 0, "goggles: the patch at the horizon, weak overhead");
     // Rice's clicks: none above ~13 dB, the first ones at ~10 dB, snow at 0
     float c15 = fmClicksPerLine(15), c10 = fmClicksPerLine(10), c0 = fmClicksPerLine(0);

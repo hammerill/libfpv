@@ -15,17 +15,14 @@ diff --git a/src/main/osd/osd_elements.c b/src/main/osd/osd_elements.c
      // Get pitch and roll limits in tenths of degrees
      const int maxPitch = osdConfig()->ahMaxPitch * 10;
      const int maxRoll = osdConfig()->ahMaxRoll * 10;
-@@ -974,6 +981,16 @@
+@@ -974,6 +981,13 @@
  
  static void osdElementCrosshairs(osdElementParms_t *element)
  {
 +#if defined(SIMULATOR_BUILD)
 +    if (osdHostAimDot) {
-+        // the centre glyph's place, the side lines blanked
-+        element->buff[0] = SYM_BLANK;
-+        element->buff[1] = SYM_STICK_OVERLAY_SPRITE_MID;
-+        element->buff[2] = SYM_BLANK;
-+        element->buff[3] = 0;
++        // the host draws its own aiming dot in the centre
++        element->drawElement = false;
 +        return;
 +    }
 +#endif
@@ -50,8 +47,8 @@ diff --git a/src/main/osd/osd.h b/src/main/osd/osd.h
  // elements (RSSI, RSSI dBm, link quality, RSNR, TX power) would only show
  // defaults, so they are left out. Set from the host on the FC thread.
  extern bool osdHostLinkElementsHidden;
-+// The host's aim mode: the crosshairs shrink to a dot and the artificial
-+// horizon is not drawn. Set from the host on the FC thread.
++// The host's aim mode: the crosshairs and the artificial horizon are not
++// drawn (the host draws its own dot). Set from the host on the FC thread.
 +extern bool osdHostAimDot;
  #endif
  void changeOsdProfileIndex(uint8_t profileIndex);

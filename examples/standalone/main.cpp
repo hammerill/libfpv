@@ -41,8 +41,9 @@
 // saved with that quad.
 // Keys: K bomb arm switch, X explode, R respawn (also during the ending).
 // After the explosion the game shows the player's ending (F8 > Kamikaze):
-// the view (signal lost or a cutscene) for its duration, then respawn, or
-// nothing: the view stays until R (this game has no pilot to recall to). --view signal|cutscene,
+// the view (signal lost or a cutscene) for its duration, then respawn (the
+// default), or nothing: the view stays until R (this game has no pilot to
+// recall to). --view signal|cutscene,
 // --duration S and --then respawn|nothing set it like the overlay would.
 // --kamikaze-demo flies a scripted strike, then checks the ending options,
 // and exits 0 (pass) or 1 (fail).
@@ -416,7 +417,7 @@ static void savePpm(const char *path, int w, int h) {
 struct Ending {
     bool showing = false;    // the view is on screen
     double until = -1;       // when the view ends, < 0 = until the player acts
-    uint32_t view = FPV_KAMIKAZE_VIEW_SIGNAL_LOST, then = FPV_KAMIKAZE_THEN_NOTHING;
+    uint32_t view = FPV_KAMIKAZE_VIEW_SIGNAL_LOST, then = FPV_KAMIKAZE_THEN_RESPAWN;
     double blastTime = -1;
     int respawns = 0;        // for the demo's checks
     int cutsceneFrames = 0;  // frames drawn from the cutscene camera
@@ -771,10 +772,10 @@ int main(int argc, char **argv) {
         double start = -1;
     } blast;
     // This game can show both views; after them it respawns the drone or
-    // does nothing (there is no pilot to recall to), nothing by default.
+    // does nothing (there is no pilot to recall to), respawn by default.
     fpv_kamikaze_set_ending_support((1u << FPV_KAMIKAZE_VIEW_SIGNAL_LOST) | (1u << FPV_KAMIKAZE_VIEW_CUTSCENE),
                                     (1u << FPV_KAMIKAZE_THEN_RESPAWN) | (1u << FPV_KAMIKAZE_THEN_NOTHING),
-                                    FPV_KAMIKAZE_VIEW_SIGNAL_LOST, FPV_KAMIKAZE_THEN_NOTHING);
+                                    FPV_KAMIKAZE_VIEW_SIGNAL_LOST, FPV_KAMIKAZE_THEN_RESPAWN);
     fpv_kamikaze_config playerConfig{};  // restored after the demo
     playerConfig.struct_size = sizeof playerConfig;
     fpv_kamikaze_get_config(&playerConfig);

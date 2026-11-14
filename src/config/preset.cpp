@@ -211,6 +211,7 @@ DronePreset loadPresetFile(const std::string &quadJsonPath) {
     float armLen = std::sqrt(s.quadMotorPos[0].x * s.quadMotorPos[0].x + s.quadMotorPos[0].z * s.quadMotorPos[0].z);
     p.collision.bodyRadius = std::clamp(armLen * 0.4f, 0.02f, 0.06f);
     p.collision.motorRadius = std::clamp(armLen * 0.2f, 0.01f, 0.03f);
+    p.vtxShadowDb = std::clamp(num(q, "vtxAntennaShadowDb", defaultVtxShadowDb(armLen)), 0.0f, 30.0f);
 #if defined(LIBFPV_KAMIKAZE)
     if (q.contains("payload") && q["payload"].is_object()) {
         p.payloadMass = num(q["payload"], "mass", -1.0f);
@@ -350,6 +351,7 @@ DronePreset builtinDefaultPreset() {
     p.camera.tvl = 1200.0f;
     p.camera.sharpening = 0.55f;
     p.collision.propRadius = 5.1f * 0.0254f * 0.5f;
+    p.vtxShadowDb = defaultVtxShadowDb(0.0795f * 1.41421356f);
     return p;
 }
 

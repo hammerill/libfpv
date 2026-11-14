@@ -1,0 +1,12 @@
+{
+    "version": 1,
+    "name": "Generic 6S1P 4200mAh Li-ion",
+    "fileName": "generic-6s1p-4200mah-li-ion",
+    "buildIn": true,
+    "description": "The long range pack: six 21700 cells (Molicel P42A class), 6S1P 4200mAh, 440 g. About twice a LiPo's energy per gram for a gentle cruise, but it sags hard on a punch: fly it smooth.",
+    "maxVoltageSag": 5.0,
+    "batCellCount": 6,
+    "batCapacityCharged": 4200.0,
+    "batCapacity": 4200.0,
+    "mass": 0.44
+}

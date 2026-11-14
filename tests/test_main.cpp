@@ -596,6 +596,7 @@ void testFlightRealism() {
     const RealismBand bands[] = {
         {"freestyler-5", 15, 30, 3.5f, 80, 170, 55, 110, 180, 2.5f},
         {"betafpv-air65-ii", 20, 45, 3.0f, 40, 110, 31, 45, 85, 1.5f},
+        {"nomade-7", 15, 40, 3.5f, 50, 150, 30, 100, 180, 3.5f},
     };
     for (const RealismBand &b : bands) {
         float thr = findHoverThrottle(h, b.preset);
@@ -680,6 +681,7 @@ void testBatteryEndurance() {
     const BatteryBand bands[] = {
         {"freestyler-5", 3, 8, 60, 130, 100, 240},
         {"betafpv-air65-ii", 2.5f, 4, 12, 22, 110, 165},
+        {"nomade-7", 5, 14, 35, 130, 200, 600},
     };
     for (const BatteryBand &b : bands) {
         float thr = findHoverThrottle(h, b.preset);
@@ -969,6 +971,7 @@ void testMotorBurnout() {
     fpv_material def{0.2f, 0.6f, 0};
     fpv_material_set(7, &def);
 }
+
 
 void testPresets() {
     uint32_t n = fpv_preset_count();
@@ -2034,6 +2037,9 @@ bool osdBlank(const fpv_frame &f) {
     return true;
 }
 
+// libfpv's aiming dot (Betaflight font 0x09) in the OSD's centre
+bool osdAimDot(const fpv_frame &f) { return f.osd[(FPV_OSD_ROWS / 2 - 1) * FPV_OSD_COLS + FPV_OSD_COLS / 2 - 1] == 0x09; }
+
 fpv_kamikaze_state warhead(fpv_drone *d) {
     fpv_kamikaze_state k{};
     k.struct_size = sizeof k;
@@ -2104,7 +2110,7 @@ void testKamikazeArmingBlock() {
     s.destroy();
 }
 
-// In flight: bomb arm switch -> ARMING countdown -> live ("BOMB_ARMED"); the
+// In flight: bomb arm switch -> ARMING countdown -> live ("!ACTIVE!"); the
 // warhead stays live when the motors disarm, and the fall detonates it.
 void testKamikazeImpact() {
     Host h(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1));
@@ -2134,7 +2140,7 @@ void testKamikazeImpact() {
     s.rc.ch[kBomb] = 1;
     s.run(2.5f);
     CHECK(warhead(s.drone).warhead == FPV_WARHEAD_ARMED, "live after the delay (%d)", warhead(s.drone).warhead);
-    CHECK(osdHas(s.f, "BOMB_ARMED"), "OSD shows BOMB_ARMED");
+    CHECK(osdHas(s.f, "!ACTIVE!"), "OSD shows !ACTIVE!");
     CHECK(drainDetonations() == 0, "nothing exploded in the air");
     float height = h.up(s.f.position);
     CHECK(height > 2, "high enough for the fall, %.1f m", height);
@@ -2204,12 +2210,26 @@ void testKamikazeExplodeSwitch() {
     s.rc.ch[kBomb] = 1;
     s.run(1.3f);
     CHECK(warhead(s.drone).warhead == FPV_WARHEAD_ARMED, "live after the 1 s delay");
+    CHECK(osdAimDot(s.f), "aiming dot in the centre while live");
     s.rc.ch[kExplode] = 1;
+    s.run(0.1f);
+    // the fuse is lit: motors cut, "!...BOOM...!" alone on the OSD, the blast 0.15 s later
+    fpv_kamikaze_state k = warhead(s.drone);
+    CHECK(k.warhead == FPV_WARHEAD_IGNITING && k.ignition_remaining > 0.0f && k.ignition_remaining < 0.1f,
+          "igniting, %.3f s left (state %d)", k.ignition_remaining, k.warhead);
+    CHECK(drainDetonations() == 0 && !(s.f.flags & FPV_DRONE_DETONATED), "no blast yet");
+    CHECK(osdHas(s.f, "!...BOOM...!") && !osdHas(s.f, "!ACTIVE!") && !osdAimDot(s.f), "OSD shows only !...BOOM...!");
+    float rpm = 0;
+    for (const fpv_motor_state &m : s.f.motors) rpm = std::max(rpm, m.rpm);
+    CHECK(rpm < 1, "motors cut while igniting (%.0f rpm)", rpm);
+    CHECK(s.f.video.signal_strength > 0, "video still on while igniting");
+    s.rc.ch[kExplode] = -1;  // too late: nothing stops it
+    s.rc.ch[kBomb] = -1;
     bool boom = false;
-    s.run(0.2f, [&](float) { boom |= osdBlank(s.f); });
+    s.run(0.25f, [&](float) { boom |= osdBlank(s.f); });
     fpv_detonation d{};
     CHECK(drainDetonations(&d) == 1 && d.cause == FPV_DETONATION_SWITCH, "explode switch detonates (cause %d)", d.cause);
-    CHECK(h.up(d.position) > 1, "in the air, %.1f m", h.up(d.position));
+    CHECK(h.up(d.position) > 0.5f, "in the air, %.1f m", h.up(d.position));
     CHECK(boom, "OSD blank after the explosion");
 
     // forced host detonation of a safe warhead
@@ -2279,14 +2299,35 @@ void testKamikazeGroundTap() {
     cfg.struct_size = sizeof cfg;
     cfg.ending_duration = 31.0f;
     CHECK(fpv_kamikaze_set_config(&cfg) == FPV_ERROR_INVALID_ARGUMENT, "ending over 30 s refused");
+    // the ignition delay (the overlay's, in ms): 0.15 s by default, 0..1 s, kept by older hosts
     fpv_kamikaze_config_defaults(&cfg);
+    CHECK(cfg.ignition_delay == 0.15f, "default ignition delay 0.15 s (%.2f)", cfg.ignition_delay);
+    cfg.ignition_delay = 1.5f;
+    CHECK(fpv_kamikaze_set_config(&cfg) == FPV_ERROR_INVALID_ARGUMENT, "ignition delay over 1 s refused");
+    cfg.ignition_delay = 0.6f;
+    CHECK(fpv_kamikaze_set_config(&cfg) == FPV_OK, "set ignition delay: %s", fpv_last_error());
+    fpv_kamikaze_config_defaults(&cfg);
+    cfg.struct_size = offsetof(fpv_kamikaze_config, ignition_delay);
+    CHECK(fpv_kamikaze_set_config(&cfg) == FPV_OK, "set an old config: %s", fpv_last_error());
+    got.struct_size = sizeof got;
+    CHECK(fpv_kamikaze_get_config(&got) == FPV_OK && got.ignition_delay == 0.6f,
+          "an old host keeps the player's ignition delay (%.2f)", got.ignition_delay);
+    fpv_kamikaze_config_defaults(&cfg);
+    cfg.ignition_delay = 0;  // the blast on the touch itself
     fpv_kamikaze_set_config(&cfg);
     fpv_drone_reset(s.drone, up, nullptr);
     uint32_t reported = 0;
-    s.run(0.5f, [&](float) { reported += s.f.impact_count; });
+    bool ignited = false;
+    s.run(0.5f, [&](float) {
+        reported += s.f.impact_count;
+        ignited |= warhead(s.drone).warhead == FPV_WARHEAD_IGNITING;
+    });
     fpv_detonation d{};
     CHECK(drainDetonations(&d) == 1 && d.cause == FPV_DETONATION_IMPACT, "a tap on the ground detonates");
+    CHECK(!ignited, "0 ms: no ignition, the blast at once");
     CHECK(reported == 0, "too soft for fpv_frame.impacts (%u reported)", reported);
+    fpv_kamikaze_config_defaults(&cfg);
+    fpv_kamikaze_set_config(&cfg);
     s.destroy();
 }
 
@@ -2321,7 +2362,7 @@ void testKamikazeInstall() {
     k = warhead(s.drone);
     CHECK(k.warhead == FPV_WARHEAD_SAFE && !(k.flags & FPV_KAMIKAZE_BOMB_SWITCH), "switches ignored (%d, %x)", k.warhead,
           k.flags);
-    CHECK(!osdHas(s.f, "NOT ARMED") && !osdHas(s.f, "BOMB_ARMED"), "nothing on the OSD");
+    CHECK(!osdHas(s.f, "NOT ARMED") && !osdHas(s.f, "!ACTIVE!"), "nothing on the OSD");
     CHECK(fpv_kamikaze_detonate(s.drone, 1) == FPV_ERROR_NOT_FOUND, "nothing to detonate");
     CHECK(drainDetonations() == 0, "nothing exploded");
     s.rc.ch[kExplode] = -1;
@@ -2337,16 +2378,17 @@ void testKamikazeInstall() {
     s.rc.ch[kBomb] = 1;
     s.run(0.5f);
     CHECK(warhead(s.drone).warhead == FPV_WARHEAD_ARMED, "live at once (%d)", warhead(s.drone).warhead);
-    CHECK(osdHas(s.f, "BOMB_ARMED"), "OSD shows BOMB_ARMED");
+    CHECK(osdHas(s.f, "!ACTIVE!"), "OSD shows !ACTIVE!");
     // the OSD line is the custom message 1 element: it moves, and the OSD
     // disable switch hides it
     cli("set osd_custom_msg0_pos = 2434\nsave");  // column 2, row 12
     s.run(0.5f);
     std::string row12((const char *)&s.f.osd[12 * FPV_OSD_COLS], FPV_OSD_COLS);
-    CHECK(row12.find("BOMB_ARMED") != std::string::npos, "moved to row 12: \"%s\"", row12.c_str());
+    CHECK(row12.find("!ACTIVE!") != std::string::npos, "moved to row 12: \"%s\"", row12.c_str());
     s.rc.ch[9] = 1;
     s.run(0.5f);
-    CHECK(!osdHas(s.f, "BOMB_ARMED"), "hidden by the OSD disable switch");
+    CHECK(!osdHas(s.f, "!ACTIVE!"), "hidden by the OSD disable switch");
+    CHECK(osdAimDot(s.f), "the aiming dot stays with the OSD disabled");
     s.rc.ch[9] = -1;
     // removed: safe and light again
     fpv_kamikaze_set_installed(0);

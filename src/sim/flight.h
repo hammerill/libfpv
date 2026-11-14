@@ -61,6 +61,7 @@ struct FlightSnapshot {
     float videoNoise = 0, videoBreakup = 0, videoSignal = 1;
     // the link budget (D34): mean received power, Rician K, fade rate
     float videoRxDbm = -40, videoK = 10, videoDoppler = 0;
+    float vtxDamage = 0;  // 0 = intact, 1 = what is left of it after hard hits, fire, blasts
     // the RC link (D36), when simulated
     bool rcLinkOn = false;
     RcLinkStatus rcLink;
@@ -109,11 +110,12 @@ public:
     // The drone's cargo (simulation thread): mass and inertia at once, also in flight.
     void setCargo(const Cargo &cargo);
     void repair();
-    // Adds `amount` (0..1) to a prop's damage, motor -1 = all. Simulation
-    // thread; nothing with damage off.
+    // Adds `amount` (0..1) to a prop's damage, motor -1 = all, and to the
+    // video transmitter's (all of it for motor -1, a quarter for one prop).
+    // Simulation thread; nothing with damage off.
     void damageProps(int motor, float amount);
     // The player's simulation options (any thread): the battery keeps the
-    // charge it has (it still sags; a respawn brings a full one), props and motors take no damage.
+    // charge it has (it still sags; a respawn brings a full one), props, motors and the VTX take no damage.
     void setBatteryDrain(bool on) { m_batteryDrain = on; }
     void setDamage(bool on) { m_damage = on; }
     // Zeroes Betaflight's total armed time, the OSD flight timer.
@@ -216,6 +218,11 @@ private:
     void movePos(Vec3 d);
     Quat m_rot;
     float m_propDamage[4] = {0, 0, 0, 0};
+    // The video transmitter (D34): bent antenna, cracked connector, a cooked
+    // amplifier. Costs up to kVtxDamageLossDb of the link budget; repaired
+    // with the drone.
+    float m_vtxDamage = 0;
+    void damageVtx(float amount);
     std::atomic<bool> m_batteryDrain{true}, m_damage{true};
     void keepBattery(double capacity);  // FPV_SIM_NO_BATTERY_DRAIN
     void keepMotors();   // FPV_SIM_NO_DAMAGE

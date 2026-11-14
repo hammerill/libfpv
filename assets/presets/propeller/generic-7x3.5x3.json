@@ -1,0 +1,23 @@
+{
+    "version": 1,
+    "name": "Generic 7x3.5x3",
+    "fileName": "generic-7x3.5x3",
+    "buildIn": true,
+    "description": "A low-pitch 7\" tri-blade for long range (HQ 7x3.5x3, Gemfan 7035 class): about 2.1 kgf on a 2806.5 1300kV at 6S, efficient at cruise, 7.5 g. Big and thin: it breaks easily.",
+    "bladeCount": 3,
+    "pitchInch": 3.5,
+    "propMaxRpm": 25000.0,
+    "propAudioPitch": 0.75,
+    "propAFactor": 3.3e-8,
+    "propTorqueFactor": 0.0107,
+    "propInertia": 0.000019,
+    "propThrustFactor": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 20.6
+    },
+    "propHarmonic1Amp": 0.025,
+    "propHarmonic2Amp": 0.045,
+    "mass": 0.0075,
+    "durability": 9.0
+}

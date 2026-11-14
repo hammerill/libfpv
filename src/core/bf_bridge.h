@@ -74,8 +74,8 @@ int bfb_beeper_switch(void);
  * the Configurator), drawn wherever the player put that element; up to 16
  * characters, "" draws nothing, NULL gives the element back to Betaflight. */
 void bfb_osd_set_host_message(int index, const char *text);
-/* Aim mode: the crosshairs element shrinks to a dot and the artificial
- * horizon element is not drawn (both only if the player has them on). */
+/* Aim mode: the crosshairs and the artificial horizon elements are not
+ * drawn; libfpv draws its own aiming dot over the OSD. */
 void bfb_osd_set_aim_dot(int on);
 /* Calibration, RX recovery or boot grace still pending. */
 int bfb_settling(void);

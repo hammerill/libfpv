@@ -313,14 +313,14 @@ model.
 `flight_realism` measures each preset. The reference bands come from real
 quads of the class:
 
-| Measurement | Freestyler 5" (6S, 580 g) | Air65 II (1S, 26 g) |
-|---|---|---|
-| Hover throttle (stick) | 22 % | 29 % |
-| Drop 1 s after cutting throttle (free fall: 4.9 m) | 4.2 m | 3.9 m |
-| Climb speed 0.25 s into a full punch | 70 km/h | 34 km/h |
-| Climb speed 1 s into a full punch | 137 km/h | 59 km/h |
-| Top speed, level | 141 km/h | 63 km/h |
-| Coast from 40 to 20 km/h after levelling out | 1.3 s | 0.6 s |
+| Measurement | Freestyler 5" (6S, 580 g) | Air65 II (1S, 26 g) | Nomade 7" (6S Li-ion, 940 g) |
+|---|---|---|---|
+| Hover throttle (stick) | 22 % | 29 % | 27 % |
+| Drop 1 s after cutting throttle (free fall: 4.9 m) | 4.2 m | 3.9 m | 4.4 m |
+| Climb speed 0.25 s into a full punch | 70 km/h | 34 km/h | 45 km/h |
+| Climb speed 1 s into a full punch | 137 km/h | 59 km/h | 99 km/h |
+| Top speed, level | 141 km/h | 63 km/h | 108 km/h |
+| Coast from 40 to 20 km/h after levelling out | 1.3 s | 0.6 s | 1.2 s |
 
 (Air65 II figures after D27.)
 
@@ -334,6 +334,20 @@ rates from a pilot's own flying Air65 II (Betaflight 2026.6), plus
 `vbat_max_cell_voltage = 440`; without that, Betaflight reports a full LiHV
 cell as "NOT PRESENT". Only the tune is taken from that diff. The quad keeps
 libfpv's defaults: air mode on, libfpv's OSD and switches.
+
+The Nomade is a classic analog 7" long range build from typical parts, not
+one product: a 315 mm frame (270 g with the stack, GPS, camera and VTX),
+2806.5 1300 kV motors, 7x3.5x3 props (about 2.1 kgf each at 6S), a 6S1P
+21700 Li-ion pack (4200 mAh, 440 g), a Caddx Ratel 2 at 20 degrees and a
+Unify Pro32 HV at 1 W with 9 W of electronics. About 9:1 on a fresh pack;
+`battery_endurance` measures 5.5 A at hover (over 30 minutes of hover on
+the pack) and 64 A flat out. The pack uses the SimITL sag (`maxVoltageSag`
+5 V) rather than an internal resistance: with `internalResistance` at a
+Li-ion's ~0.12 ohm the sag fed back into the 6S current until the voltage
+collapsed. The voltage curve is still a LiPo's, so the OSD reads a LiPo's
+voltages; the energy and the weight are the Li-ion's. Its
+`vtxAntennaShadowDb` is 10 dB (the big frame and pack, D34). No
+`.diff.txt`: Betaflight's defaults fly it.
 
 Zero throttle (patch `0012`). Pilots found the Air65 II rolling hard toward
 belly-first as soon as they chopped the throttle. SimITL puts the frame's
@@ -806,15 +820,40 @@ so those two points fall at +10 and -2 dB.
 
 **Simulation thread (`Flight::updateVideo`).** The link budget:
 
-- the VTX's power and a 10 dB system loss (polarisation, frame and
-  battery, detuning), which puts a 25 mW VTX's first sparkles near 1 km in
-  the open and a 400 mW one's near 3 km;
+- the VTX's power and a 7 dB system loss (polarisation, connectors,
+  detuning), which puts a 25 mW VTX's first sparkles near 1.4 km in the
+  open with the antenna in clear view, a 400 mW one's past 4 km;
 - free-space loss at 5.8 GHz;
 - the two-ray ground loss past `4 h1 h2 / λ` (0.7 of 40 dB/decade, rough
   ground): flying low and far is what kills range;
 - a dipole VTX antenna up and back on the frame (its null along the axis,
-  so flips that point it at the pilot dip);
+  so flips that point it at the pilot dip), shaded toward the front by the
+  frame, the stack and the battery (the frame shadow, below);
+- a damaged VTX's loss: up to 20 dB, from hard hits (over 5 m/s) and
+  `fpv_drone_damage_props` (fire, blasts), until the drone is repaired, and
+  only with damage on. The impact jolt (the feed's) comes with every hit,
+  damage on or off;
 - the goggles' patch plus omni (weak right overhead).
+
+**The frame shadow.** The VTX antenna is mounted at the back of the frame,
+up and tilted back, which is what build guides recommend: carbon fibre and
+a LiPo block 5.8 GHz, so the antenna is put where most of the sky behind
+the quad is clear. The price is the other direction: toward the front the
+signal goes through the plates, the stack, the camera and the battery.
+Pilots know the pattern: the feed holds on the way out (the pilot behind
+the quad, its nose tilted down, the antenna nearly vertical) and breaks up
+on the way back, nose toward the goggles, especially when the quad comes
+back low and level. `txAntennaGainDb` takes the shadow off the dipole's
+gain: all of it straight ahead, about a quarter side-on, none behind, and
+none for directions well above the top plate, where the antenna's tip
+looks over the frame. Its size is the quad's `vtxAntennaShadowDb`, by
+default from the arm length (about 4 dB on a whoop, 8 on a 5", 10 on a 7"
+with its bigger pack). Vendor guides quote up to 20 dB through carbon; that
+figure is unverified, so libfpv stays at about half of it. The frame and
+battery used to be an all-round part of the system loss (10 dB, now 7):
+the average over directions is about the same, but long range now plays
+like the real thing. The way out is easy, and the way back needs height
+(the pilot then sees the antenna over the top plate) or margin.
 
 Obstruction uses rays spread over a 20-tick cycle. The direct ray is cast
 from both ends, which gives the obstacle's depth (12 dB plus 0.6 dB/m,
@@ -1342,6 +1381,22 @@ X (explode, held), the gamepad West (toggle) and the right shoulder.
 * Only ARMED explodes, on a contact, on the explode switch's off-to-on
   edge (an explode switch already on when it goes live does nothing until
   cycled), or on `fpv_kamikaze_detonate`.
+* A contact or the explode switch lights the fuse: IGNITING for
+  `ignition_delay` (default 0.15 s, 0..1, the player's in ms), then the
+  blast. A real initiator does not go off in the same instant either, and
+  the fraction of a second is the pilot's last look at the target: the OSD is
+  cleared to `!...BOOM...!`, drawn by libfpv over the grid like
+  Betaflight's `ARMED` screen, whatever the OSD disable switch. The motors
+  are cut for it (the props get full damage towards SimITL so there is no
+  thrust, the motor state is zeroed every step so there is no sound), so
+  the drone can't escape the target in the last milliseconds and only
+  falls or bounces. The video link is untouched until the blast, so the
+  feed's impact jolt (D34) carries the message. Switches can't stop a lit
+  fuse; `fpv_kamikaze_detonate` still fires at once (a game's bullet into
+  a burning fuse). The queued event is made at the blast: the sim time
+  then, the impact's normal, material and object, and the impact point
+  moved by however far the drone went meanwhile, so it matches where the
+  wreck freezes. 0 s keeps the old instant blast.
 * The fuse is a contact fuse: every collision contact approaching faster
   than `min_impact_speed` (default 0.25 m/s, 0.1..30, tunable in the
   overlay) fires it, and so does a spinning prop striking something. That
@@ -1370,10 +1425,17 @@ builds"). Detonations are queued (`fpv_kamikaze_poll_detonation`, up to
 host polling less often loses nothing.
 
 **OSD.** The warhead state is a Betaflight OSD element: `BOMB_SAFE`,
-`BOMB SW ON` (blinking, the motors are blocked), `ARMING 3`, `BOMB_ARMED`
+`BOMB SW ON` (blinking, the motors are blocked), `ARMING 3`, `!ACTIVE!`
 (live) and `NOT ARMED` (explode switch on a safe bomb). The exact wording
-of real firing boards is not public. `BOMB_SAFE` and `BOMB_ARMED` were
-`SAFE` and `STEADY` at first.
+of real firing boards is not public. `BOMB_SAFE` and `!ACTIVE!` were
+`SAFE` and `STEADY` at first, then `!ACTIVE!` was `BOMB_ARMED`.
+The aiming dot of a live warhead used to replace the crosshairs element's
+glyphs, so it existed only if the player had the crosshairs on and
+vanished with the OSD disable switch. Now Betaflight (patch 0016) hides the
+crosshairs and the artificial horizon while it is live, and libfpv draws
+the dot (the font's `0x09`) on the crosshairs' default centre, row 7
+column 14, over the composed grid: always there, OSD disabled or not. With
+`FPV_KAMIKAZE_NO_OSD` neither is done (the game draws its own).
 At first libfpv wrote the text into `frame.osd` over Betaflight's grid,
 which put it above everything, the post-flight stats included, and fixed
 on row 3. It now takes Betaflight's "Custom message 1" (`OSD_CUSTOM_MSG0`,

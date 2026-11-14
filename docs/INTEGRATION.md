@@ -543,7 +543,12 @@ bool pose = pc.features & FPV_PILOT_POSE;
 ## Damage
 
 Make everything that looks like it could damage a prop damage it. That is
-the rule for every integration, as on a real quad:
+the rule for every integration, as on a real quad. `fpv_drone_damage_props`
+damages the video transmitter as well (all of `amount` with motor -1, a
+quarter of it for one prop), and libfpv's own hard hits (over 5 m/s) do too:
+a damaged VTX loses up to 20 dB of link budget, so the picture breaks up
+much closer to the pilot, until `fpv_drone_repair`. Every hit, damage on or
+off, also shakes the analog picture for a moment.
 
 - **Surfaces.** Water, lava, fire, saws, fans, spinning blades: give their
   triangles `FPV_MATERIAL_KILLS_PROPS` (or return such a material from the
@@ -558,7 +563,7 @@ the rule for every integration, as on a real quad:
   Fire or water: about 0.5 per second on all four, every frame
   (`0.5 * frame_dt`). An explosion: 1 on all four within its radius.
 - **Don't check the setting.** The player can make the drone immune
-  (F8 > Drone > "Props and motors take damage" off, `FPV_SIM_NO_DAMAGE`):
+  (F8 > Drone > "Props, motors and VTX take damage" off, `FPV_SIM_NO_DAMAGE`):
   libfpv then ignores all of it, including `fpv_drone_damage_props`. The game
   always calls it.
 - Effects that are only the game's (sparks, smoke, sound) can still play
@@ -609,15 +614,30 @@ the quad carries it too. A game that decides per mission sets it each time
 it spawns the drone.
 
 The motors only arm with the bomb switch off. Take off, flip it, and the
-warhead is live (OSD `BOMB_ARMED`; with an arming delay set, `ARMING 3` first).
-While it is live, Betaflight's crosshairs shrink to an aiming dot and the
-artificial horizon is not drawn (each only if the player has it on). Any touch then sets it off, even a light tap on the ground, and so does the
-explode switch. With the bomb switch off nothing explodes. The warhead
+warhead is live (OSD `!ACTIVE!`; with an arming delay set, `ARMING 3` first).
+While it is live, Betaflight's crosshairs and artificial horizon are hidden
+(if the player has them on) and libfpv draws an aiming dot in the OSD's
+centre, also with the OSD disable switch on. Any touch then lights the
+fuse, even a light tap on the ground, and so does the explode switch. With
+the bomb switch off nothing explodes.
+
+A lit fuse (`FPV_WARHEAD_IGNITING`) is not yet the blast. The motors are
+cut at once (no sound, no last-moment escape; the drone still falls and
+bounces), the OSD is cleared to `!...BOOM...!` in the middle, like
+Betaflight's own `ARMED` screen and also with the OSD disabled, and the
+blast follows after the ignition delay: 150 ms by default, 0 to 1000 ms in
+F8 > Kamikaze (`ignition_delay`, in seconds, in `fpv_kamikaze_config`).
+Nothing stops it, the switches included. The video keeps working during
+that time, so with the video feed's noise on, the impact's jolt shakes the
+`!...BOOM...!` picture like any other hit. The detonation event comes at
+the blast, at the drone's position then (an impact point moves along with
+the drone). `fpv_kamikaze_detonate` blows it up at once, also while it
+burns. 0 ms gives the blast on the impact itself, as before. The warhead
 weighs something (by default 60 % of the quad), so a loaded drone climbs
 and turns slower.
 
 All kamikaze settings are in the overlay's own tab, F8 > Kamikaze (only in
-kamikaze builds): the bomb, the arming delay, the impact fuse, the payload,
+kamikaze builds): the bomb, the arming delay, the impact fuse, the ignition delay, the payload,
 the warhead OSD line, the ending (below) and a **Bomb switches** setup.
 That one works like the radio setup in F8 > Radio but binds only AUX7 and
 AUX8, on a radio that is set up already, and merges them into
@@ -706,8 +726,8 @@ without a character to hand control back to leaves out Recall.
 pilot's bomb switch is still on, it must be turned off before the new
 warhead can arm, so a respawn never starts with a live bomb.
 
-The standalone example supports both views and then Respawn or Nothing
-(the default: it has no pilot to recall to); R respawns at any time, also
+The standalone example supports both views and then Respawn (the
+default) or Nothing (it has no pilot to recall to); R respawns at any time, also
 during the view. `fpv_standalone [--view signal|cutscene] [--duration S]
 [--then respawn|nothing]` sets the ending as the overlay would, and
 `fpv_standalone --kamikaze-demo` flies a scripted strike that checks every
