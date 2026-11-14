@@ -39,7 +39,8 @@
 typedef void (*fpv_video_gl2_osd_fn)(void *user, const fpv_draw_data *data, int width, int height);
 
 typedef struct fpv_video_gl2 {
-    unsigned int signal_prog, present_prog, vbo;
+    unsigned int signal_prog[3];  /* per mode: lens only, analog, digital */
+    unsigned int present_prog, vbo;
     unsigned int fbo[2], tex[2];  /* the signal, ping-pong: [cur] is the latest */
     int cur, raster_w, raster_h;
     unsigned int osd_fbo, osd_tex;
@@ -47,7 +48,7 @@ typedef struct fpv_video_gl2 {
     unsigned int lines_tex;
     uint32_t field, flags;
     int have;                     /* a signal was drawn */
-    int sl[32], pl[8];            /* uniform locations */
+    int sl[3][32], pl[8];         /* uniform locations */
 } fpv_video_gl2;
 
 int fpv_video_gl2_init(fpv_video_gl2 *v);
@@ -80,13 +81,16 @@ static const char *fpv_video_gl2__vs =
     "attribute vec2 pos; varying vec2 uv;\n"
     "void main() { uv = pos * 0.5 + 0.5; gl_Position = vec4(pos, 0.0, 1.0); }\n";
 
-/* The signal: one pixel of the feed's raster per fragment. */
+/* The signal: one pixel of the feed's raster per fragment. Built once per
+ * mode (FPV_VIDEO_MODE 0 lens only, 1 analog, 2 digital) rather than as one
+ * program that branches on it: as one, it is too big for Direct3D's shader
+ * compiler, which ANGLE (Chrome and Edge on Windows) runs it through, and
+ * the browser's GPU process dies of a stack overflow compiling it. */
 static const char *fpv_video_gl2__signal_fs =
     "varying vec2 uv;\n"
     "uniform sampler2D scene, osd, lines, history;\n"
     "uniform float lineCount;    // rows of the lines texture\n"
     "uniform vec2 raster;        // pixels of this target\n"
-    "uniform float mode;         // 0 lens only, 1 analog, 2 digital\n"
     "uniform float noise, res, osdIn;\n"
     "uniform float picAspect, sceneAspect;\n"
     "uniform vec2 k; uniform float zoom; uniform vec2 sceneTexel;\n"
@@ -117,6 +121,7 @@ static const char *fpv_video_gl2__signal_fs =
     "}\n"
     "const mat3 toYiq = mat3(0.299, 0.596, 0.211, 0.587, -0.274, -0.523, 0.114, -0.322, 0.312);\n"
     "const mat3 toRgb = mat3(1.0, 1.0, 1.0, 0.956, -0.272, -1.106, 0.621, -0.647, 1.703);\n"
+    "#if FPV_VIDEO_MODE == 1\n"
     "vec3 analog() {\n"
     "  vec2 px = floor(uv * raster);\n"
     "  // the field line this pixel shows (from the top) and, when the picture\n"
@@ -210,6 +215,7 @@ static const char *fpv_video_gl2__signal_fs =
     "  vec3 rgb = toRgb * yiq;\n"
     "  return clamp(rgb, 0.0, 1.0);\n"
     "}\n"
+    "#elif FPV_VIDEO_MODE == 2\n"
     "vec3 boxTap(vec2 p, vec2 size) {\n"
     "  vec2 o = 0.25 * size;\n"
     "  return 0.25 * (tap(p + vec2(-o.x, -o.y)) + tap(p + vec2(o.x, -o.y)) + tap(p + vec2(-o.x, o.y)) + tap(p + vec2(o.x, o.y)));\n"
@@ -253,9 +259,16 @@ static const char *fpv_video_gl2__signal_fs =
     "  }\n"
     "  return clamp(c, 0.0, 1.0);\n"
     "}\n"
+    "#endif\n"
     "void main() {\n"
-    "  vec3 c = mode < 0.5 ? tap(uv) : mode < 1.5 ? analog() : digitalPix();\n"
-    "  if (mode < 0.5 && osdIn > 0.5) { vec4 od = osdTap(uv); c = mix(c, od.rgb, od.a); }\n"
+    "#if FPV_VIDEO_MODE == 1\n"
+    "  vec3 c = analog();\n"
+    "#elif FPV_VIDEO_MODE == 2\n"
+    "  vec3 c = digitalPix();\n"
+    "#else\n"
+    "  vec3 c = tap(uv);\n"
+    "  if (osdIn > 0.5) { vec4 od = osdTap(uv); c = mix(c, od.rgb, od.a); }\n"
+    "#endif\n"
     "  gl_FragColor = vec4(c, 1.0);\n"
     "}\n";
 
@@ -274,24 +287,28 @@ static const char *fpv_video_gl2__present_fs =
     "  gl_FragColor = vec4(texture2D(signal, p).rgb, 1.0);\n"
     "}\n";
 
-static unsigned int fpv_video_gl2__shader(unsigned int type, const char *src) {
-    const char *parts[2] = {FPV_VIDEO_GL2_VERSION, src};
+/* define is "" or "#define ...\n"; name says which shader in the log */
+static unsigned int fpv_video_gl2__shader(unsigned int type, const char *define, const char *src, const char *name) {
+    const char *parts[3] = {FPV_VIDEO_GL2_VERSION, define, src};
     unsigned int s = glCreateShader(type);
-    glShaderSource(s, 2, parts, NULL);
+    glShaderSource(s, 3, parts, NULL);
     glCompileShader(s);
     int ok = 0;
     glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
     if (!ok) {
         char log[1024];
+        log[0] = 0;
         glGetShaderInfoLog(s, sizeof(log), NULL, log);
-        fprintf(stderr, "fpv_video_gl2: shader: %s\n", log);
+        fprintf(stderr, "fpv_video_gl2: the %s shader failed to compile: %s\n", name,
+                log[0] ? log : "(no log: the GPU driver or the browser's GPU process may have crashed)");
     }
     return s;
 }
 
-static unsigned int fpv_video_gl2__program(const char *fs) {
-    unsigned int v = fpv_video_gl2__shader(GL_VERTEX_SHADER, fpv_video_gl2__vs);
-    unsigned int f = fpv_video_gl2__shader(GL_FRAGMENT_SHADER, fs);
+/* 0 on failure, logged */
+static unsigned int fpv_video_gl2__program(const char *define, const char *fs, const char *name) {
+    unsigned int v = fpv_video_gl2__shader(GL_VERTEX_SHADER, "", fpv_video_gl2__vs, "vertex");
+    unsigned int f = fpv_video_gl2__shader(GL_FRAGMENT_SHADER, define, fs, name);
     unsigned int p = glCreateProgram();
     glAttachShader(p, v);
     glAttachShader(p, f);
@@ -303,8 +320,10 @@ static unsigned int fpv_video_gl2__program(const char *fs) {
     glGetProgramiv(p, GL_LINK_STATUS, &ok);
     if (!ok) {
         char log[1024];
+        log[0] = 0;
         glGetProgramInfoLog(p, sizeof(log), NULL, log);
-        fprintf(stderr, "fpv_video_gl2: link: %s\n", log);
+        fprintf(stderr, "fpv_video_gl2: the %s shader failed to link: %s\n", name,
+                log[0] ? log : "(no log: the GPU driver or the browser's GPU process may have crashed)");
         glDeleteProgram(p);
         return 0;
     }
@@ -312,11 +331,11 @@ static unsigned int fpv_video_gl2__program(const char *fs) {
 }
 
 static const char *fpv_video_gl2__signal_uniforms[] = {
-    "scene", "osd", "lines", "history", "raster", "mode", "noise", "res", "osdIn", "picAspect", "sceneAspect",
+    "scene", "osd", "lines", "history", "raster", "noise", "res", "osdIn", "picAspect", "sceneAspect",
     "k", "zoom", "sceneTexel", "lumaCycles", "chromaCycles", "subcarrier", "sharpen", "parity", "roll", "seed",
     "activeLines", "totalLines", "ntsc", "interf", "digital", "blocks", "softness", "lineCount", NULL};
 enum {
-    FPV_V2_SCENE, FPV_V2_OSD, FPV_V2_LINES, FPV_V2_HISTORY, FPV_V2_RASTER, FPV_V2_MODE, FPV_V2_NOISE, FPV_V2_RES,
+    FPV_V2_SCENE, FPV_V2_OSD, FPV_V2_LINES, FPV_V2_HISTORY, FPV_V2_RASTER, FPV_V2_NOISE, FPV_V2_RES,
     FPV_V2_OSDIN, FPV_V2_PICASPECT, FPV_V2_SCENEASPECT, FPV_V2_K, FPV_V2_ZOOM, FPV_V2_SCENETEXEL, FPV_V2_LUMA,
     FPV_V2_CHROMA, FPV_V2_SUBC, FPV_V2_SHARPEN, FPV_V2_PARITY, FPV_V2_ROLL, FPV_V2_SEED, FPV_V2_ACTIVE,
     FPV_V2_TOTAL, FPV_V2_NTSC, FPV_V2_INTERF, FPV_V2_DIGITAL, FPV_V2_BLOCKS, FPV_V2_SOFTNESS, FPV_V2_LINECOUNT
@@ -329,13 +348,25 @@ static void fpv_video_gl2__texparams(int filter) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 }
 
+/* Returns 0 (and holds nothing) when a shader fails; the reason is logged. */
 int fpv_video_gl2_init(fpv_video_gl2 *v) {
+    static const char *defines[3] = {"#define FPV_VIDEO_MODE 0\n", "#define FPV_VIDEO_MODE 1\n",
+                                     "#define FPV_VIDEO_MODE 2\n"};
+    static const char *names[3] = {"lens", "analog video", "digital video"};
     memset(v, 0, sizeof(*v));
-    v->signal_prog = fpv_video_gl2__program(fpv_video_gl2__signal_fs);
-    v->present_prog = fpv_video_gl2__program(fpv_video_gl2__present_fs);
-    if (!v->signal_prog || !v->present_prog) return 0;
-    for (int i = 0; fpv_video_gl2__signal_uniforms[i]; i++)
-        v->sl[i] = glGetUniformLocation(v->signal_prog, fpv_video_gl2__signal_uniforms[i]);
+    for (int m = 0; m < 3; m++) {
+        v->signal_prog[m] = fpv_video_gl2__program(defines[m], fpv_video_gl2__signal_fs, names[m]);
+        if (!v->signal_prog[m]) break;
+    }
+    if (v->signal_prog[0] && v->signal_prog[1] && v->signal_prog[2])
+        v->present_prog = fpv_video_gl2__program("", fpv_video_gl2__present_fs, "present");
+    if (!v->present_prog) {
+        fpv_video_gl2_shutdown(v);
+        return 0;
+    }
+    for (int m = 0; m < 3; m++)
+        for (int i = 0; fpv_video_gl2__signal_uniforms[i]; i++)
+            v->sl[m][i] = glGetUniformLocation(v->signal_prog[m], fpv_video_gl2__signal_uniforms[i]);
     v->pl[0] = glGetUniformLocation(v->present_prog, "signal");
     v->pl[1] = glGetUniformLocation(v->present_prog, "rect");
     v->pl[2] = glGetUniformLocation(v->present_prog, "rows");
@@ -379,7 +410,7 @@ static void fpv_video_gl2__triangle(fpv_video_gl2 *v) {
 
 void fpv_video_gl2_draw(fpv_video_gl2 *v, const fpv_frame *f, unsigned int scene_tex, int scene_w, int scene_h,
                         int fb_w, int fb_h, fpv_video_gl2_osd_fn draw_osd, void *user) {
-    if (!v->signal_prog || fb_w <= 0 || fb_h <= 0 || scene_w <= 0 || scene_h <= 0) return;
+    if (!v->present_prog || fb_w <= 0 || fb_h <= 0 || scene_w <= 0 || scene_h <= 0) return;
     const fpv_video_feed *vf = &f->video_feed;
     /* an older libfpv fills no video_feed: struct_size tells */
     int has_feed = f->struct_size >= offsetof(fpv_frame, video_feed) + sizeof(fpv_video_feed);
@@ -470,22 +501,23 @@ void fpv_video_gl2_draw(fpv_video_gl2 *v, const fpv_frame *f, unsigned int scene
         int next = v->have ? 1 - v->cur : v->cur;
         glBindFramebuffer(GL_FRAMEBUFFER, v->fbo[next]);
         glViewport(0, 0, w, h);
-        glUseProgram(v->signal_prog);
-        const int *L = v->sl;
+        glUseProgram(v->signal_prog[mode]);
+        const int *L = v->sl[mode];
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, scene_tex);
         glActiveTexture(GL_TEXTURE0 + 1);
         glBindTexture(GL_TEXTURE_2D, osd_in ? v->osd_tex : 0);
         glActiveTexture(GL_TEXTURE0 + 2);
         glBindTexture(GL_TEXTURE_2D, v->lines_tex);
+        /* the last frame, never the target: with no signal yet, the other
+           (blank) one, as sampling the target is a feedback loop */
         glActiveTexture(GL_TEXTURE0 + 3);
-        glBindTexture(GL_TEXTURE_2D, v->tex[v->cur]);
+        glBindTexture(GL_TEXTURE_2D, v->tex[1 - next]);
         glUniform1i(L[FPV_V2_SCENE], 0);
         glUniform1i(L[FPV_V2_OSD], 1);
         glUniform1i(L[FPV_V2_LINES], 2);
         glUniform1i(L[FPV_V2_HISTORY], 3);
         glUniform2f(L[FPV_V2_RASTER], (float)w, (float)h);
-        glUniform1f(L[FPV_V2_MODE], (float)mode);
         glUniform1f(L[FPV_V2_NOISE], (float)noise);
         glUniform1f(L[FPV_V2_RES], (float)res);
         glUniform1f(L[FPV_V2_OSDIN], (float)osd_in);
@@ -567,7 +599,8 @@ void fpv_video_gl2_shutdown(fpv_video_gl2 *v) {
     if (v->osd_fbo) glDeleteFramebuffers(1, &v->osd_fbo);
     if (v->lines_tex) glDeleteTextures(1, &v->lines_tex);
     if (v->vbo) glDeleteBuffers(1, &v->vbo);
-    if (v->signal_prog) glDeleteProgram(v->signal_prog);
+    for (int m = 0; m < 3; m++)
+        if (v->signal_prog[m]) glDeleteProgram(v->signal_prog[m]);
     if (v->present_prog) glDeleteProgram(v->present_prog);
     memset(v, 0, sizeof(*v));
 }

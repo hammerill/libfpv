@@ -56,7 +56,7 @@
 /* The one place the version is set: CMakeLists.txt reads these three. */
 #define LIBFPV_VERSION_MAJOR 0
 #define LIBFPV_VERSION_MINOR 3
-#define LIBFPV_VERSION_PATCH 0
+#define LIBFPV_VERSION_PATCH 1
 #define LIBFPV_STRINGIFY_(x) #x
 #define LIBFPV_STRINGIFY(x) LIBFPV_STRINGIFY_(x)
 #define LIBFPV_VERSION_STRING                                                  \
