@@ -70,19 +70,29 @@ game doesn't pass the flag) `flags` is 0 and the FPV view is drawn as above.
   pilot position to the drone, which can be long: hundreds of metres). On the host thread, multipath fading runs line by line at the
   Doppler of the drone's speed through two diversity antennas. Each line's
   carrier-to-noise ratio then sets what that line looks like:
-  - grain stretched along the line;
-  - FM clicks (sparklies) at Rice's rate below the threshold, white on dark
-    and black on bright;
-  - colour speckle, and the colour killer once the burst is lost;
+  - grain stretched along the line, over the camera's own fine grain;
+  - FM clicks (sparklies) at Rice's rate below the threshold: specks a
+    sample or two long, mostly in the bright parts of the picture, black or
+    a colour on bright, white on dark, in dense bands (the odd lone click of
+    a fair line doesn't show);
+  - saturated colour speckle, and the colour killer only once the burst is
+    really gone;
   - torn line starts from sync hits, which the PLL pulls back over the next
     lines;
   - a rolling picture with the black blanking bar once vertical sync goes;
   - snow when nothing is left.
 
-  Hard impacts jolt the feed, a sagging 1S pack browns out a whoop's VTX,
-  and ESC noise on the power wiring draws crawling diagonal stripes with
-  throttle (strongly on a cheap VTX). Digital links break into macroblocks
-  and freeze instead.
+  Close in, the signal is strong but not perfect: a deep multipath fade
+  (low over the ground, among reflections) cancels the direct path, and FM
+  clicks however strong the carrier is. So a whoop flying near the pilot
+  still gets a torn, sparkling band now and then. A band of hit lines (or a
+  hit, or a current surge on a whoop's supply) can throw the goggles' colour
+  decoder off for a few fields: oversaturated colour, the hue turned and
+  sweeping across the picture, highlights tinted (`chroma_boost`,
+  `chroma_tint`, `hue_sweep`). Hard impacts jolt the feed and tear a band of
+  lines sideways, a sagging 1S pack browns out a whoop's VTX, and a VTX with
+  a poorly filtered supply (a cheap one) draws crawling diagonal stripes
+  with throttle. Digital links break into macroblocks and freeze instead.
 - **Camera resolution and aspect** (`FPV_VIDEO_FEED_RESOLUTION`). The
   picture is drawn at the feed's resolution and at the camera's aspect, with
   black bars like in goggles: a 4:3 camera on a 16:9 screen gets bars at the
@@ -107,9 +117,15 @@ fpv_gl3_render(&ui, fpv_overlay_render(dt), fb_w, fb_h);
 A game whose renderer runs on an older context (OpenGL 2.1, which is all a
 legacy macOS context gives, GLES 2 or WebGL 1) uses
 `docs/renderers/fpv_video_gl2.h` instead: the same shaders in GLSL 1.20 /
-GLSL ES 1.00, with no VAOs, `texelFetch` or `gl_VertexID`, and the OSD drawn
-through a callback with the host's own OSD renderer (Super Mario 64 FPV uses
-it). Keep the two headers' shaders in step.
+GLSL ES 1.00, with no VAOs, `texelFetch` or `gl_VertexID`, and the OSD over
+the picture drawn through a callback with the host's own OSD renderer
+(Super Mario 64 FPV uses it). A Direct3D 9 game uses
+`docs/renderers/fpv_video_d3d9.h` (C++, ps_3_0): the same shaders in HLSL,
+compiled at runtime by `d3dcompiler_47.dll` on any thread, an optional
+texture of the game's own UI kept in the picture, and macros to reach
+libfpv through the game's own function pointers when it loads libfpv at
+runtime (GTA San Andreas FPV uses it). Keep the three headers' shaders in
+step.
 
 Render the scene with `fov_y_degrees` as the vertical FOV at the screen's
 aspect, as usual. When the picture is 4:3, its middle is used. With the
@@ -127,22 +143,38 @@ in three steps:
      lines past the picture are the blanking, drawn black.
    - Read that line's two texels from `lines` (uploaded as a 2 ×
      `line_count` RGBA8 texture, nearest; the layout is in libfpv.h) and
-     shift the sample by its horizontal shift.
+     shift the sample by its horizontal shift. A sample shifted past the
+     line's end shows a short black porch (0.035 of the line), then the
+     line's start.
    - Sample the scene through the lens. The lens is the formula above, with
      the picture's aspect.
    - With the resolution effect, low-pass the luma across the line to
-     `luma_cycles` and the colour (YIQ) to `chroma_cycles`.
-   - Add the line's grain and sparkles, apply its colour gain and hue, and
-     the `interference` stripes.
+     `luma_cycles` (about -6 dB there) and the colour (YIQ) to
+     `chroma_cycles`, then sharpen the luma (the camera's `sharpening` plus
+     the goggles' peaking): crisp edges with halos.
+   - Add the line's grain and sparkles (denser on bright samples), apply its
+     colour gain and hue, the decoder's upset (`chroma_boost`, `chroma_tint`
+     times luma, `hue_sweep` turns across the line; check `struct_size`
+     covers them), and the `interference` stripes.
    - Mix toward snow by the line's picture value.
 
-   Analog, with `FPV_VIDEO_FEED_OSD_IN_SIGNAL`: draw the OSD (analog style)
-   into a texture first and mix it into the scene samples, so it is noisy
-   and soft like the rest of the picture.
+   Analog, with `FPV_VIDEO_FEED_OSD_IN_SIGNAL`: the OSD goes into the
+   signal the way the flight controller's OSD chip writes it, after the
+   camera, so it is crisp but tears, rolls and sparkles with the picture.
+   Build its picture from `frame.osd` and the font (`fpv_texture_get`,
+   `FPV_TEXTURE_OSD_FONT`, 12 × 18 glyphs, 16 to a row of the atlas): 360
+   font pixels across, one field line per glyph row, a cell keeping 17 of a
+   glyph's rows on PAL (1 to 17) and 14 on NTSC (2 to 15), so 360 × 272 or
+   360 × 224. Place it inside the picture as goggles show it: from 3 % to
+   97 % of the line, centred down the field. Look it up at the line's
+   (shifted) sample and field line, between the two nearest font pixels
+   with each step kept to about a sample (so strokes stay even), and switch
+   the luma to it after the camera's filters, the colour off under it.
 2. **The goggles.** Draw that texture with bilinear filtering into the
    picture's rectangle: `picture_aspect` fitted to the screen, black around
-   it. For an analog field, move it down half a line when `field_parity`
-   is 1 (bob).
+   it, each step between two samples kept to about a screen pixel ("sharp
+   bilinear") so the OSD's pixels stay crisp. For an analog field, move it
+   down half a line when `field_parity` is 1 (bob).
 3. **The OSD on top**, digital or with the effects off, in the player's
    `osd_style`.
 

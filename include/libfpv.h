@@ -559,8 +559,9 @@ enum fpv_video_feed_flags {
      * (picture_aspect), with black bars around it like in goggles. */
     FPV_VIDEO_FEED_RESOLUTION = 1u << 1,
     /* Analog: the flight controller's OSD chip writes the OSD into the
-     * video before the transmitter, so it gets the noise and the blur too.
-     * Draw it into the picture, not over it. */
+     * video before the transmitter, so it gets the noise, tears and rolls
+     * too, while staying as crisp as the chip's pixels. Draw it into the
+     * picture, not over it. */
     FPV_VIDEO_FEED_OSD_IN_SIGNAL = 1u << 2
 };
 
@@ -600,7 +601,8 @@ typedef struct fpv_video_feed {
     float seed;                /* changes every field, seeds the noise */
     /* Interference from the motors and ESCs on the power wiring, a luma
      * offset of amplitude * sin(2 pi (x * cycles_per_line + line * step + phase))
-     * (x 0..1 across the line): diagonal stripes that crawl with throttle. */
+     * (x 0..1 across the line): diagonal stripes that crawl with throttle,
+     * only from a VTX with a poorly filtered supply (0 on most). */
     float interference[4];     /* amplitude, cycles per line, step per line, phase (cycles) */
     /* Digital links: the share of macroblocks lost in this frame, how much the
      * low bitrate smears the picture (0..1), and whether the goggles hold the
@@ -621,6 +623,16 @@ typedef struct fpv_video_feed {
      * Upload it as a 2 x line_count texture, nearest filtering. */
     uint32_t line_count;
     uint8_t lines[FPV_VIDEO_MAX_LINES * 8];
+    /* Analog: the goggles' colour decoder thrown off by a hit on the colour
+     * burst, for a few fields after it. All 0 while it holds (and from a
+     * libfpv older than these fields: check struct_size). The colour's extra
+     * gain (gain = 1 + chroma_boost: oversaturated), a tint added in
+     * proportion to luma (I, Q per unit of luma: highlights go green or
+     * magenta), and the hue's sweep across the line in turns (the decoder's
+     * subcarrier off frequency: rainbows across the picture). */
+    float chroma_boost;
+    float chroma_tint[2];
+    float hue_sweep;
 } fpv_video_feed;
 
 typedef struct fpv_frame {

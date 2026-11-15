@@ -30,6 +30,11 @@ constexpr float kVideoTxGainDbi = 2.1f;   // dipole / lollipop, at its best
 constexpr float kVideoRxPatchDbi = 8.0f;  // goggles: a patch facing the drone...
 constexpr float kVideoRxOmniDbi = 2.1f;   // ...and an omni, diversity
 constexpr float kVideoRxHeight = 1.7f;    // the goggles above the pilot's feet, m
+// Multipath distortion: an FM signal whose direct path is cancelled by its
+// echoes clicks however strong it is. The distortion sits this far under the
+// mean signal, so only deep fades (a low K: near the ground, metal, inside a
+// car) reach it, at any range (D34).
+constexpr float kVideoMultipathMarginDb = 17.0f;
 
 // The obstruction probe's verdict (D34): the direct ray blocked (centre),
 // how many of the four paths through the first Fresnel zone's edge are
@@ -138,6 +143,12 @@ private:
     bool m_vLocked = true;
     float m_roll = 0, m_rollSpeed = 0;
     float m_impact = 0;
+    float m_hit = 0;             // a hit since the last field
+    float m_throttle = 0;        // last field's, for current surges
+    // a hit on the colour burst: the decoder's colour is off for a few fields
+    float m_upset = 0;           // 0..1: held a few fields, then it locks again
+    int m_upHold = 0, m_upWait = 0;
+    float m_upHue = 0, m_upHueV = 0, m_upBoost = 0, m_upTint[2] = {0, 0}, m_upSweep = 0;
     float m_brownout = 0;        // seconds left of a VTX reset
     float m_pwmPhase = 0, m_humPhase[4] = {0, 0, 0, 0};
     int m_freezeFrames = 0;

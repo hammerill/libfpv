@@ -186,6 +186,7 @@ void VideoFeed::update(float dt, const VideoSpec &s, const VideoInputs &in, fpv_
     dt = std::clamp(dt, 0.0f, 0.25f);
     m_time += dt;
     m_impact = std::max(m_impact * std::exp(-dt / 0.15f), std::clamp(in.impact, 0.0f, 1.0f));
+    m_hit = std::max(m_hit, std::clamp(in.impact, 0.0f, 1.0f));  // for the next field
 
     o.flags = (in.noise ? FPV_VIDEO_FEED_NOISE : 0u) | (in.resolution ? FPV_VIDEO_FEED_RESOLUTION : 0u);
     if (o.flags && !s.digital) o.flags |= FPV_VIDEO_FEED_OSD_IN_SIGNAL;
@@ -231,6 +232,14 @@ void VideoFeed::update(float dt, const VideoSpec &s, const VideoInputs &in, fpv_
     o.field = (uint32_t)m_field;
 }
 
+// The line's carrier-to-noise ratio with the multipath distortion added in
+// power: thermal noise below the FM threshold at range, and close in, the
+// distortion of a deep fade (the direct path cancelled by echoes).
+static float effectiveCnr(float thermalDb, float fadeDb) {
+    float mp = kVideoMultipathMarginDb + fadeDb;
+    return -10.0f * std::log10(std::pow(10.0f, -thermalDb / 10.0f) + std::pow(10.0f, -mp / 10.0f));
+}
+
 void VideoFeed::analogField(const VideoSpec &s, const VideoInputs &in, float fieldDt, fpv_video_feed &o) {
     const AnalogTiming t = timing(s.system);
     o.field_parity = (uint32_t)(m_field & 1);
@@ -249,9 +258,12 @@ void VideoFeed::analogField(const VideoSpec &s, const VideoInputs &in, float fie
     float mean = dark ? -40.0f : in.link.rxDbm + m_shadowDb - kVideoNoiseFloorDbm;
     float k = std::max(in.link.kFactor, 0.0f);
 
-    // the field's average, for the colour killer and vertical sync
+    // the field's average, for the colour killer and vertical sync: long,
+    // averaged pulses that ride out the multipath distortion's clicks
     float fieldCnr = mean + branchFadeDb(m_selected, 0.5 * fieldDt, k);
-    if (m_colourKilled ? fieldCnr > 6.0f : fieldCnr < 2.5f) m_colourKilled = !m_colourKilled;
+    // The goggles keep the colour until the burst is really gone: noise on a
+    // weak picture is coloured, not grey.
+    if (m_colourKilled ? fieldCnr > -2.0f : fieldCnr < -6.0f) m_colourKilled = !m_colourKilled;
     if (deficit > 0.3f && uniform() < 0.3f * deficit) m_colourKilled = true;  // sagging camera loses its burst
     // vertical sync: lost well below the threshold, the picture rolls until it locks again
     if (m_vLocked && (fieldCnr < -4.0f || dark) && uniform() < 0.3f) {
@@ -275,9 +287,13 @@ void VideoFeed::analogField(const VideoSpec &s, const VideoInputs &in, float fie
     // NTSC: the decoder's hue drifts on a weak burst
     m_hue = m_hue * 0.95f + 0.05f * gauss() * 0.6f * smoothstep(10.0f, 0.0f, fieldCnr);
 
-    // motor and ESC noise on the VTX's power
-    float load = std::pow(std::clamp(in.throttle, 0.0f, 1.0f), 1.2f);
-    float esc = noise ? s.powerNoise * (0.012f + 0.06f * load) : 0.0f;
+    // Motor and ESC noise on the VTX's power. A filtered supply shows none of
+    // it; only a VTX with poor filtering (powerNoise well over 0.3) draws the
+    // stripes and hum bars.
+    float throttle = std::clamp(in.throttle, 0.0f, 1.0f);
+    float load = std::pow(throttle, 1.2f);
+    float dirty = smoothstep(0.35f, 1.0f, s.powerNoise);
+    float esc = noise ? 0.03f * dirty * (0.3f + load) : 0.0f;
     const double pwmHz = 48000.0;
     o.interference[0] = esc;
     o.interference[1] = (float)(pwmHz * t.activeS);
@@ -285,9 +301,27 @@ void VideoFeed::analogField(const VideoSpec &s, const VideoInputs &in, float fie
     o.interference[2] = (float)(step - std::floor(step));
     m_pwmPhase = std::fmod(m_pwmPhase + (float)(pwmHz * fieldDt) + 0.37f * uniform(), 1.0f);
     o.interference[3] = m_pwmPhase;
-    float hum = noise ? s.powerNoise * 0.03f * load : 0.0f;
+    float hum = noise ? 0.02f * dirty * load : 0.0f;
+
+    // Current surges (a punch, the motors stalled in a crash flip, a hit)
+    // spike the VTX's and the camera's supply: a band of lines loses sync
+    // for a field, the picture jumps sideways, and the colour burst with it.
+    float surge = std::max(0.0f, throttle - m_throttle) / std::max(fieldDt, 1e-3f);  // throttle per second
+    m_throttle = throttle;
+    float surgeChance = s.powerNoise * (0.25f * smoothstep(4.0f, 15.0f, surge) + 0.02f * smoothstep(0.6f, 1.0f, throttle));
+    int bandStart = -1, bandEnd = -1;
+    float bandShift = 0;
+    bool hit = m_hit > 0.3f && uniform() < m_hit;
+    m_hit = 0;
+    if (noise && !dark && (hit || uniform() < surgeChance)) {
+        int len = 6 + (int)(uniform() * uniform() * 120);
+        bandStart = (int)(uniform() * (t.activeLines - len / 2)) - len / 2;
+        bandEnd = bandStart + len;
+        bandShift = (uniform() < 0.5f ? -1.0f : 1.0f) * (0.02f + 0.18f * uniform() * uniform());
+    }
 
     // the lines
+    int burstHits = 0;
     for (int l = 0; l < t.totalLines; l++) {
         uint8_t *row = o.lines + l * 8;
         if (!noise) {
@@ -307,22 +341,31 @@ void VideoFeed::analogField(const VideoSpec &s, const VideoInputs &in, float fie
             cur = other;
             switched = true;
         }
-        float c = mean + cur;
+        float cTh = mean + cur;  // thermal noise only: the receiver's grain and its antenna switch
+        float c = dark ? cTh : effectiveCnr(cTh, cur);
+        bool band = l >= bandStart && l < bandEnd;
+        if (band) c = std::min(c, 2.0f - 8.0f * uniform());
         float clicks = fmClicksPerLine(c) * (1 + 3 * m_impact);
         float density = std::min(clicks / kClickCells, 0.6f);
-        float grain = 1.5f * std::pow(10.0f, -(c + 26.0f) / 20.0f) + 0.32f * smoothstep(9.0f, -6.0f, c) + 0.06f * m_impact;
-        float picture = smoothstep(-9.0f, 1.0f, c);
-        float chroma = m_colourKilled ? 0.0f : smoothstep(1.0f, 9.0f, c);
+        // the link's noise, and under it the camera's and the receiver's own fine grain
+        float grain = 0.012f + 1.5f * std::pow(10.0f, -(cTh + 26.0f) / 20.0f) + 0.32f * smoothstep(9.0f, -6.0f, c) +
+                      0.06f * m_impact;
+        // the picture holds under the clicks until sync goes; then snow
+        float picture = smoothstep(-11.0f, -1.0f, c);
+        float chroma = m_colourKilled ? 0.0f : smoothstep(-8.0f, 0.0f, c);
         float hue = m_hue + gauss() * 0.3f * smoothstep(12.0f, 0.0f, c);
         // horizontal sync: a click on the sync pulse or a weak line kicks
         // the line's start; the PLL pulls back over the next lines
         float kick = std::min(1.0f, clicks * 0.09f + 0.25f * smoothstep(3.0f, -6.0f, c) + 0.15f * m_impact);
         // the antenna switch glitches the line, visibly only on a weak signal
-        float glitch = switched ? smoothstep(22.0f, 8.0f, c) : 0.0f;
+        float glitch = switched ? smoothstep(22.0f, 8.0f, cTh) : 0.0f;
         if (glitch > 0) kick = std::max(kick, 0.6f * glitch);
         if (uniform() < kick) m_hShift += gauss() * (0.006f + 0.05f * smoothstep(4.0f, -8.0f, c));
-        m_hShift *= 0.86f;
-        float shift = m_hShift + gauss() * 0.0012f * smoothstep(14.0f, 2.0f, c);
+        if (band) m_hShift = bandShift + gauss() * 0.01f;
+        m_hShift *= band ? 0.995f : 0.86f;
+        // lines hit hard enough to throw the burst (on the back porch) off
+        if (l < t.activeLines && c < 4.0f) burstHits++;
+        float shift = m_hShift + gauss() * 0.0012f * smoothstep(14.0f, 2.0f, cTh);
         shift = std::clamp(shift, -0.24f, 0.24f);
         float lumaOffset = 0;
         for (int m = 0; m < 4; m++) {
@@ -346,6 +389,41 @@ void VideoFeed::analogField(const VideoSpec &s, const VideoInputs &in, float fie
         double ph = m_humPhase[m] + in.motorHz[m] * fieldDt;
         m_humPhase[m] = (float)(ph - std::floor(ph));
     }
+
+    // The colour decoder locks to the burst on every line's back porch and
+    // averages it over many lines. A band of hit lines, or a surge, throws
+    // its subcarrier and its colour gain off: the next few fields come out
+    // oversaturated, the hue turned and sweeping across the picture, the
+    // highlights tinted, until it locks again (~0.1 s).
+    if (m_upWait > 0) m_upWait--;
+    if (m_upHold > 0) m_upHold--;
+    else m_upset *= std::exp(-fieldDt / 0.025f);
+    float upsetChance = 1.0f - std::exp(-(float)burstHits / 25.0f);
+    if (bandStart >= 0) upsetChance = std::max(upsetChance, 0.7f);
+    if (noise && !dark && !m_colourKilled && m_upWait == 0 && uniform() < upsetChance) {
+        m_upset = 1.0f;
+        m_upHold = 1 + (int)(uniform() * 4);
+        m_upWait = 15 + (int)(uniform() * 30);  // fields before it can be thrown again
+        m_upHue = (uniform() * 2 - 1) * kPi;
+        m_upHueV = gauss() * 0.5f;
+        m_upBoost = 0.3f + 1.2f * uniform();
+        float a = 2 * kPi * uniform(), r = 0.05f + 0.13f * uniform();
+        m_upTint[0] = r * std::cos(a);
+        m_upTint[1] = r * std::sin(a);
+        m_upSweep = gauss() * 0.25f;
+    }
+    if (!noise || m_colourKilled) m_upset = 0;
+    // its hue off, drifting down the picture
+    for (int l = 0; m_upset > 0.01f && l < t.totalLines; l++) {
+        uint8_t *row = o.lines + l * 8;
+        float hue = ((float)row[7] / 255.0f - 0.5f) * 2 * kPi;
+        hue = std::remainder(hue + m_upset * (m_upHue + m_upHueV * (float)l / (float)t.activeLines), 2 * kPi);
+        row[7] = byteOf(hue / (2 * kPi) + 0.5f);
+    }
+    o.chroma_boost = m_upBoost * m_upset;
+    o.chroma_tint[0] = m_upTint[0] * m_upset;
+    o.chroma_tint[1] = m_upTint[1] * m_upset;
+    o.hue_sweep = m_upSweep * m_upset;
 }
 
 void VideoFeed::digitalFrame(const VideoSpec &s, const VideoInputs &in, float frameDt, fpv_video_feed &o) {

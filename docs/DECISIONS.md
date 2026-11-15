@@ -915,8 +915,10 @@ scale it bilinearly into the camera's aspect with black bars, bobbing the
 interlaced fields half a line. On analog the OSD is drawn into the signal,
 because the flight controller's OSD chip writes into the video before the
 VTX, so it tears, rolls and drowns in snow with the picture. Pixelation
-with nearest filtering was rejected: goggles interpolate, and blocky pixels
-read as a retro game, not a video feed. In both renderers
+with nearest filtering was rejected for the picture: goggles interpolate,
+and blocky pixels read as a retro game, not a video feed. The scaler keeps
+each step between two samples to about a screen pixel ("sharp bilinear"),
+which leaves the soft picture as it was and the OSD's pixels crisp. In both renderers
 (`fpv_video_gl3.h`, `fpv_video_gl2.h`) the signal shader is built as three
 programs, one per mode (lens only, analog, digital), not one that branches
 on the mode: as one, ANGLE's Direct3D 11 backend (Chrome and Edge on
@@ -943,6 +945,96 @@ BetaFPV C03 on its Matrix 1S AIO VTX at 25 mW (1S brownouts).
 
 Reversing: both settings off is the old picture without its static. The
 old `fpv_video_state` fields remain, derived from the new budget.
+
+**Calibrated against a DVR (2026-11).** A five-minute DVR of an Air65 II
+(25 mW, C03 camera, NTSC) flown around and inside a parked car, recorded
+by Skyzone Cobra X V4 goggles, put next to the same conditions through the
+model (a still from the DVR as the scene, the link scripted), showed five
+things the first version got wrong. The goggles' look follows the Cobra X.
+
+- *Never noisy up close.* At a few metres a whoop's carrier is 50-60 dB
+  over the noise, so even a 30 dB fade stayed clean, while the real feed
+  glitches near the pilot: a torn, sparkling band for a field, now and then,
+  much more often among reflections (inside the car). That is multipath
+  distortion: when echoes cancel the direct path, the FM demodulator's phase
+  jumps (clicks) whatever the carrier's strength. Each line's CNR now adds,
+  in power, a distortion `kVideoMultipathMarginDb` (17 dB) under the
+  selected antenna's fade, so it is reached only in deep fades. At -50 dBm
+  and 5 m/s: with K = 3.3 (a whoop 1 m over the ground) 1.6 % of the fields
+  sparkle and the colour is thrown off every 7 s; among reflections (K = 1)
+  7 % and every 2 s; with a clear line of sight (K = 10) hardly ever (none in
+  two minutes). It drives clicks and sync kicks, not
+  the FM grain, the antenna switch's glitch, the colour killer or vertical
+  sync, which follow the thermal CNR (the burst and the vertical sync are
+  long, averaged pulses that ride it out), so the picture never rolls or
+  goes grey up close.
+- *Colours too tame.* On a weak or hit signal the real decoder's colour goes
+  wrong, not away. The colour killer now acts only once the burst is really
+  gone (field CNR under -6 dB, back over -2), colour speckle is finer and
+  stronger, and clicks come mostly in the bright parts of the picture
+  (whites sparkle first; dark grass stays clean). A click is a speck a
+  sample or two long, as often coloured as dark, not the comet with a
+  fading tail it was: lone black dashes over a clean sky are not in the DVR.
+  The goggles show clicks in dense bands, so a line with few of them
+  (under ~1.5 per line) keeps fewer still, and the odd lone one is gone. A band of hit lines (25 of them two times in three), a hit or a
+  surge throws the decoder's subcarrier and colour gain off: for 2-5 fields
+  the colour is oversaturated (`chroma_boost`), turned (up to half a turn,
+  drifting down the picture), sweeping across the line (`hue_sweep`) and the
+  highlights tinted (`chroma_tint`), then it locks again within ~0.1 s, and
+  not again for 0.25-0.75 s. The DVR shows exactly that after a glitch
+  inside the car: red LEDs turned magenta, then a neon green and purple
+  picture for four or five frames.
+- *Dark lines across the picture.* The ESC's diagonal stripes and the
+  motors' hum bars were on for every analog VTX and crawled over the whole
+  picture. The DVR has none: a decent VTX filters its supply. They now
+  start above `powerNoise` 0.35 (the cheap VTX keeps them).
+- *Surges and hits.* A crash flip or a punch on a whoop's 1S supply tears a
+  band of lines sideways for a field: the line PLL holds the offset over the
+  band (it decays 0.5 % a line, not 14 %), and a line shifted past its end
+  shows the black porch and then its own start, as the DVR's crash flip
+  does. The chance follows the throttle's rise per second and `powerNoise`;
+  a hit makes one band, not one per field while the jolt decays.
+- *A soft picture and a mangled OSD.* The luma low-pass was twice too soft
+  (its -6 dB point sat at half of `luma_cycles`), so edges now rise over
+  about two samples with the camera's and the goggles' halos, like the
+  DVR's. The OSD was drawn at 3 % / 4 % margins into a linear 640 × 480
+  texture and then through the camera's filters: 16 rows of 18 glyph lines
+  squeezed onto 13.8 field lines each, then blurred and sharpened, so
+  glyphs lost rows and grew coloured garbage at the corners. It is now built
+  the way the OSD chip (MAX7456 / AT7456E) writes it: 30 × 16 cells of 12 ×
+  18 font pixels, one field line per glyph row, switched in after the
+  camera (the picture's colour off under it), softened only a little by the
+  link, with faint colour dots where its steps ring in the colour filter.
+  The DVR's glyphs are the same size (a 24-sample, 18-line cell), but its
+  OSD sits inside the picture: Betaflight's NTSC grid has 13 rows and its
+  elements stand a column in from the edges. libfpv keeps its 16 rows and
+  its layout, so the grid itself is inset like the DVR's: from 3 % to 97 %
+  of the line (1.88 samples a font pixel, looked up between the two nearest
+  with each step kept to about a sample, so strokes stay even and crisp)
+  and centred down the field, a cell keeping 17 of a glyph's 18 rows on PAL
+  (1 to 17) and 14 on NTSC (2 to 15; letters use 4 to 13), which leaves 8
+  lines above and below. No renderer draws the in-signal OSD with the
+  host's OSD renderer any more: they build it from `frame.osd` and
+  `fpv_texture_get(FPV_TEXTURE_OSD_FONT)`.
+
+**Direct3D 9 (`fpv_video_d3d9.h`).** GTA San Andreas FPV had its own HLSL
+port of the GL3 shaders, so every renderer change meant porting it again in
+the mod. The port now lives in libfpv next to the GL headers, with what the
+mod needed: shaders compiled by `d3dcompiler_47.dll` on any thread (about
+1 s, which the mod spends on a thread at startup), the game's UI kept in
+the picture as an optional premultiplied texture, the device's state saved
+with a state block, and `FPV_VIDEO_D3D9_TEXTURE_GET` /
+`FPV_VIDEO_D3D9_OSD_DRAW_DATA` / `FPV_VIDEO_D3D9_LOG` for a game that
+loads libfpv at runtime. A renderer change is now made in libfpv's three
+headers, and the mod only rebuilds. HLSL reserves `line`, so that shader
+says `ln`.
+
+Under all of it there is now the camera's and the receiver's own fine grain
+(0.012), which the DVR shows even with the drone lying still a metre away.
+The new fields sit after `lines`, so an older host's `struct_size` leaves
+them out, and the renderers check that they are covered (an older libfpv:
+no upsets). The Cobra's habit of brightening the picture while the OSD is
+hidden (no OSD white to keep room for) is not reproduced.
 
 ### D35. The About tab: what the binary was built from
 

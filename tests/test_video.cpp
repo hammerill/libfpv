@@ -129,22 +129,26 @@ static void testStrongAndWeak() {
     std::printf("strong and weak links\n");
     VideoSpec s = analogSpec();
     {
+        // a clear line of sight (K = 10): clean but for the camera's grain,
+        // and a rare multipath hit at most
         VideoFeed feed;
         VideoInputs in = link(-60);  // 44 dB CNR
-        float worstGrain = 0, worstShift = 0, sparkles = 0;
+        int damaged = 0;
+        float grain = 0;
         for (int i = 0; i < 120; i++) {
             feed.update(1.0f / 60, s, in, g_feed);
+            float sparkles = 0, worstShift = 0;
             for (int l = 0; l < 240; l++) {
-                worstGrain = std::fmax(worstGrain, grainOf(g_feed, l));
+                grain += grainOf(g_feed, l) / (240 * 120);
                 worstShift = std::fmax(worstShift, std::fabs(shiftOf(g_feed, l)));
-                sparkles += densityOf(g_feed, l);
+                sparkles += densityOf(g_feed, l) * 360;
                 CHECK(pictureOf(g_feed, l) > 0.99f && chromaOf(g_feed, l) > 0.99f, "strong: full picture and colour");
             }
+            damaged += sparkles > 1 || worstShift > 0.003f;
             CHECK(g_feed.roll == 0, "strong: no roll");
         }
-        CHECK(worstGrain < 0.02f, "strong: grain %.3f", worstGrain);
-        CHECK(worstShift < 0.003f, "strong: lines shifted by %.4f", worstShift);
-        CHECK(sparkles * 360 < 1, "strong: %.2f sparkles in two seconds", sparkles * 360);
+        CHECK(grain < 0.02f, "strong: grain %.3f", grain);
+        CHECK(damaged <= 3, "strong: %d of 120 fields with sparkles or torn lines", damaged);
     }
     {
         VideoFeed feed;
@@ -177,6 +181,56 @@ static void testStrongAndWeak() {
               "flags follow the player's settings");
         CHECK(g_feed.flags & FPV_VIDEO_FEED_OSD_IN_SIGNAL, "analog: the OSD is in the signal");
     }
+}
+
+// Close in, among reflections (low over the ground, near a car: K ~ 1):
+// a strong signal still glitches now and then (multipath distortion), the
+// colour decoder gets thrown off, but the picture never rolls nor goes grey.
+// A clear line of sight at the same power hardly ever does.
+static void testMultipath() {
+    std::printf("multipath close in\n");
+    VideoSpec s = analogSpec();
+    auto run = [&](float k, int &damaged, int &upsets, bool &rolled, float &grey) {
+        VideoFeed feed;
+        VideoInputs in = link(-45, k, 60);  // 59 dB CNR: a few metres away
+        damaged = upsets = 0;
+        rolled = false;
+        grey = 0;
+        float boost = 0;
+        for (int i = 0; i < 1200; i++) {  // twenty seconds
+            feed.update(1.0f / 60, s, in, g_feed);
+            float sparkles = 0;
+            for (int l = 0; l < 240; l++) {
+                sparkles += densityOf(g_feed, l) * 360;
+                grey += (chromaOf(g_feed, l) < 0.5f) / (240.0f * 1200);
+            }
+            damaged += sparkles > 3;
+            rolled |= g_feed.roll != 0;
+            upsets += g_feed.chroma_boost > boost + 0.1f;
+            boost = g_feed.chroma_boost;
+        }
+    };
+    int dLow, uLow, dClear, uClear;
+    bool rLow, rClear;
+    float gLow, gClear;
+    run(1.2f, dLow, uLow, rLow, gLow);
+    run(10.0f, dClear, uClear, rClear, gClear);
+    CHECK(dLow > 12 && dLow < 240, "K = 1.2 at -45 dBm: %d of 1200 fields with sparkles, expected some", dLow);
+    CHECK(uLow >= 2, "K = 1.2: the colour decoder thrown off %d times in 20 s", uLow);
+    CHECK(!rLow && gLow < 0.005f, "close in: no roll (%d), %.4f of the lines without colour", rLow, gLow);
+    CHECK(dClear <= dLow / 8, "clear line of sight: %d damaged fields, among reflections %d", dClear, dLow);
+
+    // a punch on a whoop's dirty supply, or a hit: a band of lines torn for a field
+    VideoFeed feed;
+    VideoInputs in = link(-45, 10, 60);
+    in.impact = 1;
+    int torn = 0;
+    for (int i = 0; i < 3; i++) {
+        feed.update(1.0f / 60, s, in, g_feed);
+        in.impact = 0;
+        for (int l = 0; l < 240; l++) torn += std::fabs(shiftOf(g_feed, l)) > 0.015f;
+    }
+    CHECK(torn >= 6, "a hard hit: %d lines torn in the next fields", torn);
 }
 
 // Rayleigh (K = 0) fades deep and often, a strong direct path (K = 10)
@@ -242,6 +296,7 @@ int main() {
     testSpec();
     testFieldClock();
     testStrongAndWeak();
+    testMultipath();
     testFading();
     testDigital();
     if (g_failures) {
