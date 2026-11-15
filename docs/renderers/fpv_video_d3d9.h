@@ -40,7 +40,7 @@
  * pointers to fpv_texture_get and fpv_osd_draw_data, and FPV_VIDEO_D3D9_LOG
  * (printf-like) to its log.
  * How it works: docs/INTEGRATION.md#the-video-feed.
- * SPDX-License-Identifier: GPL-3.0-or-later
+ * SPDX-License-Identifier: GPL-3.0-or-later OR MIT
  */
 #ifndef FPV_VIDEO_D3D9_H
 #define FPV_VIDEO_D3D9_H

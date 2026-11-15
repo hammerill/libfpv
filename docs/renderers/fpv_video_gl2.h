@@ -30,7 +30,7 @@
  * for pixel like the OSD chip. NULL draws no OSD. Draws into the framebuffer bound when
  * called, over all of it. Saves and restores the GL state it changes,
  * vertex attribute 0 included. How it works: docs/INTEGRATION.md#the-video-feed.
- * SPDX-License-Identifier: GPL-3.0-or-later
+ * SPDX-License-Identifier: GPL-3.0-or-later OR MIT
  */
 #ifndef FPV_VIDEO_GL2_H
 #define FPV_VIDEO_GL2_H

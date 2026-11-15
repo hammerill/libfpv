@@ -30,7 +30,7 @@
  * second) or frame (digital) arrives, so the feed runs at the link's rate
  * whatever the game's. Saves and restores the GL state it changes.
  * How it works, to port it: docs/INTEGRATION.md#the-video-feed.
- * SPDX-License-Identifier: GPL-3.0-or-later
+ * SPDX-License-Identifier: GPL-3.0-or-later OR MIT
  */
 #ifndef FPV_VIDEO_GL3_H
 #define FPV_VIDEO_GL3_H

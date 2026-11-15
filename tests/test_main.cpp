@@ -1165,7 +1165,7 @@ void testOsdElementNames() {
 #if defined(LIBFPV_KAMIKAZE)
     CHECK(fpv::osdElementLabel("osd_custom_msg0_pos") == "Bomb status", "custom message 1 is the bomb status");
 #else
-    CHECK(fpv::osdElementLabel("osd_custom_msg0_pos") == "Custom message 1", "custom message 1");
+    CHECK(fpv::osdElementLabel("osd_custom_msg0_pos") == "Custom text 1", "custom message 1");
 #endif
     CHECK(fpv::osdElementLabel("osd_new_thing_pos") == "New thing", "fallback label");
     // position bits: HD column bit 10, other profiles and the type kept
@@ -1983,6 +1983,15 @@ void testOsdAudioOverlay() {
     CHECK(osdChars() == chars, "OSD back after the switch (%d of %d characters)", osdChars(), chars);
     fpv_texture tex{};
     CHECK(fpv_texture_get(FPV_TEXTURE_OSD_FONT, &tex) == FPV_OK && tex.width > 0 && tex.rgba, "OSD font texture");
+    {
+        // both fonts loaded (embedded, or from libfpv-fonts/ in split builds):
+        // each half of the atlas has opaque glyph pixels
+        int opaque[2] = {0, 0};
+        for (uint32_t y = 0; tex.rgba && y < tex.height; y++)
+            for (uint32_t x = 0; x < tex.width; x++)
+                if (tex.rgba[((size_t)y * tex.width + x) * 4 + 3] != 0) opaque[x < tex.width / 2 ? 0 : 1]++;
+        CHECK(opaque[0] > 1000 && opaque[1] > 1000, "OSD fonts loaded (%d, %d opaque pixels)", opaque[0], opaque[1]);
+    }
     for (int style = 0; style < 2; style++) {
         const fpv_draw_data *dd = fpv_osd_draw_data(&s.f, 1280, 720, (fpv_osd_style)style);
         CHECK(dd && dd->list_count == 1 && dd->total_index_count == (uint32_t)chars * 6, "OSD quads style %d", style);

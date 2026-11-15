@@ -34,6 +34,12 @@ has the same name, two links never change:
 - **Ship everything you built:** the mod's own files and `libfpv.dll` (or
   `.so`/`.dylib`), built for the game's bitness. A 32-bit game needs the
   i686 build (`cmake/toolchains/mingw-w64-i686.cmake`).
+- **A split build** (`LIBFPV_SPLIT_PROCESS`, INTEGRATION.md "Split
+  builds") is four things, all in the library's folder: `libfpv.dll`,
+  `libfpv-server.exe`, and the `libfpv-fonts/` and `libfpv-presets/`
+  folders. Ship all four. Without the server the drone can't start, and
+  without the folders the OSD is blank and only one quad is left. List them
+  in the release page's folder tree and uninstall list too.
 - **Ship libfpv's license** as `libfpv.LICENSE.txt` (see
   [Licensing](#licensing)).
 - **Don't bundle other people's tools** (ASI loaders, script hooks, mod
@@ -255,6 +261,22 @@ libfpv is GPL-3.0-or-later because it embeds Betaflight. Shipping
 - players can get the corresponding source. The "This build" section links
   the exact libfpv commit, and GitHub attaches the mod's source to every
   release.
+
+A split build keeps the GPL parts out of the library the game loads:
+Betaflight and SimITL run in `libfpv-server`, a separate program, and the
+fonts and shipped presets are separate files. The library itself (libfpv's
+client side) is under MIT as well as the GPL (`LICENSE-MIT`), so the mod's
+game-side code can be under other terms. Whether a separate process is
+enough separation for your mod is your call to make; the split exists so
+that the option is there. The GPL parts still ship, so:
+
+- `libfpv-server`, `libfpv-fonts/` and `libfpv-presets/` stay GPL-3.0. The
+  folders carry the license text, and the ZIP includes it next to the
+  server as well (`libfpv.LICENSE.txt`);
+- players can get their source: link the exact libfpv commit, as the
+  "This build" section does;
+- ship `LICENSE-MIT` (as `libfpv.LICENSE-MIT.txt`) for the library, since
+  the MIT terms ask for the notice to go with it.
 
 ## Before you send the link
 

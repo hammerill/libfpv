@@ -1006,6 +1006,57 @@ cfg.host_url   = "https://github.com/you/gta4-fpv";  /* where players get it, re
   empty the section is hidden.
 - Older hosts (a smaller `struct_size`) keep working and show no section.
 
+## Split builds: the simulation in its own process
+
+Built with `-DLIBFPV_SPLIT_PROCESS=ON`, libfpv runs the simulation
+(Betaflight, SimITL's flight model, the real-time loop) in `libfpv-server`,
+a program of its own that libfpv starts the first time the game uses it.
+The library the game loads then holds no Betaflight or SimITL code, only
+libfpv's own client side, which is under MIT as well as the GPL (see
+[PUBLISHING.md](PUBLISHING.md#licensing) for what that means for a mod).
+The API, the header and everything else in this document stay the same, so
+the game's code doesn't change. Split builds are native only: CMake refuses
+the option for the web.
+
+Ship these together, in the folder of libfpv's library. The build puts them
+there:
+
+| File | What it is |
+|---|---|
+| `libfpv.dll` (`.so`, `.dylib`) | the library the game loads |
+| `libfpv-server.exe` (`libfpv-server`) | the simulation (GPL-3.0) |
+| `libfpv-fonts/` | Betaflight's OSD fonts, with their license (GPL-3.0) |
+| `libfpv-presets/` | the drones and parts libfpv ships, with their license (GPL-3.0) |
+
+If your layout needs them elsewhere, the environment variables
+`LIBFPV_SERVER` (the program's path), `LIBFPV_FONT_DIR` and
+`LIBFPV_SHIPPED_PRESET_DIR` point libfpv to them.
+
+What changes for the game:
+
+- **`fpv_global_init` can fail to start the simulation.** With
+  `libfpv-server` missing, or from another libfpv build, it returns
+  `FPV_ERROR_IO`, and `fpv_last_error()` says why. Show that to the player:
+  it means a file is missing from the install. A missing `libfpv-fonts/`
+  leaves the OSD blank, and a missing `libfpv-presets/` leaves only the
+  built-in 5" quad. Both are logged as errors.
+- **One more process.** `libfpv-server` runs as long as the game does, and
+  keeps Betaflight booted across `fpv_global_terminate` and
+  `fpv_global_init` as the in-process build does. It ends with the game,
+  also when the game crashes, after saving Betaflight's settings. On
+  Windows it starts without a console window.
+- **It talks over loopback only** (127.0.0.1), on a port the system picks.
+  The Betaflight Configurator's WebSocket is served by `libfpv-server`, at
+  the same address as before.
+- **Its log lines arrive through `cfg.log`**, like libfpv's own.
+- **Each simulation step costs a round trip.** The simulation asks the
+  game's process for each step's stick and switch positions, so radios,
+  gamepads and the keyboard work exactly as in the in-process build. A
+  round trip takes about 0.05 to 0.1 ms, well inside the 1 ms step of
+  threaded timing. With `FPV_TIMING_MANUAL`, `fpv_step` gets slower by the
+  same amount per step: the test suite, which steps a lot of simulated
+  time, runs about four times slower.
+
 ## Lessons from real integrations
 
 These notes come from integrating libfpv into GTA IV

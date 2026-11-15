@@ -12,7 +12,7 @@
  *   fpv_gl3_shutdown(&r);
  *
  * Saves and restores the GL state it changes, so it can be called from a
- * SwapBuffers hook in a game. SPDX-License-Identifier: GPL-3.0-or-later
+ * SwapBuffers hook in a game. SPDX-License-Identifier: GPL-3.0-or-later OR MIT
  */
 #ifndef FPV_RENDER_GL3_H
 #define FPV_RENDER_GL3_H

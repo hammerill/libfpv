@@ -63,7 +63,7 @@ for v1.
     disappears.
   * SimITL's `fmt::print` and Betaflight's `printf`/`fprintf` are routed to
     libfpv's log callback. Betaflight C files are compiled with a
-    force-included header, `src/core/bf_log_redirect.h`. A game's stdout is
+    force-included header, `src/server/core/bf_log_redirect.h`. A game's stdout is
     never written to.
 * `0002-exact-contact-velocity.patch`: `StateInput::contact == 2` makes
   SimITL take the host's linear and angular velocity exactly. The existing
@@ -102,6 +102,129 @@ for v1.
   Betaflight's `osdInit` then moves elements below the last row up to it
   (D15).
 
+### D37. Client, server and shared code
+
+The source tree has three parts, built as separate CMake targets with
+their own include roots:
+
+| Part | Holds | Built as |
+| --- | --- | --- |
+| `src/shared` | libfpv's own code both sides use: presets (`config/`), collision (`world/`), the video and RC link models, the wall clock, logging, and `simapi/` (the `Server` interface and the snapshot types) | `fpv_shared` |
+| `src/server` | the simulation server: `SimServer`, the flight model, the runner, the warhead and the Betaflight glue in `core/`; `main.cpp` is `libfpv-server` | `fpv_server`, plus `simitl_core` |
+| `src/client` | the C API, the per-frame presentation, the overlay, OSD, audio and input | the `fpv` library itself |
+
+`src/web/libfpv_web.js` stays where it was: non-CMake web builds pass it to
+`--js-library` by that path.
+
+**The `Server` interface** (`simapi/server.h`) is the only way the client
+reaches the simulation, Betaflight or SimITL. Every argument and result is
+a plain value, with no callbacks and no pointers into the other side, so
+each call can be carried as a message. Betaflight's configuration logic
+(one EEPROM per quad, the first-run setup, the EEPROM upgrades, syncing the
+video system, the warm-up, reboots after an import) lives in `SimServer`.
+
+* **Channels:** the simulation pulls them each step through `ChannelSource`
+  (`input/channels.h`), which the client's `InputManager` implements.
+  Devices are still started and polled on the simulation thread.
+* **The collision world:** the client keeps its own `CollisionWorld` for its
+  rays (chase camera, wind probes, hearing) and mirrors every change to the
+  server, object ids included (`createObject(..., id)`). A server in the
+  client's process shares the client's world and ignores the mirror calls.
+* **Presets:** `DronePreset::physics` is libfpv's own `PhysicsParams`
+  (`config/physics.h`). The server turns it into SimITL's `StateInit`
+  (`toStateInit`, `flight.cpp`), so the preset code needs no SimITL header.
+* **The pilot's position** is kept on both sides (`Lib::pilotPos`), and
+  Betaflight's arming flag names are fetched once at init.
+
+**The boundary is checked.** The client and the shared code have no
+Betaflight, SimITL or `src/server` include roots. `tools/check-boundary.cmake`
+(the `license_boundary` test) also rejects any include of them through
+`third_party/`, and any client or shared file without the dual license
+line below.
+
+**Licenses.** The client and shared code (`src/client`, `src/shared`,
+`src/web`), `include/libfpv.h`, `docs/renderers` and the examples are
+`GPL-3.0-or-later OR MIT` (`LICENSE-MIT`); their contributors agreed to it.
+The server, Betaflight and SimITL stay GPL-3.0-or-later only, so a default
+build, one library holding all of it, is GPL as before.
+
+**Split builds** (`LIBFPV_SPLIT_PROCESS`, off by default, not for the web)
+run the server in `libfpv-server` (`src/server/main.cpp`). The library
+then links only the client and the shared code (`--no-undefined` proves
+nothing in it reaches the server), and `RemoteServer`
+(`client/remote_server.cpp`) carries every `Server` call there.
+
+* **Starting.** The first `Server` call (in `fpv_global_init` at the
+  latest, earlier if the game loads its world first) listens on 127.0.0.1 at a port the system picks and
+  starts `libfpv-server --port <p> --token <t>` from the library's folder
+  (`LIBFPV_SERVER` overrides). It opens two connections back, each with a
+  hello carrying the token and `wire::protocolId()`: the version, the
+  kamikaze option and the sizes of the structs that go as they are, so a
+  server from another build is refused instead of misread. A missing or
+  refused server makes `start()`, and with it `fpv_global_init`, fail with
+  the reason. One server per process: like the in-process one, it keeps
+  Betaflight booted across terminate and init.
+* **The control connection** (`simapi/wire.h`) carries the client's calls
+  in order. Calls without a result (most of them: spawn, world changes,
+  wind, heartbeat, `fpv_step`) are sent and not waited for. Calls with one
+  (snapshots, impacts, the CLI, `start`, `stop`) wait for their reply.
+  libfpv-server runs them one at a time on one thread, so a result always
+  reflects every call sent before it, as with direct calls. Plain structs
+  go as their bytes; the ones with strings or vectors (`DronePreset`,
+  `ServerConfig`, `WindState`, `HoverFeedback`) have their fields listed in
+  `wire.cpp`, which a new field must be added to.
+* **The input connection** goes the other way. `RemoteChannelSource` in
+  libfpv-server forwards each `ChannelSource` call, and a thread in the
+  client answers them from the `InputManager`: each step's channels (with
+  the previous step's hover feedback), starting and stopping the devices,
+  the radio-lost latch. The devices are thus started, polled and stopped
+  on that one thread, as on the simulation thread in-process, and the
+  keyboard hover, failsafe and manual stepping behave exactly the same. It
+  costs a round trip per step (about 0.07 ms on loopback under WSL): inside
+  the 1 ms real-time step, but `fpv_step` gets that much slower per step,
+  and the test suite takes about 4x as long. Without the game, a step gets
+  idle channels with the radio lost (failsafe).
+* **The wall clock.** The client sends its `wallEpoch()` (a
+  `steady_clock` count, system-wide) in the hello reply, so the snapshots'
+  wall times interpolate against the client's clock unchanged.
+* **The collision world.** libfpv-server's `SimServer` has its own
+  `CollisionWorld`, kept up to date by the mirror calls the client always
+  makes.
+* **Logs.** libfpv-server's lines (Betaflight's included) go over the
+  input connection and out through the game's log callback, at the level
+  the game asked for.
+* **Ending.** When the connections close (the game exits, crashes or is
+  killed), libfpv-server saves Betaflight's settings if it was running and
+  exits. At a normal exit the client asks it to first, as the in-process
+  build does. If libfpv-server dies, the client logs it once and keeps the
+  last state; the simulation is gone until the game restarts.
+* **Assets.** The OSD fonts (Betaflight Configurator's, GPL-3.0) are not
+  compiled in. They are copied to `libfpv-fonts/` next to the library, with
+  their README and the GPL text, and read from there at run time
+  (`LIBFPV_FONT_DIR` overrides the folder). The same for the shipped presets
+  (`assets/presets`, some exported from SimITL's own): `libfpv-presets/`,
+  overridden by `LIBFPV_SHIPPED_PRESET_DIR`. libfpv copies them into the
+  player's preset folder as before; with the folder missing, it logs an
+  error and flies its built-in default quad.
+* **Tested** by running the whole suite against libfpv-server: the split
+  build's `fpv_tests` goes through it, natively and on Windows.
+
+**Why:** libfpv embeds Betaflight and SimITL (GPL-3.0). A build that runs the
+simulation in its own process (libfpv-server) and keeps the client free of
+GPL code lets a mod's game-side part be under other terms. Default builds
+keep one library in the game's process with direct calls, and behave as
+before. The structure is the same in every build, so the split build cannot
+drift from the default one.
+
+**Nothing GPL-derived in the client:** the overlay's OSD element names
+(`overlay/osd_element_names.h`) are libfpv's own short descriptions, not
+the Betaflight Configurator's, and the GPL assets (fonts, shipped presets)
+ship as files in split builds.
+
+**Reversing it** means moving the files back under `src/` and calling the
+flight model and `bfb_*` from the API again. Nothing outside libfpv depends
+on the split: the public API and the exported symbols are unchanged.
+
 ## Simulation
 
 ### D3. SimITL coordinate frame
@@ -115,7 +238,7 @@ right) is at (+x, +z). SimITL integrates velocities and orientation, but
 
 ### D4. Betaflight configuration goes through Betaflight's own CLI, in-process
 
-`src/core/bf_bridge.c` implements an in-memory `serialPort_t` and drives
+`src/server/core/bf_bridge.c` implements an in-memory `serialPort_t` and drives
 `cliEnter`/`cliProcess` on the simulation thread. Preset defaults, overlay
 edits and `diff all` imports are therefore just CLI commands. They go
 through the same parameter-group code as the Configurator (which uses MSP
@@ -471,7 +594,7 @@ comes after about 0.5 s instead of 0.7 s (34 km/h at 0.25 s instead of
 the quad settle for 1 s after the teleport before it punches; the wobble
 from the teleport had been costing about 10 % of the thrust.
 
-### D30. Wind (patch `0017`, `src/world/wind.*`)
+### D30. Wind (patch `0017`, `src/shared/world/wind.*`)
 
 Games have weather, and a quad in wind is a different thing to fly: it
 leans into the wind to hold position, drifts in angle mode, gets bumped
@@ -1144,7 +1267,7 @@ The tab ends with the credits and licenses: libfpv's GPL-3.0-or-later and
 what it means for mods, Betaflight, SimITL, Dear ImGui, SDL3 (native),
 libwebsockets (native), {fmt} and nlohmann/json.
 
-### D36. The RC link: ExpressLRS packets, LQ and dynamic power (`src/rc/rc_link.*`, patch `0013`)
+### D36. The RC link: ExpressLRS packets, LQ and dynamic power (`src/shared/rc/rc_link.*`, patch `0013`)
 
 Before this the radio link was perfect unless the radio was unplugged
 (`radioLost`). The option (off by default) simulates
@@ -1275,7 +1398,7 @@ The full test suite passes on Windows 11 (run from WSL interop).
 SimITL's `string_light.c` re-implements libc's ctype and `strcasecmp`
 functions. With whole-archive linking (D20) these collide with msvcrt, so
 it is excluded on every platform and the platform libc is used. MinGW's
-missing `strcasestr` comes from `src/core/bf_compat.c`. Betaflight C files
+missing `strcasestr` comes from `src/server/core/bf_compat.c`. Betaflight C files
 are compiled with `_GNU_SOURCE`, so `strcasestr` has a real prototype
 rather than an implicit `int` that would truncate the pointer. Betaflight's
 structs use GCC bitfield layout (`-mno-ms-bitfields`), applied to C and
@@ -1326,14 +1449,14 @@ with `emcmake cmake`.
   in ticking still auto-pauses; `fpv_overlay_render`, so the radio wizard
   sees live sticks without a drone). `Runner::call` already ran jobs
   inline without a thread. Hosts need no change.
-* **Gamepad API instead of SDL.** `src/input/web_backend.cpp` gives the same
+* **Gamepad API instead of SDL.** `src/client/input/web_backend.cpp` gives the same
   `RawDevice`s: devices with the browser's "standard" mapping have the
   gamepad layout (buttons renumbered to SDL's), the rest are raw axes,
   and the radio name list is shared with the SDL backend. A game that uses
   SDL on the web brings its own, so libfpv embedding one would only add
   size.
 * **No Configurator.** Its WebSocket server cannot exist in a page.
-  libwebsockets is left out, `src/core/serial_ws_web.c` opens Betaflight's
+  libwebsockets is left out, `src/server/core/serial_ws_web.c` opens Betaflight's
   UARTs with no transport, and `FPV_INIT_NO_CONFIGURATOR` is forced. The
   overlay's tab says why and points to the CLI and diff import. Making it
   work would mean hosting the Configurator in the same page with a
@@ -1533,7 +1656,7 @@ flight controller, reads them. The radio wizard adds both steps after the
 OSD switch, both skippable; the keyboard fallback uses K (bomb toggle) and
 X (explode, held), the gamepad West (toggle) and the right shoulder.
 
-**Rules,** in `src/sim/kamikaze.cpp` (`Warhead`, simulation thread):
+**Rules,** in `src/server/sim/kamikaze.cpp` (`Warhead`, simulation thread):
 
 * The motors do not arm while the bomb arm switch is on, and a destroyed
   drone never arms. libfpv holds AUX1 low towards Betaflight, and keeps

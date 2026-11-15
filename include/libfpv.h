@@ -2,11 +2,13 @@
  * libfpv - drop-in Betaflight-flown FPV quadcopter for any game.
  *
  * Copyright (C) 2026 libfpv contributors
- * SPDX-License-Identifier: GPL-3.0-or-later
+ * SPDX-License-Identifier: GPL-3.0-or-later OR MIT
  *
- * libfpv embeds Betaflight (via SimITL) and is licensed under the GPL-3.0.
- * Any mod or program that links libfpv must be distributed under GPL-3.0
- * compatible terms.
+ * libfpv embeds Betaflight (via SimITL), so a default build, one library
+ * holding all of it, is GPL-3.0: any mod or program that links it must be
+ * distributed under GPL-3.0 compatible terms. Split builds
+ * (LIBFPV_SPLIT_PROCESS) run Betaflight in libfpv-server instead, and the
+ * library itself is then under MIT as well (docs/PUBLISHING.md#licensing).
  *
  * Kamikaze builds (CMake -DLIBFPV_KAMIKAZE=ON, which defines LIBFPV_KAMIKAZE
  * for libfpv and for every target linking libfpv::fpv) add a warhead: bomb
@@ -54,9 +56,9 @@
 #include <stdint.h>
 
 /* The one place the version is set: CMakeLists.txt reads these three. */
-#define LIBFPV_VERSION_MAJOR 0
-#define LIBFPV_VERSION_MINOR 3
-#define LIBFPV_VERSION_PATCH 6
+#define LIBFPV_VERSION_MAJOR 1
+#define LIBFPV_VERSION_MINOR 0
+#define LIBFPV_VERSION_PATCH 0
 #define LIBFPV_STRINGIFY_(x) #x
 #define LIBFPV_STRINGIFY(x) LIBFPV_STRINGIFY_(x)
 #define LIBFPV_VERSION_STRING                                                  \

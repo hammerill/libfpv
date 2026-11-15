@@ -115,6 +115,7 @@ The default build type is `Release`. Outputs in the build directory:
 | `LIBFPV_WITH_OVERLAY` | `ON` | Build the Dear ImGui overlay |
 | `LIBFPV_BUILD_TESTS` | `ON` | Build the test suite |
 | `LIBFPV_BUILD_EXAMPLES` | `ON` | Build the examples |
+| `LIBFPV_SPLIT_PROCESS` | `OFF` | Run the simulation in its own process, `libfpv-server` (native only; [INTEGRATION.md](docs/INTEGRATION.md#split-builds-the-simulation-in-its-own-process)) |
 
 ### Windows
 
@@ -288,7 +289,8 @@ fpv_global_terminate();                       // on unload / exit
 
 ```
 include/      public C API (libfpv.h)
-src/          library: sim/, config/, input/, world/, osd/, overlay/, audio/, web/
+src/          library: client/ (C API, overlay, OSD, audio, input), server/ (simulation,
+              Betaflight glue), shared/ (presets, collision, links), web/ (browser runtime)
 assets/       presets and OSD fonts (embedded into the library at build time)
 patches/      patch series applied to the SimITL and Betaflight submodules
 third_party/  SimITL, Betaflight, libwebsockets, fmt, SDL, Dear ImGui, nlohmann/json
@@ -303,3 +305,14 @@ tools/        patch series helper, version bump, WebAssembly symbol localizer
 GPL-3.0-or-later. libfpv embeds Betaflight, so any mod or program that links
 it must be distributed under GPL-3.0-compatible terms. See [LICENSE](LICENSE)
 for the full text.
+
+The client and shared code (`src/client`, `src/shared`, `src/web`), the
+public header, the renderers in `docs/renderers` and the examples are also
+available under the MIT license ([LICENSE-MIT](LICENSE-MIT)): each of those
+files says `GPL-3.0-or-later OR MIT`. The simulation server (`src/server`),
+Betaflight and SimITL are GPL-3.0-or-later only, and so is the library as a
+whole, which includes them. So are the assets: the OSD fonts
+(`assets/fonts`) and the shipped presets (`assets/presets`). Split builds
+(`LIBFPV_SPLIT_PROCESS`) keep all of those out of the library: the
+simulation runs in `libfpv-server`, and the fonts and presets ship as
+files next to it.

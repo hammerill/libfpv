@@ -136,17 +136,17 @@ file(GLOB BFEXT_SOURCES
 )
 # SimITL's string_light.c re-implements libc's ctype/strcasecmp functions;
 # with every object linked that collides with msvcrt. The platform libc is
-# used instead, plus src/core/bf_compat.c for what MinGW lacks.
+# used instead, plus src/server/core/bf_compat.c for what MinGW lacks.
 list(FILTER BFEXT_SOURCES EXCLUDE REGEX "string_light\\.c$")
 list(APPEND BFEXT_SOURCES
-  "${PROJECT_SOURCE_DIR}/src/core/bf_compat.c"
+  "${PROJECT_SOURCE_DIR}/src/server/core/bf_compat.c"
   "${BFEXT_DIR}/src/main/drivers/pwm_output_fake.c"
   "${BFEXT_DIR}/src/main/drivers/sound_beeper.c"
   "${BF_DIR}/lib/main/google/olc/olc.c"
 )
 if(EMSCRIPTEN)
-  # UARTs without a server (src/core/serial_ws_web.c)
-  list(APPEND BFEXT_SOURCES "${PROJECT_SOURCE_DIR}/src/core/serial_ws_web.c")
+  # UARTs without a server (src/server/core/serial_ws_web.c)
+  list(APPEND BFEXT_SOURCES "${PROJECT_SOURCE_DIR}/src/server/core/serial_ws_web.c")
 else()
   list(APPEND BFEXT_SOURCES "${BFEXT_DIR}/src/main/drivers/serial_ws.c" "${BF_DIR}/lib/main/dyad/dyad.c")
 endif()
@@ -157,7 +157,7 @@ set(SIMITL_CPP_SOURCES
   ${SIMITL_DIR}/src/sim/bf.cpp
   ${SIMITL_DIR}/src/sim/physics.cpp
   ${SIMITL_DIR}/src/sim/sim.cpp
-  ${PROJECT_SOURCE_DIR}/src/core/bf_bridge.c
+  ${PROJECT_SOURCE_DIR}/src/server/core/bf_bridge.c
 )
 
 add_library(simitl_core STATIC
@@ -182,7 +182,7 @@ target_include_directories(simitl_core
     ${SIMITL_DIR}/src)
 # Betaflight log output goes through libfpv's logger instead of stdout.
 target_compile_options(simitl_core PRIVATE
-  "$<$<COMPILE_LANGUAGE:C>:-include;${PROJECT_SOURCE_DIR}/src/core/bf_log_redirect.h>"
+  "$<$<COMPILE_LANGUAGE:C>:-include;${PROJECT_SOURCE_DIR}/src/server/core/bf_log_redirect.h>"
   $<$<COMPILE_LANGUAGE:C>:-w>)
 if(CMAKE_C_COMPILER_ID MATCHES "Clang" OR
    (CMAKE_C_COMPILER_ID STREQUAL "GNU" AND CMAKE_C_COMPILER_VERSION VERSION_GREATER_EQUAL 14))
