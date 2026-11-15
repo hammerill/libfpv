@@ -80,7 +80,26 @@ std::string betaflightBaseDefaults() {
 std::string betaflightBombOsdLine() { return "set osd_custom_msg0_pos = " + std::to_string(osdPos(10, 3)) + "\n"; }
 #endif
 
-std::string betaflightFirstRunScript() {
+std::string betaflightOsdLayout(bool ntsc) {
+    // NTSC shows 13 rows: the bottom elements go 2 rows up, the middle ones 1
+    int lo = ntsc ? 2 : 0, mid = ntsc ? 1 : 0;
+    std::ostringstream s;
+    s << "set osd_avg_cell_voltage_pos = " << osdPos(1, 14 - lo) << "\n";
+    s << "set osd_vbat_pos = " << osdPos(1, 13 - lo) << "\n";
+    s << "set osd_current_pos = " << osdPos(23, 13 - lo) << "\n";
+    s << "set osd_mah_drawn_pos = " << osdPos(23, 14 - lo) << "\n";
+    s << "set osd_tim_2_pos = " << osdPos(12, 14 - lo) << "\n";
+    s << "set osd_flymode_pos = " << osdPos(24, 1) << "\n";
+    s << "set osd_throttle_pos = " << osdPos(1, 1) << "\n";
+    s << "set osd_crosshairs_pos = " << osdPos(13, 7 - mid) << "\n";
+    s << "set osd_warnings_pos = " << osdPos(9, 10 - lo) << "\n";
+    s << "set osd_disarmed_pos = " << osdPos(10, 4) << "\n";
+    s << "set osd_gps_speed_pos = " << osdPos(12, 1) << "\n";
+    s << "set osd_craft_name_pos = " << osdPos(11, 12 - lo) << "\n";
+    return s.str();
+}
+
+std::string betaflightFirstRunScript(bool ntsc) {
     std::ostringstream s;
     s << betaflightBaseDefaults();
     s << "aux 1 1 1 1700 2100 0 0\n";   // ANGLE on AUX2 high
@@ -89,18 +108,8 @@ std::string betaflightFirstRunScript() {
     s << modeLine(4, kAirModeSwitch) << "\n";  // AIR MODE on AUX5 high
     s << modeLine(5, kOsdSwitch) << "\n";      // OSD DISABLE on AUX6 high
     s << "set crashflip_rate = 30\n";   // turtle cuts power past ~90 deg and fast spins
-    s << "set osd_avg_cell_voltage_pos = " << osdPos(1, 14) << "\n";
-    s << "set osd_vbat_pos = " << osdPos(1, 13) << "\n";
-    s << "set osd_current_pos = " << osdPos(23, 13) << "\n";
-    s << "set osd_mah_drawn_pos = " << osdPos(23, 14) << "\n";
-    s << "set osd_tim_2_pos = " << osdPos(12, 14) << "\n";
-    s << "set osd_flymode_pos = " << osdPos(24, 1) << "\n";
-    s << "set osd_throttle_pos = " << osdPos(1, 1) << "\n";
-    s << "set osd_crosshairs_pos = " << osdPos(13, 7) << "\n";
-    s << "set osd_warnings_pos = " << osdPos(9, 10) << "\n";
-    s << "set osd_disarmed_pos = " << osdPos(10, 4) << "\n";
-    s << "set osd_gps_speed_pos = " << osdPos(12, 1) << "\n";
-    s << "set osd_craft_name_pos = " << osdPos(11, 12) << "\n";
+    s << "set vcd_video_system = " << (ntsc ? "NTSC" : "PAL") << "\n";
+    s << betaflightOsdLayout(ntsc);
     s << "set craft_name = LIBFPV\n";
 #if defined(LIBFPV_KAMIKAZE)
     s << betaflightBombOsdLine();
@@ -139,7 +148,7 @@ std::string betaflightSwitchMigration(const std::string &auxDump, const std::vec
     return out;
 }
 
-CliFilterResult filterCliCommands(const std::string &commands) {
+CliFilterResult filterCliCommands(const std::string &commands, bool ntsc) {
     CliFilterResult r;
     static const char *kRefused[] = {"bl",       "dfu",        "msc",       "escprog", "serialpassthrough",
                                      "gpspassthrough", "flash_erase", "flash_write", "flash_read", "flash_scan",
@@ -164,7 +173,7 @@ CliFilterResult filterCliCommands(const std::string &commands) {
             // the CLI session ends by itself; never reboot from here
         } else if (cmd == "defaults") {
             // libfpv's own defaults (modes, OSD), never a non-arming config
-            out << "defaults nosave\n" << betaflightFirstRunScript();
+            out << "defaults nosave\n" << betaflightFirstRunScript(ntsc);
             r.needsBaseDefaults = true;
         } else {
             out << line << "\n";
@@ -187,7 +196,7 @@ const char *betaflightModeName(int boxId) {
     return it == names.end() ? "MODE" : it->second;
 }
 
-DiffImport buildDiffImport(const std::string &diffText) {
+DiffImport buildDiffImport(const std::string &diffText, bool ntsc) {
     DiffImport imp;
 
     // Hardware-specific commands: they describe the real flight controller,
@@ -425,6 +434,7 @@ DiffImport buildDiffImport(const std::string &diffText) {
     // clear all mode slots, then libfpv's base and the remapped modes
     for (int i = 0; i < 20; i++) s << "aux " << i << " 0 0 900 900 0 0\n";
     s << betaflightBaseDefaults();
+    s << "set vcd_video_system = " << (ntsc ? "NTSC" : "PAL") << "\n";
     for (auto &l : auxOut) {
         s << l << "\n";
         imp.applied.push_back(l);

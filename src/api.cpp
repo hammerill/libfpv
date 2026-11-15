@@ -8,6 +8,7 @@
 #include <cstring>
 #include <filesystem>
 #include <iterator>
+#include <sstream>
 
 #include "config/bf_config.h"
 #include "core/bf_bridge.h"
@@ -230,17 +231,22 @@ static fs::path upgradeMarker(const std::string &eeprom) { return pathFromUtf8(e
 // libfpv's first-run configuration plus the preset's own tune and the
 // game's default diff, applied to the active EEPROM. Runs on the simulation
 // thread.
+// An analog NTSC camera: Betaflight's OSD has 13 rows, not 16.
+bool presetNtsc(const DronePreset &p) { return !p.vtx.digital && p.camera.system == FPV_VIDEO_NTSC; }
+
+int osdVisibleRows() { return presetNtsc(currentPreset()) ? 13 : FPV_OSD_ROWS; }
+
 static void applyFirstRunConfig(const DronePreset &p) {
-    std::string script = betaflightFirstRunScript();
+    std::string script = betaflightFirstRunScript(presetNtsc(p));
     if (!p.betaflightDiff.empty()) {
-        DiffImport imp = buildDiffImport(p.betaflightDiff);
+        DiffImport imp = buildDiffImport(p.betaflightDiff, presetNtsc(p));
         // the preset tune replaces Betaflight defaults; keep libfpv's OSD/modes
-        script = imp.script + betaflightFirstRunScript();
+        script = imp.script + betaflightFirstRunScript(presetNtsc(p));
     }
     if (!lib().defaultDiff.empty()) {
         // the game's setup goes on top: without the import's own reset to
         // defaults, which would drop the preset tune
-        std::string game = buildDiffImport(lib().defaultDiff).script;
+        std::string game = buildDiffImport(lib().defaultDiff, presetNtsc(p)).script;
         const std::string reset = "defaults nosave\n";
         if (game.rfind(reset, 0) == 0) game.erase(0, reset.size());
         script += game;
@@ -256,6 +262,45 @@ static void applyFirstRunConfig(const DronePreset &p) {
 static std::string g_activeEeprom;
 static void warmUpBetaflight();
 
+// Betaflight's video system follows the quad's camera, as on a real flight
+// controller set up for it: NTSC shows 13 OSD rows (SimITL patch 0019), and
+// Betaflight moves elements below the last row up to it at boot. libfpv's
+// own default layout, untouched, is swapped for the one made for the new
+// system. True when it changed: Betaflight must reboot. Simulation thread.
+static bool syncVideoSystem(const DronePreset &p) {
+    bool ntsc = presetNtsc(p);
+    char *o = nullptr;
+    bfb_cli_run("get vcd_video_system", &o);
+    std::string out = o ? o : "";
+    bfb_free(o);
+    const char *want = ntsc ? "NTSC" : "PAL";
+    if (out.find(std::string("= ") + want) != std::string::npos) return false;
+    std::string script = std::string("set vcd_video_system = ") + want + "\n";
+    // is the layout still libfpv's default for the other system?
+    std::vector<std::string> other;
+    {
+        std::istringstream in(betaflightOsdLayout(!ntsc));
+        for (std::string line; std::getline(in, line);) other.push_back(line);
+    }
+    std::string gets;
+    for (const std::string &line : other) {
+        size_t eq = line.find(" = ");
+        if (line.rfind("set ", 0) == 0 && eq != std::string::npos) gets += "get " + line.substr(4, eq - 4) + "\n";
+    }
+    bfb_cli_run(gets.c_str(), &o);
+    std::string current = o ? o : "";
+    bfb_free(o);
+    bool untouched = true;
+    for (const std::string &line : other) {
+        if (line.rfind("set ", 0) == 0 && current.find(line.substr(4)) == std::string::npos) untouched = false;
+    }
+    if (untouched) script += betaflightOsdLayout(ntsc);
+    FPV_LOGI("Betaflight video system: %s (%s)", want, untouched ? "default OSD layout moved" : "OSD layout kept");
+    bfb_cli_run((script + "save noreboot").c_str(), &o);
+    bfb_free(o);
+    return true;
+}
+
 // Features (the simulated GPS of D22, air mode in a preset tune) and filters
 // only take effect at boot.
 static void rebootIfNeeded(bool always) {
@@ -266,7 +311,8 @@ static void rebootIfNeeded(bool always) {
 // (another motor protocol would leave the motors stopped), then reboots
 // Betaflight if it has to, or always with `reboot` (a quad's EEPROM was just
 // switched to or created). Simulation thread.
-static void ensureEssentials(bool reboot) {
+static void ensureEssentials(const DronePreset &p, bool reboot) {
+    reboot |= syncVideoSystem(p);
     char *o = nullptr;
     bfb_cli_run("get motor_pwm_protocol", &o);
     std::string out = o ? o : "";
@@ -341,7 +387,7 @@ static void activateEepromFor(const DronePreset &p) {
     // reading an EEPROM only reloads the PID and rate profiles: gyro filters,
     // the mixer and features are set up at boot and would stay the previous
     // quad's
-    ensureEssentials(true);
+    ensureEssentials(p, true);
     warmUpBetaflight();  // reading an EEPROM suspends RX briefly
 }
 
@@ -356,6 +402,11 @@ fpv_result selectPreset(const std::string &key, bool applyToFlight) {
         const DronePreset p = L.presets[idx];
         L.runner.call([&] {
             activateEepromFor(p);
+            // the same quad with another camera
+            if (syncVideoSystem(p)) {
+                bfb_reboot();
+                warmUpBetaflight();
+            }
             L.flight.applyPreset(p);
         });
     }
@@ -731,7 +782,7 @@ FPV_API fpv_result fpv_global_init(const fpv_global_config *cfgIn) {
         L.flight.initBetaflight(eeprom, preset);
         g_activeEeprom = eeprom;
         if (fresh) applyFirstRunConfig(preset);
-        ensureEssentials(fresh);  // the first-run tune is saved without a reboot
+        ensureEssentials(preset, fresh);  // the first-run tune is saved without a reboot
         L.flight.applyPreset(preset);
         warmUpBetaflight();
     } else {
@@ -1363,7 +1414,7 @@ FPV_API fpv_result fpv_cli_exec(const char *commands, char **outOutput) {
     REQUIRE_INIT();
     if (outOutput) *outOutput = nullptr;
     if (!commands) return setError(FPV_ERROR_INVALID_ARGUMENT, "commands is NULL");
-    CliFilterResult f = filterCliCommands(commands);
+    CliFilterResult f = filterCliCommands(commands, presetNtsc(currentPreset()));
     std::string output;
     for (auto &r : f.refused) output += "# refused: " + r + "\n";
     std::string cliOut;
@@ -1379,7 +1430,7 @@ FPV_API fpv_result fpv_import_betaflight_diff(const char *diff, char **outReport
     REQUIRE_INIT();
     if (outReport) *outReport = nullptr;
     if (!diff) return setError(FPV_ERROR_INVALID_ARGUMENT, "diff_text is NULL");
-    DiffImport imp = buildDiffImport(diff);
+    DiffImport imp = buildDiffImport(diff, presetNtsc(currentPreset()));
     if (imp.applied.empty() && imp.skipped.empty())
         return setError(FPV_ERROR_PARSE, "no Betaflight CLI lines found (expected the output of `diff all`)");
     if (L.droneExists && L.flight.snapshot().armed) return setError(FPV_ERROR_BUSY, "disarm before importing a configuration");
@@ -1388,7 +1439,11 @@ FPV_API fpv_result fpv_import_betaflight_diff(const char *diff, char **outReport
     if (rc == BFB_CLI_BUSY) return setError(FPV_ERROR_BUSY, "the Betaflight Configurator is using the CLI");
     // features (air mode) only take effect at boot, and Betaflight does not
     // flag them as needing one
-    bool reboot = L.runner.call([] { return bfb_reboot_required() != 0 || bfb_features_pending() != 0; });
+    // an import's `defaults` resets the video system: it follows the camera again
+    bool reboot = L.runner.call([] {
+        bool synced = syncVideoSystem(currentPreset());
+        return synced || bfb_reboot_required() != 0 || bfb_features_pending() != 0;
+    });
     if (reboot) {
         L.runner.call([] {
             bfb_reboot();

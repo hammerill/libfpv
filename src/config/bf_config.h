@@ -14,8 +14,10 @@ namespace fpv {
 // SimITL drives), ARM on AUX1, no power-on grace, MSP receiver, OSD.
 std::string betaflightBaseDefaults();
 // The out-of-the-box tune for a fresh EEPROM: base defaults + modes on
-// AUX2-6 + a readable OSD layout.
-std::string betaflightFirstRunScript();
+// AUX2-6 + a readable OSD layout (for an NTSC camera's 13 rows, or 16).
+std::string betaflightFirstRunScript(bool ntsc = false);
+// libfpv's default OSD layout as `set` lines: for NTSC's 13 rows or PAL's 16.
+std::string betaflightOsdLayout(bool ntsc);
 #if defined(LIBFPV_KAMIKAZE)
 // Where the warhead state goes: Betaflight's custom message 1 element,
 // centred on row 3 (a `set` line).
@@ -44,7 +46,9 @@ struct CliFilterResult {
 
 // Rewrites save/defaults/exit to their no-reboot forms and refuses
 // commands that make no sense in a simulator (bootloader, passthrough...).
-CliFilterResult filterCliCommands(const std::string &commands);
+// ntsc: the quad's camera, for what a `defaults` turns into (libfpv's first-run
+// configuration keeps Betaflight's video system with the camera).
+CliFilterResult filterCliCommands(const std::string &commands, bool ntsc = false);
 
 struct DiffImport {
     std::string script;                // full script to execute
@@ -55,7 +59,9 @@ struct DiffImport {
 };
 
 // Builds the import script for a real quad's `diff all` / `dump`.
-DiffImport buildDiffImport(const std::string &diffText);
+// ntsc: the quad's camera: the import resets to defaults, then keeps
+// Betaflight's video system with it.
+DiffImport buildDiffImport(const std::string &diffText, bool ntsc = false);
 std::string formatImportReport(const DiffImport &imp, const std::string &cliOutput);
 
 // Names of Betaflight modes by box id (as used by the `aux` command).

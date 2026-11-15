@@ -1364,14 +1364,16 @@ void Overlay::tabOsd() {
     ImGui::BeginGroup();
     ImGui::TextWrapped("Select an element, then click where it should go. Live preview:");
     // preview grid drawn with the OSD font texture
+    // NTSC cameras show 13 rows: Betaflight keeps elements within them
+    const int rows = osdVisibleRows();
     float cw = ImGui::GetFontSize() * 0.9f, chh = cw * 1.5f;
     ImVec2 p0 = ImGui::GetCursorScreenPos();
-    ImVec2 size(cw * FPV_OSD_COLS, chh * FPV_OSD_ROWS);
+    ImVec2 size(cw * FPV_OSD_COLS, chh * rows);
     ImDrawList *dl = ImGui::GetWindowDrawList();
     dl->AddRectFilled(p0, ImVec2(p0.x + size.x, p0.y + size.y), IM_COL32(60, 70, 60, 255));
     const float aw = (float)OsdRenderer::kAtlasW, ah = (float)OsdRenderer::kAtlasH;
     int fontOff = style == FPV_OSD_STYLE_HD ? OsdRenderer::kGlyphW * 16 : 0;
-    for (int r = 0; r < FPV_OSD_ROWS; r++) {
+    for (int r = 0; r < rows; r++) {
         for (int c = 0; c < FPV_OSD_COLS; c++) {
             uint8_t g = L.lastFrame.osd[r * FPV_OSD_COLS + c];
             if (g == 0 || g == ' ') continue;
@@ -1385,7 +1387,7 @@ void Overlay::tabOsd() {
     if (haveSel) {
         // outline the selected element's cell
         int sp = m_bf.num(m_osdSelected, 0), sc = osdPosColumn(sp), sr = osdPosRow(sp);
-        if ((sp & profileFlag) && sc < FPV_OSD_COLS && sr < FPV_OSD_ROWS) {
+        if ((sp & profileFlag) && sc < FPV_OSD_COLS && sr < rows) {
             ImVec2 a(p0.x + sc * cw, p0.y + sr * chh);
             dl->AddRect(a, ImVec2(a.x + cw, a.y + chh), IM_COL32(255, 220, 60, 255));
         }
@@ -1394,7 +1396,7 @@ void Overlay::tabOsd() {
     if (ImGui::IsItemClicked() && haveSel) {
         ImVec2 m = ImGui::GetIO().MousePos;
         int c = std::clamp((int)((m.x - p0.x) / cw), 0, FPV_OSD_COLS - 1);
-        int r = std::clamp((int)((m.y - p0.y) / chh), 0, FPV_OSD_ROWS - 1);
+        int r = std::clamp((int)((m.y - p0.y) / chh), 0, rows - 1);
         m_bf.set(m_osdSelected, osdPosMoved(m_bf.num(m_osdSelected, 0), c, r, profileFlag), true);
     }
     if (haveSel) {

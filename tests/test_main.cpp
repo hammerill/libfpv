@@ -2038,7 +2038,11 @@ bool osdBlank(const fpv_frame &f) {
 }
 
 // libfpv's aiming dot (Betaflight font 0x09) in the OSD's centre
-bool osdAimDot(const fpv_frame &f) { return f.osd[(FPV_OSD_ROWS / 2 - 1) * FPV_OSD_COLS + FPV_OSD_COLS / 2 - 1] == 0x09; }
+// the crosshairs' row: 7 of 16 rows, 6 of an NTSC camera's 13
+bool osdAimDot(const fpv_frame &f) {
+    const int col = FPV_OSD_COLS / 2 - 1;
+    return f.osd[6 * FPV_OSD_COLS + col] == 0x09 || f.osd[7 * FPV_OSD_COLS + col] == 0x09;
+}
 
 fpv_kamikaze_state warhead(fpv_drone *d) {
     fpv_kamikaze_state k{};
@@ -2381,10 +2385,10 @@ void testKamikazeInstall() {
     CHECK(osdHas(s.f, "!ACTIVE!"), "OSD shows !ACTIVE!");
     // the OSD line is the custom message 1 element: it moves, and the OSD
     // disable switch hides it
-    cli("set osd_custom_msg0_pos = 2434\nsave");  // column 2, row 12
+    cli("set osd_custom_msg0_pos = 2338\nsave");  // column 2, row 9: free in the NTSC and PAL layouts
     s.run(0.5f);
-    std::string row12((const char *)&s.f.osd[12 * FPV_OSD_COLS], FPV_OSD_COLS);
-    CHECK(row12.find("!ACTIVE!") != std::string::npos, "moved to row 12: \"%s\"", row12.c_str());
+    std::string row9((const char *)&s.f.osd[9 * FPV_OSD_COLS], FPV_OSD_COLS);
+    CHECK(row9.find("!ACTIVE!") != std::string::npos, "moved to row 9: \"%s\"", row9.c_str());
     s.rc.ch[9] = 1;
     s.run(0.5f);
     CHECK(!osdHas(s.f, "!ACTIVE!"), "hidden by the OSD disable switch");

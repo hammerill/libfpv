@@ -97,6 +97,10 @@ for v1.
   `rotorWind[4]`, the air's velocity at the centre of mass and at each
   motor hub. Every aerodynamic term works on the airspeed, the motion on
   the ground velocity (D30).
+* `0019-osd-rows-from-video-system.patch`: the fake OSD displayport has 13
+  rows when `vcd_video_system` is NTSC, 16 otherwise, as the OSD chip does;
+  Betaflight's `osdInit` then moves elements below the last row up to it
+  (D15).
 
 ## Simulation
 
@@ -592,6 +596,24 @@ format as the overlay, so a host needs only one renderer.
 texture. SimITL's OSD canvas is the 30×16 analog grid. "HD look" uses the
 bold font in a 16:9 viewport; it does not add an HD (53×20) canvas.
 
+**NTSC shows 13 rows (2026-11).** A real OSD chip fits 13 rows of 18-line
+glyphs in NTSC's 240 field lines, and Betaflight's displayport says so:
+elements below row 12 move up to it at boot. libfpv used to draw 16 rows on
+every camera, so an NTSC picture got its glyphs cut or squeezed (D34).
+Betaflight's video system now follows the quad's camera: `vcd_video_system`
+is NTSC for an analog NTSC camera, PAL otherwise (digital keeps the 16-row
+canvas), set by the first-run configuration, a diff import (which starts
+from `defaults`) and a check whenever a quad is activated or its camera
+changes, which reboots Betaflight when it changes (SimITL patch `0019`
+gives the displayport its rows). The first-run layout has an NTSC
+version (the bottom elements two rows up, the middle ones one), and a
+layout still exactly libfpv's default for the other system is swapped for
+it; a player's own layout is left to Betaflight, which moves what falls
+below row 12 onto it, as a real flight controller does. The F8 OSD editor
+and `fpv_osd_draw_data` (13 rows nearly filling the picture) follow
+`osdVisibleRows()`, and so does the kamikaze build's centred OSD.
+`frame.osd` stays 30×16: rows 13 to 15 are blank on NTSC.
+
 ### D15b. RC packets at a link's rate; a fast Configurator (Betaflight patch `0011`, SimITL patch `0018`)
 
 SimITL's receiver used to answer "new frame" on every scheduler pass.
@@ -1005,17 +1027,25 @@ things the first version got wrong. The goggles' look follows the Cobra X.
   18 font pixels, one field line per glyph row, switched in after the
   camera (the picture's colour off under it), softened only a little by the
   link, with faint colour dots where its steps ring in the colour filter.
-  The DVR's glyphs are the same size (a 24-sample, 18-line cell), but its
-  OSD sits inside the picture: Betaflight's NTSC grid has 13 rows and its
-  elements stand a column in from the edges. libfpv keeps its 16 rows and
-  its layout, so the grid itself is inset like the DVR's: from 3 % to 97 %
-  of the line (1.88 samples a font pixel, looked up between the two nearest
-  with each step kept to about a sample, so strokes stay even and crisp)
-  and centred down the field, a cell keeping 17 of a glyph's 18 rows on PAL
-  (1 to 17) and 14 on NTSC (2 to 15; letters use 4 to 13), which leaves 8
-  lines above and below. No renderer draws the in-signal OSD with the
-  host's OSD renderer any more: they build it from `frame.osd` and
-  `fpv_texture_get(FPV_TEXTURE_OSD_FONT)`.
+  The DVR's cells are 24 samples by 18 field lines, the 30 columns across
+  the whole line (it starts 9 samples in; libfpv centres it, which keeps
+  column 29 in the picture), and NTSC shows 13 rows: 234 of the 240 lines.
+  libfpv first squeezed its 16 rows into NTSC by cutting glyph rows, which
+  cut icons (the battery's top, the LQ bars) and drew the glyphs too tall
+  for their width; NTSC now has 13 rows like the real thing (D15), every
+  glyph complete, PAL its 16 rows in 288 lines. No renderer draws the
+  in-signal OSD with the host's OSD renderer any more: they build it from
+  `frame.osd` and `fpv_texture_get(FPV_TEXTURE_OSD_FONT)`.
+- *Coloured glyphs.* In the DVR some glyphs come out a solid colour that
+  flips to its complement every field: a green "4" then a magenta one, a
+  magenta "mA" then a green one, while wide glyphs ("0", "8") stay white.
+  It is NTSC cross-colour: the goggles' decoder separates colour with a
+  notch, and the OSD's one-pixel strokes sit near the subcarrier's period,
+  so they demodulate into a hue set by where they fall against the
+  subcarrier, which turns half a cycle a field. The renderers demodulate
+  the OSD's luma against the subcarrier over ±4 samples (σ 2.5) near a
+  glyph and add 0.6 of it. Under noise the glyphs get tinted in patches on
+  top (the noise's colour, three times stronger over the OSD's strokes).
 
 **Direct3D 9 (`fpv_video_d3d9.h`).** GTA San Andreas FPV had its own HLSL
 port of the GL3 shaders, so every renderer change meant porting it again in

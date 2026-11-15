@@ -201,6 +201,10 @@ void saveSettings();
 
 // Preset handling, called with the API mutex held.
 const DronePreset &currentPreset();
+// An analog NTSC camera: Betaflight's OSD shows 13 rows instead of 16.
+bool presetNtsc(const DronePreset &p);
+// The OSD rows the current quad's video shows (13 NTSC, else FPV_OSD_ROWS).
+int osdVisibleRows();
 fpv_result selectPreset(const std::string &nameOrFile, bool applyToFlight);
 std::string eepromPathFor(const DronePreset &p);
 // Erases the current quad's Betaflight EEPROM and restores its shipped preset

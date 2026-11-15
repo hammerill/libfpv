@@ -42,10 +42,11 @@ static void warheadOsd(uint8_t *osd, WarheadState state) {
         clearOsd(osd);
         static const char kBoom[] = "!...BOOM...!";
         int n = (int)sizeof(kBoom) - 1;
-        int row = FPV_OSD_ROWS / 2, col = FPV_OSD_COLS / 2 - n / 2;  // as osdShowArmed()
+        int row = osdVisibleRows() / 2, col = FPV_OSD_COLS / 2 - n / 2;  // as osdShowArmed()
         std::memcpy(osd + row * FPV_OSD_COLS + col, kBoom, n);
     } else if (state == WarheadState::Armed) {
-        osd[(FPV_OSD_ROWS / 2 - 1) * FPV_OSD_COLS + FPV_OSD_COLS / 2 - 1] = kAimDotGlyph;
+        // the crosshairs' row: 7 of 16, 6 of NTSC's 13
+        osd[((osdVisibleRows() - 1) / 2) * FPV_OSD_COLS + FPV_OSD_COLS / 2 - 1] = kAimDotGlyph;
     }
 }
 #endif

@@ -162,14 +162,16 @@ in three steps:
    signal the way the flight controller's OSD chip writes it, after the
    camera, so it is crisp but tears, rolls and sparkles with the picture.
    Build its picture from `frame.osd` and the font (`fpv_texture_get`,
-   `FPV_TEXTURE_OSD_FONT`, 12 × 18 glyphs, 16 to a row of the atlas): 360
-   font pixels across, one field line per glyph row, a cell keeping 17 of a
-   glyph's rows on PAL (1 to 17) and 14 on NTSC (2 to 15), so 360 × 272 or
-   360 × 224. Place it inside the picture as goggles show it: from 3 % to
-   97 % of the line, centred down the field. Look it up at the line's
-   (shifted) sample and field line, between the two nearest font pixels
-   with each step kept to about a sample (so strokes stay even), and switch
-   the luma to it after the camera's filters, the colour off under it.
+   `FPV_TEXTURE_OSD_FONT`, 12 × 18 glyphs, 16 to a row of the atlas): a
+   font pixel two of the 720 samples wide and one field line tall, all 18
+   rows of a glyph, so 360 × 288 for PAL's 16 rows and 360 × 234 for
+   NTSC's 13 (Betaflight keeps an NTSC camera's elements within them; rows
+   13 to 15 of `frame.osd` are blank), centred down the field. Look it up
+   with nearest filtering at the line's (shifted) sample and field line,
+   switch the luma to it after the camera's filters, the colour off under
+   it, and add its cross-colour: its luma demodulated against the
+   subcarrier near a glyph (strokes a pixel wide turn a solid hue that
+   flips every field).
 2. **The goggles.** Draw that texture with bilinear filtering into the
    picture's rectangle: `picture_aspect` fitted to the screen, black around
    it, each step between two samples kept to about a screen pixel ("sharp

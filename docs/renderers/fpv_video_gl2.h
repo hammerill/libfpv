@@ -118,10 +118,9 @@ static const char *fpv_video_gl2__signal_fs =
     "}\n"
     "vec3 tap(vec2 p) { vec2 s = sceneUv(p);\n"
     "  return (s.x < 0.0 || s.x > 1.0 || s.y < 0.0 || s.y > 1.0) ? vec3(0.0) : texture2D(scene, s).rgb; }\n"
-    "// The OSD chip's picture (360 font pixels by osdLines, premultiplied, nearest), placed\n"
-    "// inside the picture as goggles show it: from 3 % to 97 % of the line (1.88 samples a\n"
-    "// font pixel, each step kept to about a sample, so strokes stay even and crisp) and\n"
-    "// centred down the field, one field line per glyph row. x 0..1 across the line, line\n"
+    "// The OSD chip's picture (360 font pixels by osdLines, premultiplied, nearest): two\n"
+    "// samples a font pixel across the line (30 cells of 24 samples, as the chip writes\n"
+    "// them), centred down the field, one field line per glyph row. x 0..1 across the line, line\n"
     "// from the top. Over a picture of another aspect (resolution off) it stays 4:3.\n"
     "vec4 osdTexel(float i, float ln) {\n"
     "  return (i < 0.0 || i >= 360.0) ? vec4(0.0) : texture2D(osd, vec2((i + 0.5) / 360.0, (ln + 0.5) / osdLines));\n"
@@ -130,9 +129,7 @@ static const char *fpv_video_gl2__signal_fs =
     "  if (res < 0.5) x = (x - 0.5) * picAspect / (4.0 / 3.0) + 0.5;\n"
     "  float ln = line - floor((activeLines - osdLines) * 0.5);\n"
     "  if (osdIn < 0.5 || ln < 0.0 || ln >= osdLines) return vec4(0.0);\n"
-    "  float t = (x - 0.03) / 0.94 * 360.0 - 0.5; float i = floor(t);\n"
-    "  float f = clamp((t - i - 0.5) * 1.88 + 0.5, 0.0, 1.0);\n"
-    "  return mix(osdTexel(i, ln), osdTexel(i + 1.0, ln), f);\n"
+    "  return osdTexel(floor(x * 360.0), ln);\n"
     "}\n"
     "vec4 osdTap(vec2 p) { return osdChip(p.x, floor((1.0 - p.y) * activeLines)); }\n"
     "const mat3 toYiq = mat3(0.299, 0.596, 0.211, 0.587, -0.274, -0.523, 0.114, -0.322, 0.312);\n"
@@ -187,6 +184,7 @@ static const char *fpv_video_gl2__signal_fs =
     "  // The OSD chip switches the video to its black or white level after the camera: sharp\n"
     "  // pixels, a little softened by the link, its colour gone, and faint colour dots where\n"
     "  // its steps ring in the decoder's colour filter.\n"
+    "  float osdA = 0.0;\n"
     "  if (osdIn > 0.5 && !blank) {\n"
     "    float s1 = 1.0 / 720.0;\n"
     "    vec4 oc = osdChip(x, line), ol = osdChip(x - s1, line), orr = osdChip(x + s1, line);\n"
@@ -196,8 +194,20 @@ static const char *fpv_video_gl2__signal_fs =
     "    float y0 = yiq.x;\n"
     "    yiq.x = yiq.x * (1.0 - a) + oy;\n"
     "    yiq.yz *= 1.0 - a;\n"
-    "    float e = oc.r - oc.a * y0 - 0.5 * (ol2.r - ol2.a * y0 + or2.r - or2.a * y0);\n"
-    "    yiq.yz += 0.15 * e * carrier;\n"
+    "    osdA = a;\n"
+    "    // NTSC cross-colour: the decoder's notch can't tell the OSD's one-pixel strokes (near\n"
+    "    // the subcarrier's period) from colour, and demodulates them into a solid hue over a\n"
+    "    // glyph, set by where its strokes sit against the subcarrier; the subcarrier turns half\n"
+    "    // a cycle a field, so the next field shows the complementary hue (a green 4, a magenta\n"
+    "    // mA). Wide strokes stay white.\n"
+    "    vec2 cx = vec2(0.0); float cw = 1.0;\n"
+    "    if (oc.a + ol.a + orr.a + ol2.a + or2.a > 0.0) { cw = 0.0; for (int k = -4; k <= 4; k++) {\n"
+    "      float fk = float(k), xs = x + fk * s1;\n"
+    "      vec4 o = osdChip(xs, line);\n"
+    "      float w = exp(-0.08 * fk * fk), phk = 2.0 * PI * (xs * subcarrier + 0.5 * parity);\n"
+    "      cx += w * (o.r + (1.0 - o.a) * y0) * vec2(cos(phk), sin(phk)); cw += w;\n"
+    "    } }\n"
+    "    yiq.yz += 0.6 * cx / cw;\n"
     "  }\n"
     "  // the black porch where a torn line starts, the blanking bar of a rolling picture:\n"
     "  // black while there is a signal, the receiver's snow when there is none\n"
@@ -228,6 +238,14 @@ static const char *fpv_video_gl2__signal_fs =
     "    // FM noise is strongest high up the spectrum, where the colour lives: saturated\n"
     "    // colour speckle while the burst holds; the colour killer leaves grey snow\n"
     "    yiq.yz += grain * 1.0 * gcol * chroma;\n"
+    "    // over the OSD's white strokes the noise turns the colour much harder (thin bright\n"
+    "    // strokes put their energy where the colour lives): glyphs come out tinted in patches\n"
+    "    if (osdA > 0.0) {\n"
+    "      float wc = x * 90.0; float wi = floor(wc), wf = wc - wi; vec3 wd = vec3(0.0, floor(line * 0.25), seed);\n"
+    "      vec2 wash = mix(vec2(gn(wd + vec3(wi, 23.0, 0.0)), gn(wd + vec3(wi, 41.0, 0.0))),\n"
+    "                      vec2(gn(wd + vec3(wi + 1.0, 23.0, 0.0)), gn(wd + vec3(wi + 1.0, 41.0, 0.0))), wf);\n"
+    "      yiq.yz += osdA * clamp(yiq.x, 0.0, 1.0) * (grain * 3.0 * wash + grain * 2.0 * gcol) * chroma;\n"
+    "    }\n"
     "    // FM clicks: specks a sample or two long, as often coloured as dark: black or a\n"
     "    // colour on bright, white on dark. The whites click first (the carrier swings\n"
     "    // furthest there), the darks hardly. Goggles show them in dense bands; the odd\n"
@@ -437,18 +455,17 @@ int fpv_video_gl2_init(fpv_video_gl2 *v) {
     return 1;
 }
 
-/* The OSD chip's picture (MAX7456 / AT7456E): it writes Betaflight's 30 x 16
- * grid of 12 x 18 font pixels straight into the video, one field line per
- * glyph row, so 360 x (16 x rows_per_cell) RGBA here (black, white or
- * clear); the shader places it inside the picture with a margin all round,
- * as goggles show it. A cell keeps `per` of a glyph's 18 rows: 17 on PAL
- * (all but row 0), 14 on NTSC (2 to 15; letters use 4 to 13). */
-static int fpv_video_gl2__osd_rows(int active_lines) { return active_lines >= 288 ? 17 : 14; }
-static void fpv_video_gl2__osd_chip(const unsigned char *grid, const fpv_texture *font, int per,
+/* The OSD chip's picture (MAX7456 / AT7456E): it writes Betaflight's grid
+ * of 12 x 18 font pixels straight into the video, a font pixel two of the
+ * decoder's 720 samples wide and one field line tall, so 360 x (rows x 18)
+ * here (black, white or clear). NTSC's 240 field lines show 13 rows (234
+ * lines, Betaflight keeps its elements within them), PAL's 288 all 16. */
+static int fpv_video_gl2__osd_rows(int active_lines) { return active_lines >= 288 ? FPV_OSD_ROWS : 13; }
+static void fpv_video_gl2__osd_chip(const unsigned char *grid, const fpv_texture *font, int rows,
                                     unsigned char *out) {
-    int skip = per >= 17 ? 1 : 2;
-    memset(out, 0, (size_t)360 * FPV_OSD_ROWS * per * 4);
-    for (int r = 0; r < FPV_OSD_ROWS; r++)
+    const int per = 18, skip = 0;
+    memset(out, 0, (size_t)360 * rows * per * 4);
+    for (int r = 0; r < rows; r++)
         for (int c = 0; c < FPV_OSD_COLS; c++) {
             unsigned g = grid[r * FPV_OSD_COLS + c];
             if (g == 0 || g == ' ') continue;
@@ -551,12 +568,12 @@ void fpv_video_gl2_draw(fpv_video_gl2 *v, const fpv_frame *f, unsigned int scene
         if (osd_in) {
             /* the OSD chip's picture, rebuilt when the grid changes; the host's
                OSD renderer draws only the OSD over the picture */
-            int per = fpv_video_gl2__osd_rows((int)active), lines = FPV_OSD_ROWS * per;
+            int rows = fpv_video_gl2__osd_rows((int)active), lines = rows * 18;
             fpv_texture font;
             if (!v->osd_pixels) v->osd_pixels = (unsigned char *)malloc((size_t)360 * 288 * 4);
             if (v->osd_pixels && (!v->osd_tex || v->osd_lines != lines || memcmp(v->osd_grid, f->osd, sizeof v->osd_grid)) &&
                 fpv_texture_get(FPV_TEXTURE_OSD_FONT, &font) == FPV_OK && font.rgba) {
-                fpv_video_gl2__osd_chip(f->osd, &font, per, v->osd_pixels);
+                fpv_video_gl2__osd_chip(f->osd, &font, rows, v->osd_pixels);
                 if (!v->osd_tex) glGenTextures(1, &v->osd_tex);
                 glActiveTexture(GL_TEXTURE0 + 1);
                 glBindTexture(GL_TEXTURE_2D, v->osd_tex);
@@ -619,7 +636,7 @@ void fpv_video_gl2_draw(fpv_video_gl2 *v, const fpv_frame *f, unsigned int scene
         glUniform1f(L[FPV_V2_BLOCKS], vf->block_errors);
         glUniform1f(L[FPV_V2_SOFTNESS], noise ? vf->softness : 0.0f);
         glUniform1f(L[FPV_V2_LINECOUNT], vf->line_count ? (float)vf->line_count : 1.0f);
-        glUniform1f(L[FPV_V2_OSDLINES], (float)(FPV_OSD_ROWS * fpv_video_gl2__osd_rows((int)active)));
+        glUniform1f(L[FPV_V2_OSDLINES], (float)(18 * fpv_video_gl2__osd_rows((int)active)));
         if (has_upset && noise)
             glUniform4f(L[FPV_V2_UPSET], vf->chroma_boost, vf->chroma_tint[0], vf->chroma_tint[1], vf->hue_sweep);
         else

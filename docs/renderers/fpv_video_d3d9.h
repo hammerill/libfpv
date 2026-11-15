@@ -177,11 +177,10 @@ float3 withUi(float3 c, float2 p) {
 }
 // the camera's picture
 float3 tap(float2 p) { return withUi(lensTap(p), p); }
-// The OSD chip's picture (360 font pixels by osdLines, premultiplied, point sampled),
-// placed inside the picture as goggles show it: from 3 % to 97 % of the line (1.88
-// samples a font pixel, each step kept to about a sample, so strokes stay even and
-// crisp) and centred down the field, one field line per glyph row. x 0..1 across the
-// line, line from the top. Over a picture of another aspect (resolution off) it stays 4:3.
+// The OSD chip's picture (360 font pixels by osdLines, premultiplied, point sampled):
+// two samples a font pixel across the line (30 cells of 24 samples, as the chip writes
+// them), centred down the field, one field line per glyph row. x 0..1 across the line, line
+// from the top. Over a picture of another aspect (resolution off) it stays 4:3.
 float4 osdTexel(float i, float ln) {
   return (i < 0.0 || i >= 360.0) ? float4(0.0, 0.0, 0.0, 0.0)
                                  : tex2Dlod(osd, float4((i + 0.5) / 360.0, (ln + 0.5) / osdLines, 0.0, 0.0));
@@ -190,9 +189,7 @@ float4 osdChip(float x, float fieldLine) {
   if (res < 0.5) x = (x - 0.5) * picAspect / (4.0 / 3.0) + 0.5;
   float ln = fieldLine - floor((activeLines - osdLines) * 0.5);
   if (osdIn < 0.5 || ln < 0.0 || ln >= osdLines) return float4(0.0, 0.0, 0.0, 0.0);
-  float t = (x - 0.03) / 0.94 * 360.0 - 0.5; float i = floor(t);
-  float f = saturate((t - i - 0.5) * 1.88 + 0.5);
-  return lerp(osdTexel(i, ln), osdTexel(i + 1.0, ln), f);
+  return osdTexel(floor(x * 360.0), ln);
 }
 float4 osdTap(float2 p) { return osdChip(p.x, floor((1.0 - p.y) * activeLines)); }
 float luma(float3 c) { return dot(c, float3(0.299, 0.587, 0.114)); }
@@ -256,6 +253,7 @@ float3 analog(float2 uv) {
   // The OSD chip switches the video to its black or white level after the camera: sharp
   // pixels, a little softened by the link, its colour gone, and faint colour dots where
   // its steps ring in the decoder's colour filter.
+  float osdA = 0.0;
   [branch] if (osdIn > 0.5 && !blank) {
     float s1 = 1.0 / 720.0;
     float4 oc = osdChip(x, ln), ol = osdChip(x - s1, ln), orr = osdChip(x + s1, ln);
@@ -265,8 +263,20 @@ float3 analog(float2 uv) {
     float y0 = yiq.x;
     yiq.x = yiq.x * (1.0 - a) + oy;
     yiq.yz *= 1.0 - a;
-    float e = oc.r - oc.a * y0 - 0.5 * (ol2.r - ol2.a * y0 + or2.r - or2.a * y0);
-    yiq.yz += 0.15 * e * carrier;
+    osdA = a;
+    // NTSC cross-colour: the decoder's notch can't tell the OSD's one-pixel strokes (near
+    // the subcarrier's period) from colour, and demodulates them into a solid hue over a
+    // glyph, set by where its strokes sit against the subcarrier; the subcarrier turns half
+    // a cycle a field, so the next field shows the complementary hue (a green 4, a magenta
+    // mA). Wide strokes stay white.
+    float2 cx = float2(0.0, 0.0); float cw = 1.0;
+    [branch] if (oc.a + ol.a + orr.a + ol2.a + or2.a > 0.0) { cw = 0.0; [loop] for (int k = -4; k <= 4; k++) {
+      float fk = float(k), xs = x + fk * s1;
+      float4 o = osdChip(xs, ln);
+      float w = exp(-0.08 * fk * fk), phk = 2.0 * PI * (xs * subcarrier + 0.5 * parity);
+      cx += w * (o.r + (1.0 - o.a) * y0) * float2(cos(phk), sin(phk)); cw += w;
+    } }
+    yiq.yz += 0.6 * cx / cw;
   }
   // the black porch where a torn line starts, the blanking bar of a rolling picture:
   // black while there is a signal, the receiver's snow when there is none
@@ -296,6 +306,14 @@ float3 analog(float2 uv) {
     // FM noise is strongest high up the spectrum, where the colour lives: saturated
     // colour speckle while the burst holds; the colour killer leaves grey snow
     yiq.yz += grain * 1.0 * gcol * chroma;
+    // over the OSD's white strokes the noise turns the colour much harder (thin bright
+    // strokes put their energy where the colour lives): glyphs come out tinted in patches
+    [branch] if (osdA > 0.0) {
+      float wc = x * 90.0; float wi = floor(wc), wf = wc - wi; float3 wd = float3(0.0, floor(ln * 0.25), seed);
+      float2 wash = lerp(float2(gn(wd + float3(wi, 23.0, 0.0)), gn(wd + float3(wi, 41.0, 0.0))),
+                         float2(gn(wd + float3(wi + 1.0, 23.0, 0.0)), gn(wd + float3(wi + 1.0, 41.0, 0.0))), wf);
+      yiq.yz += osdA * saturate(yiq.x) * (grain * 3.0 * wash + grain * 2.0 * gcol) * chroma;
+    }
     // FM clicks: specks a sample or two long, as often coloured as dark: black or a
     // colour on bright, white on dark. The whites click first (the carrier swings
     // furthest there), the darks hardly. Goggles show them in dense bands; the odd
@@ -538,16 +556,14 @@ static void fpv_video_d3d9__upload_lines(fpv_video_d3d9 *v, const fpv_video_feed
     v->lines->UnlockRect(0);
 }
 
-/* The OSD chip's picture (MAX7456 / AT7456E): it writes Betaflight's 30 x 16
- * grid of 12 x 18 font pixels straight into the video, one field line per
- * glyph row, so 360 x (16 x rows_per_cell) here (black, white or clear); the
- * shader places it inside the picture with a margin all round, as goggles
- * show it. A cell keeps `per` of a glyph's 18 rows: 17 on PAL (all but row
- * 0), 14 on NTSC (2 to 15; letters use 4 to 13). Rebuilt when the grid
- * changes. */
-static int fpv_video_d3d9__osd_rows(int active_lines) { return active_lines >= 288 ? 17 : 14; }
-static int fpv_video_d3d9__osd_chip(fpv_video_d3d9 *v, IDirect3DDevice9 *dev, const fpv_frame *f, int per) {
-    int lines = FPV_OSD_ROWS * per, skip = per >= 17 ? 1 : 2;
+/* The OSD chip's picture (MAX7456 / AT7456E): it writes Betaflight's grid
+ * of 12 x 18 font pixels straight into the video, a font pixel two of the
+ * decoder's 720 samples wide and one field line tall, so 360 x (rows x 18)
+ * here (black, white or clear). NTSC's 240 field lines show 13 rows (234
+ * lines, Betaflight keeps its elements within them), PAL's 288 all 16. */
+static int fpv_video_d3d9__osd_rows(int active_lines) { return active_lines >= 288 ? FPV_OSD_ROWS : 13; }
+static int fpv_video_d3d9__osd_chip(fpv_video_d3d9 *v, IDirect3DDevice9 *dev, const fpv_frame *f, int rows) {
+    const int per = 18, skip = 0, lines = rows * per;
     if (v->osd && v->osd_lines == lines && !memcmp(v->osd_grid, f->osd, sizeof v->osd_grid)) return 1;
     fpv_texture font;
     if (FPV_VIDEO_D3D9_TEXTURE_GET(FPV_TEXTURE_OSD_FONT, &font) != FPV_OK || !font.rgba) return 0;
@@ -558,7 +574,7 @@ static int fpv_video_d3d9__osd_chip(fpv_video_d3d9 *v, IDirect3DDevice9 *dev, co
     D3DLOCKED_RECT lr;
     if (FAILED(v->osd->LockRect(0, &lr, NULL, 0))) return 0;
     for (int y = 0; y < lines; y++) memset((uint8_t *)lr.pBits + (size_t)y * lr.Pitch, 0, 360 * 4);
-    for (int r = 0; r < FPV_OSD_ROWS; r++)
+    for (int r = 0; r < rows; r++)
         for (int c = 0; c < FPV_OSD_COLS; c++) {
             unsigned g = f->osd[r * FPV_OSD_COLS + c];
             if (g == 0 || g == ' ') continue;
@@ -687,7 +703,7 @@ int fpv_video_d3d9_draw(fpv_video_d3d9 *v, IDirect3DDevice9 *dev, const fpv_fram
                 c[22][0] = rx / (float)fb_w, c[22][1] = ry / (float)fb_h;
                 c[22][2] = rw / (float)fb_w, c[22][3] = rh / (float)fb_h;
             }
-            c[23][0] = (float)(FPV_OSD_ROWS * fpv_video_d3d9__osd_rows((int)active));
+            c[23][0] = (float)(18 * fpv_video_d3d9__osd_rows((int)active));
             if (has_upset && noise)
                 c[24][0] = vf->chroma_boost, c[24][1] = vf->chroma_tint[0], c[24][2] = vf->chroma_tint[1],
                 c[24][3] = vf->hue_sweep;
