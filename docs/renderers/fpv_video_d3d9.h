@@ -177,19 +177,27 @@ float3 withUi(float3 c, float2 p) {
 }
 // the camera's picture
 float3 tap(float2 p) { return withUi(lensTap(p), p); }
-// The OSD chip's picture (360 font pixels by osdLines, premultiplied, point sampled):
-// two samples a font pixel across the line (30 cells of 24 samples, as the chip writes
-// them), centred down the field, one field line per glyph row. x 0..1 across the line, line
-// from the top. Over a picture of another aspect (resolution off) it stays 4:3.
+// The OSD chip's picture (360 font pixels by osdLines, premultiplied, point sampled): one
+// font pixel two samples wide and one field line tall, the grid scaled to 0.9 around the
+// picture's centre, as goggles show it with a margin of about a character all round.
+// Looked up at the field's own frame line (interlaced, as the chip writes it) between the
+// four nearest font pixels, each step kept to about a sample or a line, so every glyph
+// row stays and the edges crisp. x 0..1 across the line, line from the top. Over a
+// picture of another aspect (resolution off) the grid stays 4:3.
 float4 osdTexel(float i, float ln) {
-  return (i < 0.0 || i >= 360.0) ? float4(0.0, 0.0, 0.0, 0.0)
+  return (i < 0.0 || i >= 360.0 || ln < 0.0 || ln >= osdLines) ? float4(0.0, 0.0, 0.0, 0.0)
                                  : tex2Dlod(osd, float4((i + 0.5) / 360.0, (ln + 0.5) / osdLines, 0.0, 0.0));
 }
 float4 osdChip(float x, float fieldLine) {
   if (res < 0.5) x = (x - 0.5) * picAspect / (4.0 / 3.0) + 0.5;
-  float ln = fieldLine - floor((activeLines - osdLines) * 0.5);
-  if (osdIn < 0.5 || ln < 0.0 || ln >= osdLines) return float4(0.0, 0.0, 0.0, 0.0);
-  return osdTexel(floor(x * 360.0), ln);
+  if (osdIn < 0.5) return float4(0.0, 0.0, 0.0, 0.0);
+  const float S = 0.9;
+  float gx = (x * 720.0 - 360.0 * (1.0 - S)) / (2.0 * S) - 0.5;
+  float gy = (2.0 * fieldLine + parity + 0.5 - (activeLines - osdLines * S)) / (2.0 * S) - 0.5;
+  float ix = floor(gx), iy = floor(gy);
+  float2 f = saturate((float2(gx - ix, gy - iy) - 0.5) * (2.0 * S) + 0.5);
+  return lerp(lerp(osdTexel(ix, iy), osdTexel(ix + 1.0, iy), f.x),
+              lerp(osdTexel(ix, iy + 1.0), osdTexel(ix + 1.0, iy + 1.0), f.x), f.y);
 }
 float4 osdTap(float2 p) { return osdChip(p.x, floor((1.0 - p.y) * activeLines)); }
 float luma(float3 c) { return dot(c, float3(0.299, 0.587, 0.114)); }
@@ -259,7 +267,7 @@ float3 analog(float2 uv) {
     float4 oc = osdChip(x, ln), ol = osdChip(x - s1, ln), orr = osdChip(x + s1, ln);
     float4 ol2 = osdChip(x - 2.0 * s1, ln), or2 = osdChip(x + 2.0 * s1, ln);
     float a = 0.7 * oc.a + 0.15 * (ol.a + orr.a);
-    float oy = 0.7 * oc.r + 0.15 * (ol.r + orr.r);
+    float oy = 1.1 * (0.7 * oc.r + 0.15 * (ol.r + orr.r));  // the chip's white sits over the picture's peak
     float y0 = yiq.x;
     yiq.x = yiq.x * (1.0 - a) + oy;
     yiq.yz *= 1.0 - a;
@@ -276,7 +284,7 @@ float3 analog(float2 uv) {
       float w = exp(-0.08 * fk * fk), phk = 2.0 * PI * (xs * subcarrier + 0.5 * parity);
       cx += w * (o.r + (1.0 - o.a) * y0) * float2(cos(phk), sin(phk)); cw += w;
     } }
-    yiq.yz += 0.6 * cx / cw;
+    yiq.yz += 0.35 * cx / cw;
   }
   // the black porch where a torn line starts, the blanking bar of a rolling picture:
   // black while there is a signal, the receiver's snow when there is none

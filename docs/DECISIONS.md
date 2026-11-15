@@ -610,7 +610,7 @@ version (the bottom elements two rows up, the middle ones one), and a
 layout still exactly libfpv's default for the other system is swapped for
 it; a player's own layout is left to Betaflight, which moves what falls
 below row 12 onto it, as a real flight controller does. The F8 OSD editor
-and `fpv_osd_draw_data` (13 rows nearly filling the picture) follow
+and `fpv_osd_draw_data` (the same grid scaled to 0.9 as the video feed draws it) follow
 `osdVisibleRows()`, and so does the kamikaze build's centred OSD.
 `frame.osd` stays 30×16: rows 13 to 15 are blank on NTSC.
 
@@ -1033,7 +1033,14 @@ things the first version got wrong. The goggles' look follows the Cobra X.
   libfpv first squeezed its 16 rows into NTSC by cutting glyph rows, which
   cut icons (the battery's top, the LQ bars) and drew the glyphs too tall
   for their width; NTSC now has 13 rows like the real thing (D15), every
-  glyph complete, PAL its 16 rows in 288 lines. No renderer draws the
+  glyph complete, PAL its 16 rows in 288 lines. The grid is then scaled to
+  0.9 around the picture's centre, which leaves about a character of
+  margin on every side, as goggles show it: a glyph row is 1.8 frame lines
+  and a font pixel 1.8 samples, so it is looked up at each field's own
+  frame line (interlaced, as the chip writes it) between the four nearest
+  font pixels, each step kept to about a sample or a line; every glyph row
+  stays and the edges stay crisp. The chip's white sits over the picture's
+  peak (110 %), so the strokes clip to white as the DVR's do. No renderer draws the
   in-signal OSD with the host's OSD renderer any more: they build it from
   `frame.osd` and `fpv_texture_get(FPV_TEXTURE_OSD_FONT)`.
 - *Coloured glyphs.* In the DVR some glyphs come out a solid colour that
@@ -1044,7 +1051,7 @@ things the first version got wrong. The goggles' look follows the Cobra X.
   so they demodulate into a hue set by where they fall against the
   subcarrier, which turns half a cycle a field. The renderers demodulate
   the OSD's luma against the subcarrier over ±4 samples (σ 2.5) near a
-  glyph and add 0.6 of it. Under noise the glyphs get tinted in patches on
+  glyph and add 0.35 of it. Under noise the glyphs get tinted in patches on
   top (the noise's colour, three times stronger over the OSD's strokes).
 
 **Direct3D 9 (`fpv_video_d3d9.h`).** GTA San Andreas FPV had its own HLSL
