@@ -486,7 +486,7 @@ extern "C" FPV_API fpv_result fpv_drone_tick(fpv_drone *d, float frameDt, fpv_fr
         float t = std::tan(fov * kPi / 360.0f) / edge;
         fov = std::min(std::atan(t) * 360.0f / kPi, 170.0f);
     }
-    makeCamera(f.camera, camPos, camFwd, camUp, fov, p.camera.aspect, 0.01f);
+    makeCamera(f.camera, camPos, camFwd, camUp, fov, p.camera.aspect, kFpvCameraNear);
     f.camera.distortion_k1 = k1;
     f.camera.distortion_k2 = k2;
     f.camera.distortion_zoom = zoom;

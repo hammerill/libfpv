@@ -198,6 +198,43 @@ never bounce (restitution 0): arms and props soak up the hit. With the
 material's restitution a quad landing on an arm after a flip cartwheeled
 on over it.
 
+The last sphere is the canopy, around the FPV camera. The quad JSON's
+optional `"collision"` object sets the shape, in metres from the centre of
+mass (+Y up, +Z forward):
+
+```json
+"collision": {
+    "bodyRadius": 0.02,
+    "motorRadius": 0.017,
+    "canopy": { "offset": { "x": 0.0, "y": 0.016, "z": 0.014 }, "radius": 0.021 }
+}
+```
+
+**Every drone model must keep its camera inside its collision shape:** the
+lens (`camera.offset`) at least 13 mm (the 10 mm near plane plus 3 mm)
+inside it in every direction. This applies to every new preset. Give a
+real canopy where the quad has one, so it lands on its top like the real
+one, and treat the "canopy did not keep the camera" warning as a bug in
+the preset. The `camera_clearance` test drops every built-in preset on its
+top, nose and side and fails if a camera gets closer to the ground than
+its near plane.
+
+Why: the camera sits ahead of and above the centre, outside
+the body sphere on most frames: upside down the Fluid75's lens rested on
+the ground (0 mm), the Air65 II's 4 mm and the 3" Slayer's 9.8 mm above
+it, all inside the 10 mm near plane, so the ground was clipped away and the
+FPV view looked through it. `ensureCameraClearance()` makes every preset
+keep its lens `kCameraClearance` (near plane + 3 mm) inside the canopy:
+without one it is a sphere of that radius on the lens, and a canopy too
+small for its camera grows, with a warning. One sphere is enough for the
+guarantee: a surface closer than that to the lens is inside the sphere,
+so it is pushed out like any contact. The canopy is part of the body
+(motor -1): it bounces with the material's restitution and its hits
+damage all props. The Air65 II's own canopy stands above its ducts, so it
+rests on its top tilted on the canopy and two ducts, as the real whoop
+does; its tune's `small_angle = 180` then lets Betaflight arm it there,
+which the turtle test allows.
+
 ### D10. Warm-up, so a fresh drone can arm immediately
 
 Betaflight needs about 3.7 s of simulated time after boot for gyro, acc

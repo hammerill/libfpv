@@ -97,6 +97,9 @@ void Flight::syncPropDirection() {
 // motor (bell and prop nut, just above the prop disc): upside down the
 // drone rests on those with its props clear of the ground, and in turtle
 // mode it pivots on an arm like a real quad instead of rolling on the body.
+// Then the canopy around the FPV camera: upside down the quad rests on it
+// and the motor tops, and the lens can never get closer to a surface than
+// the camera's near plane (ensureCameraClearance).
 void Flight::buildShape() {
     m_shape.clear();
     const CollisionSettings &c = m_preset.collision;
@@ -108,6 +111,7 @@ void Flight::buildShape() {
         float top = std::max(c.bodyRadius, p.y + kPropDiscHalfThickness + kPropNutHeight);
         m_shape.push_back({{p.x, top - c.motorRadius, p.z}, c.motorRadius, i});
     }
+    m_shape.push_back({c.canopyOffset, c.canopyRadius, -1});
 #if defined(LIBFPV_KAMIKAZE)
     // the warhead under the frame: flush with the landing points by
     // default, below them (touching first) when it hangs lower

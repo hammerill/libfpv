@@ -9,6 +9,13 @@
 - Never commit or push unless explicitly told to. Leave changes in the
   working tree and say what changed.
 
+## Docs
+
+- `docs/INTEGRATION.md` is for libfpv's consumers, the game integrations:
+  only what a game has to know or do. Don't fill it with libfpv internals,
+  preset authoring or other things a game never touches; those go in
+  `docs/DECISIONS.md` (or code comments).
+
 ## The kamikaze feature is dev-gatekept
 
 Everything about kamikaze builds (`LIBFPV_KAMIKAZE`: the warhead, the bomb

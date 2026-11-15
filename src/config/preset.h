@@ -42,11 +42,26 @@ struct VtxSettings {
     float sensitivityDbm = -95.0f;
 };
 
+// The FPV camera's near plane, metres (fpv_frame.camera.near_plane).
+constexpr float kFpvCameraNear = 0.01f;
+// How deep inside the collision shape the FPV camera's lens always stays:
+// the near plane plus a few millimetres for the contact solver. Closer to a
+// surface than the near plane, the game's renderer would clip it and show
+// what is behind it (the camera "through the ground").
+constexpr float kCameraClearance = kFpvCameraNear + 0.003f;
+
 struct CollisionSettings {
     float bodyRadius = 0.035f;   // sphere at the centre of mass
     float motorRadius = 0.018f;  // sphere per motor bell
     float propRadius = 0.065f;   // propeller disc radius
     float propDurability = 11.0f;// relative-speed budget before a prop breaks
+    // The canopy: a sphere around the FPV camera (and the stack under it),
+    // what an upside-down quad rests on with the motor tops. "canopy" in the
+    // quad JSON's "collision"; without it, a sphere of kCameraClearance
+    // centred on the lens. ensureCameraClearance() grows the radius until
+    // the lens is kCameraClearance inside it, whatever the preset says.
+    Vec3 canopyOffset{0.0f, 0.02f, 0.03f};  // from the centre of mass, metres
+    float canopyRadius = 0.0f;
 };
 
 struct DronePreset {
@@ -77,6 +92,11 @@ struct DronePreset {
     float payloadMass = -1, payloadDrop = -1;
 #endif
 };
+
+// Makes the canopy keep the FPV camera's lens kCameraClearance inside the
+// collision shape: an automatic canopy is centred on the lens, a too small
+// one grows. Returns false if it had to grow (the preset was wrong).
+bool ensureCameraClearance(DronePreset &p);
 
 // Loads every quad preset in <dir>/quad, resolving component references in
 // the sibling folders. Errors are reported per file in `errors`.

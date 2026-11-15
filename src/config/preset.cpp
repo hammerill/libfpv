@@ -13,6 +13,7 @@
 
 #include "nlohmann/json.hpp"
 #include "util/fs.h"
+#include "util/log.h"
 #include "video/video_link.h"
 
 namespace fpv {
@@ -224,6 +225,12 @@ DronePreset loadPresetFile(const std::string &quadJsonPath) {
         p.collision.motorRadius = num(c, "motorRadius", p.collision.motorRadius);
         p.collision.propRadius = num(c, "propRadius", p.collision.propRadius);
         p.collision.propDurability = num(c, "propDurability", p.collision.propDurability);
+        if (c.contains("canopy") && c["canopy"].is_object()) {
+            const json &cn = c["canopy"];
+            Vec3F off = vec3f(cn, "offset", {0, 0, 0});
+            p.collision.canopyOffset = {off.x, off.y, off.z};
+            p.collision.canopyRadius = std::max(0.0f, num(cn, "radius", 0.0f));
+        }
     }
     p.camera.aspect = p.vtx.digital ? 16.0f / 9.0f : 4.0f / 3.0f;
     p.camera.offset = {0.0f, 0.02f, std::clamp(armLen * 0.4f, 0.02f, 0.05f)};
@@ -257,6 +264,9 @@ DronePreset loadPresetFile(const std::string &quadJsonPath) {
         Vec3F off = vec3f(c, "offset", {p.camera.offset.x, p.camera.offset.y, p.camera.offset.z});
         p.camera.offset = {off.x, off.y, off.z};
     }
+    if (!ensureCameraClearance(p))
+        FPV_LOGW("preset %s: the canopy did not keep the camera %.0f mm inside it, grown to %.1f mm",
+                 p.fileName.c_str(), kCameraClearance * 1000, p.collision.canopyRadius * 1000);
 
     // Betaflight tune shipped next to the preset: <file>.diff.txt
     fs::path diffPath = qp.parent_path() / (qp.stem().string() + ".diff.txt");
@@ -286,6 +296,19 @@ std::vector<DronePreset> loadPresetDirectory(const std::string &dir, std::vector
         }
     }
     return out;
+}
+
+bool ensureCameraClearance(DronePreset &p) {
+    CollisionSettings &c = p.collision;
+    if (c.canopyRadius <= 0) {
+        c.canopyOffset = p.camera.offset;
+        c.canopyRadius = kCameraClearance;
+        return true;
+    }
+    float need = length(p.camera.offset - c.canopyOffset) + kCameraClearance;
+    if (c.canopyRadius >= need - 1e-6f) return true;
+    c.canopyRadius = need;
+    return false;
 }
 
 DronePreset builtinDefaultPreset() {
@@ -352,6 +375,7 @@ DronePreset builtinDefaultPreset() {
     p.camera.sharpening = 0.55f;
     p.collision.propRadius = 5.1f * 0.0254f * 0.5f;
     p.vtxShadowDb = defaultVtxShadowDb(0.0795f * 1.41421356f);
+    ensureCameraClearance(p);
     return p;
 }
 

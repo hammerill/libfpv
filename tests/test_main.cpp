@@ -280,11 +280,20 @@ void testTurtle() {
         d.preset = name;
         CHECK(fpv_drone_create(&d, &s.drone) == FPV_OK, "drone_create: %s", fpv_last_error());
         s.run(1.0f);
-        CHECK(bodyUp(s.f) < -0.9f, "%s rests upside down, up %.2f", name, bodyUp(s.f));
-        s.arm();
-        CHECK(!s.armed(), "%s does not arm upside down without turtle", name);
-        CHECK(std::strstr(s.f.arming_disable_text, "ANGLE") != nullptr, "reports ANGLE: \"%s\"",
-              s.f.arming_disable_text);
+        CHECK(bodyUp(s.f) < -0.8f, "%s rests upside down, up %.2f", name, bodyUp(s.f));
+        // A whoop rests on its canopy and two ducts, tilted, and a tune with
+        // small_angle = 180 (the Air65's) arms it like that, as on the real
+        // quad. Any smaller small_angle must refuse.
+        char *o = nullptr;
+        fpv_cli_exec("get small_angle", &o);
+        bool anyAngle = o && std::strstr(o, "small_angle = 180");
+        fpv_free(o);
+        if (!anyAngle) {
+            s.arm();
+            CHECK(!s.armed(), "%s does not arm upside down without turtle", name);
+            CHECK(std::strstr(s.f.arming_disable_text, "ANGLE") != nullptr, "reports ANGLE: \"%s\"",
+                  s.f.arming_disable_text);
+        }
         s.rc.ch[4] = -1;
         s.rc.ch[7] = 1;  // turtle switch
         s.run(0.3f);
@@ -313,6 +322,43 @@ void testTurtle() {
         s.run(1.0f);
         CHECK(h.up(s.f.position) > 0.5f, "%s flies away, %.2f m", name, h.up(s.f.position));
         s.destroy();
+    }
+}
+
+// Dropped upside down, on its nose or on its side, every preset's FPV camera
+// stays further from the ground than its near plane: the canopy (or the
+// automatic sphere around the lens) keeps the camera out of the ground.
+void testCameraClearance() {
+    Host h(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1));
+    loadWorld(makeLevel(h, 100, 0));
+    struct Drop {
+        const char *what;
+        const float *axis;
+        float deg;
+    } drops[] = {{"upside down", h.F, 180},  {"upside down, nose down", h.R, 150}, {"on its nose", h.R, 90},
+                 {"on its side", h.F, 90},    {"upside down, tail down", h.R, -150}, {"rolled 160", h.F, 160}};
+    for (uint32_t i = 0; i < fpv_preset_count(); i++) {
+        const char *name = fpv_preset_name(i);
+        for (const Drop &dr : drops) {
+            Session s;
+            fpv_drone_desc d;
+            fpv_drone_desc_defaults(&d);
+            h.pos(0, 0.3f, 0, d.position);
+            float a = dr.deg * 3.14159265f / 360.0f;
+            for (int k = 0; k < 3; k++) d.rotation[k] = dr.axis[k] * std::sin(a);
+            d.rotation[3] = std::cos(a);
+            d.preset = name;
+            CHECK(fpv_drone_create(&d, &s.drone) == FPV_OK, "drone_create: %s", fpv_last_error());
+            float lowest = 1e9f, nearPlane = 0;
+            s.run(2.0f, [&](float t) {
+                if (t <= 0) return;
+                lowest = std::min(lowest, h.up(s.f.camera.position));
+                nearPlane = s.f.camera.near_plane / h.upm;
+            });
+            CHECK(lowest > nearPlane, "%s dropped %s: camera %.1f mm above the ground, near plane %.1f mm", name,
+                  dr.what, lowest * 1000, nearPlane * 1000);
+            s.destroy();
+        }
     }
 }
 
@@ -3406,6 +3452,7 @@ int main(int argc, char **argv) {
     std::vector<Test> tests = {
         {"arm_disarm", testArmDisarm},
         {"turtle", testTurtle},
+        {"camera_clearance", testCameraClearance},
         {"eeprom_upgrade", testEepromUpgrade},
         {"default_diff", testDefaultDiff},
         {"second_drone_rejected", testSecondDroneRejected},
