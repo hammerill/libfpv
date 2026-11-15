@@ -16,7 +16,10 @@ signature
 
 # feature
 feature -TELEMETRY
-feature -AIRMODE
+
+# beeper
+beeper -BAT_CRIT_LOW
+beeper -BAT_LOW
 
 # aux
 aux 0 0 0 1700 2100 0 0
@@ -29,23 +32,31 @@ aux 5 19 5 1700 2100 0 0
 # master
 set crashflip_rate = 30
 set small_angle = 180
+set osd_rssi_dbm_alarm = -90
 set osd_tim2 = 1
 set osd_vbat_pos = 2135
-set osd_tim_2_pos = 2552
-set osd_flymode_pos = 2488
-set osd_throttle_pos = 2456
-set osd_crosshairs_pos = 2285
+set osd_link_quality_pos = 2113
+set osd_link_tx_power_pos = 2145
+set osd_rssi_dbm_pos = 2081
+set osd_tim_2_pos = 2455
+set osd_flymode_pos = 2391
+set osd_g_force_pos = 384
+set osd_throttle_pos = 2359
+set osd_crosshairs_pos = 2253
 set osd_current_pos = 2166
 set osd_mah_drawn_pos = 2200
-set osd_craft_name_pos = 2081
-set osd_pilot_name_pos = 2538
-set osd_gps_speed_pos = 2444
-set osd_home_dir_pos = 2478
-set osd_home_dist_pos = 2508
-set osd_flight_dist_pos = 2520
+set osd_craft_name_pos = 2048
+set osd_pilot_name_pos = 2442
+set osd_gps_speed_pos = 2348
+set osd_home_dir_pos = 2382
+set osd_home_dist_pos = 2412
+set osd_flight_dist_pos = 2423
+set osd_compass_bar_pos = 2058
+set osd_altitude_pos = 384
+set osd_warnings_pos = 2313
 set osd_avg_cell_voltage_pos = 2103
 set osd_disarmed_pos = 138
-set osd_flip_arrow_pos = 2286
+set osd_flip_arrow_pos = 2254
 set pwr_on_arm_grace = 0
 set craft_name = LIBFPV
 set pilot_name = Hammerill
