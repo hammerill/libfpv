@@ -88,12 +88,12 @@ const fpv_draw_data *OsdRenderer::drawData(const uint8_t *osd, float width, floa
     float vx, vy, vw, vh;
     viewport(width, height, style, vx, vy, vw, vh);
     // Analog: the OSD chip's grid (13 rows of 18 of NTSC's 240 lines, 16 of
-    // PAL's 288) scaled to 0.9 around the centre, as the analog renderers
+    // PAL's 288) scaled to 0.95 around the centre, as the analog renderers
     // draw it; HD uses a margin and bigger cells the way HD goggles render the
     // same 30x16 Betaflight canvas.
-    float marginX = style == FPV_OSD_STYLE_HD ? vw * 0.06f : vw * 0.05f;
+    float marginX = style == FPV_OSD_STYLE_HD ? vw * 0.06f : vw * 0.025f;
     float marginY = style == FPV_OSD_STYLE_HD ? vh * 0.04f
-                    : vh * 0.5f * (1.0f - 0.9f * (rows < FPV_OSD_ROWS ? 234.0f / 240.0f : 1.0f));
+                    : vh * 0.5f * (1.0f - 0.95f * (rows < FPV_OSD_ROWS ? 234.0f / 240.0f : 1.0f));
     float cw = (vw - 2 * marginX) / FPV_OSD_COLS, ch = (vh - 2 * marginY) / rows;
     DrawListStorage &l = m_buffer.newList();
     int font = style == FPV_OSD_STYLE_HD ? 1 : 0;

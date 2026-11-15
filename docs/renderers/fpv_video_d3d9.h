@@ -178,8 +178,8 @@ float3 withUi(float3 c, float2 p) {
 // the camera's picture
 float3 tap(float2 p) { return withUi(lensTap(p), p); }
 // The OSD chip's picture (360 font pixels by osdLines, premultiplied, point sampled): one
-// font pixel two samples wide and one field line tall, the grid scaled to 0.9 around the
-// picture's centre, as goggles show it with a margin of about a character all round.
+// font pixel two samples wide and one field line tall, the grid scaled to 0.95 around the
+// picture's centre, as goggles show it with a margin of about half a character all round.
 // Looked up at the field's own frame line (interlaced, as the chip writes it) between the
 // four nearest font pixels, each step kept to about a sample or a line, so every glyph
 // row stays and the edges crisp. x 0..1 across the line, line from the top. Over a
@@ -191,7 +191,7 @@ float4 osdTexel(float i, float ln) {
 float4 osdChip(float x, float fieldLine) {
   if (res < 0.5) x = (x - 0.5) * picAspect / (4.0 / 3.0) + 0.5;
   if (osdIn < 0.5) return float4(0.0, 0.0, 0.0, 0.0);
-  const float S = 0.9;
+  const float S = 0.95;
   float gx = (x * 720.0 - 360.0 * (1.0 - S)) / (2.0 * S) - 0.5;
   float gy = (2.0 * fieldLine + parity + 0.5 - (activeLines - osdLines * S)) / (2.0 * S) - 0.5;
   float ix = floor(gx), iy = floor(gy);

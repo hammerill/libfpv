@@ -166,8 +166,8 @@ in three steps:
    font pixel two of the 720 samples wide and one field line tall, all 18
    rows of a glyph, so 360 × 288 for PAL's 16 rows and 360 × 234 for
    NTSC's 13 (Betaflight keeps an NTSC camera's elements within them; rows
-   13 to 15 of `frame.osd` are blank). Scale that grid to 0.9 around the
-   picture's centre (a margin of about a character all round) and look it
+   13 to 15 of `frame.osd` are blank). Scale that grid to 0.95 around the
+   picture's centre (a margin of about half a character all round) and look it
    up at the line's (shifted) sample and the field's own frame line
    (`2 × line + field_parity`) between the four nearest font pixels, each
    step kept to about a sample or a line. Switch the luma to it (white at
