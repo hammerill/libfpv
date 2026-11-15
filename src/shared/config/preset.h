@@ -15,6 +15,9 @@ struct CameraSettings {
     float uptiltDeg = 25.0f;
     float fovYDeg = 100.0f;     // vertical
     float aspect = 4.0f / 3.0f;
+    // The aspect goggles or a DVR show the picture at, 0 = `aspect`: a
+    // 720 x 480 DVR shows an NTSC camera's 4:3 picture stretched to 3:2.
+    float displayAspect = 0.0f;
     float k1 = 0.0f, k2 = 0.0f; // Brown-Conrady radial distortion, r = 1 at the corners
                                 // (used when the player turns the fisheye slider off)
     float zoom = 1.0f;

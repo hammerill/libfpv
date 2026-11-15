@@ -52,6 +52,7 @@ struct VideoSpec {
     bool digital = false;
     int system = FPV_VIDEO_NTSC;
     float aspect = 4.0f / 3.0f;
+    float displayAspect = 4.0f / 3.0f;  // what the goggles or DVR show it at
     int rasterW = 720, rasterH = 480;
     float fieldRate = 59.94f;        // fields (analog) or frames (digital) per second
     float lumaCycles = 250, chromaCycles = 53, subcarrierCycles = 188.5f, sharpening = 0.5f;

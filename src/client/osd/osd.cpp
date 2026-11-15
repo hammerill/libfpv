@@ -116,14 +116,17 @@ const fpv_draw_data *OsdRenderer::drawData(const uint8_t *osd, float width, floa
     m_buffer.clear();
     float vx, vy, vw, vh;
     viewport(width, height, style, vx, vy, vw, vh);
-    // Analog: the OSD chip's grid (13 rows of 18 of NTSC's 240 lines, 16 of
-    // PAL's 288) scaled to 0.95 around the centre, as the analog renderers
-    // draw it; HD uses a margin and bigger cells the way HD goggles render the
-    // same 30x16 Betaflight canvas.
-    float marginX = style == FPV_OSD_STYLE_HD ? vw * 0.06f : vw * 0.025f;
-    float marginY = style == FPV_OSD_STYLE_HD ? vh * 0.04f
-                    : vh * 0.5f * (1.0f - 0.95f * (rows < FPV_OSD_ROWS ? 234.0f / 240.0f : 1.0f));
-    float cw = (vw - 2 * marginX) / FPV_OSD_COLS, ch = (vh - 2 * marginY) / rows;
+    // Analog: the OSD chip's own grid as the analog renderers draw it, cells
+    // of 24 of the line's 720 samples by 18 field lines, column 0 nine
+    // samples in (column 29 is cut at the right edge); NTSC's 13 rows start
+    // two of its 240 lines above the picture, PAL's 16 fill its 288. HD uses
+    // a margin and bigger cells the way HD goggles render the same 30x16
+    // Betaflight canvas.
+    const bool hd = style == FPV_OSD_STYLE_HD, ntsc = rows < FPV_OSD_ROWS;
+    float marginX = hd ? vw * 0.06f : vw * (9.0f / 720.0f);
+    float marginY = hd ? vh * 0.04f : ntsc ? vh * (-2.0f / 240.0f) : 0.0f;
+    float cw = hd ? (vw - 2 * marginX) / FPV_OSD_COLS : vw * (24.0f / 720.0f);
+    float ch = hd ? (vh - 2 * marginY) / rows : ntsc ? vh * (18.0f / 240.0f) : vh / FPV_OSD_ROWS;
     DrawListStorage &l = m_buffer.newList();
     int font = style == FPV_OSD_STYLE_HD ? 1 : 0;
     for (int r = 0; r < rows; r++) {

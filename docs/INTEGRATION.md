@@ -166,8 +166,10 @@ in three steps:
    font pixel two of the 720 samples wide and one field line tall, all 18
    rows of a glyph, so 360 × 288 for PAL's 16 rows and 360 × 234 for
    NTSC's 13 (Betaflight keeps an NTSC camera's elements within them; rows
-   13 to 15 of `frame.osd` are blank). Scale that grid to 0.95 around the
-   picture's centre (a margin of about half a character all round) and look it
+   13 to 15 of `frame.osd` are blank). Place that grid as the chip writes
+   it, unscaled: column 0 starts 9 samples into the line (column 29 is cut
+   at the right edge), NTSC's row 0 4 frame lines above the picture's top
+   (PAL's 16 rows fill its 576 frame lines). Look it
    up at the line's (shifted) sample and the field's own frame line
    (`2 × line + field_parity`) between the four nearest font pixels, each
    step kept to about a sample or a line. Switch the luma to it (white at
@@ -176,8 +178,10 @@ in three steps:
    subcarrier near a glyph (strokes a pixel wide turn a solid hue that
    flips every field).
 2. **The goggles.** Draw that texture with bilinear filtering into the
-   picture's rectangle: `picture_aspect` fitted to the screen, black around
-   it, each step between two samples kept to about a screen pixel ("sharp
+   picture's rectangle: `display_aspect` (or `picture_aspect` when it is 0)
+   fitted to the screen, black around it. The camera's picture keeps
+   `picture_aspect` for the lens and stretches to fill that rectangle
+   (a 720 × 480 DVR shows a 4:3 NTSC camera at 3:2), each step between two samples kept to about a screen pixel ("sharp
    bilinear") so the OSD's pixels stay crisp. For an analog field, move it
    down half a line when `field_parity` is 1 (bob).
 3. **The OSD on top**, digital or with the effects off, in the player's

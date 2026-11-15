@@ -770,7 +770,7 @@ version (the bottom elements two rows up, the middle ones one), and a
 layout still exactly libfpv's default for the other system is swapped for
 it; a player's own layout is left to Betaflight, which moves what falls
 below row 12 onto it, as a real flight controller does. The F8 OSD editor
-and `fpv_osd_draw_data` (the same grid scaled to 0.95 as the video feed draws it) follow
+and `fpv_osd_draw_data` (the same grid as the video feed draws it) follow
 `osdVisibleRows()`, and so does the kamikaze build's centred OSD.
 `frame.osd` stays 30×16: rows 13 to 15 are blank on NTSC.
 
@@ -1188,18 +1188,32 @@ things the first version got wrong. The goggles' look follows the Cobra X.
   camera (the picture's colour off under it), softened only a little by the
   link, with faint colour dots where its steps ring in the colour filter.
   The DVR's cells are 24 samples by 18 field lines, the 30 columns across
-  the whole line (it starts 9 samples in; libfpv centres it, which keeps
-  column 29 in the picture), and NTSC shows 13 rows: 234 of the 240 lines.
+  the whole line (it starts 9 samples in, which cuts column 29), and NTSC
+  shows 13 rows: 234 of the 240 lines.
   libfpv first squeezed its 16 rows into NTSC by cutting glyph rows, which
   cut icons (the battery's top, the LQ bars) and drew the glyphs too tall
   for their width; NTSC now has 13 rows like the real thing (D15), every
-  glyph complete, PAL its 16 rows in 288 lines. The grid is then scaled to
-  0.95 around the picture's centre, which leaves about half a character of
-  margin on every side, as goggles show it: a glyph row is 1.9 frame lines
-  and a font pixel 1.9 samples, so it is looked up at each field's own
-  frame line (interlaced, as the chip writes it) between the four nearest
-  font pixels, each step kept to about a sample or a line; every glyph row
-  stays and the edges stay crisp. The chip's white sits over the picture's
+  glyph complete, PAL its 16 rows in 288 lines. The grid is looked up at
+  each field's own frame line (interlaced, as the chip writes it) between
+  the four nearest font pixels, each step kept to about a sample or a
+  line, so it can take a scale across (`S.x`) and down (`S.y`) with every
+  glyph row kept and the edges crisp.
+
+  *The DVR's aspect (2026-11).* A scale of 0.95 around the centre (a margin
+  all round) made the OSD look too tall next to the DVR. The DVR records
+  720 × 480 with no aspect flag, so players show it at 3:2, a font pixel
+  square: in its frame the cells are exactly 24 × 36 pixels (the chip's
+  2 samples by 1 field line, unscaled), column 0 starts 9 pixels in
+  (column 29 is cut at the right edge) and NTSC's row 0 4 frame lines
+  above the top (a "0"'s white starts on line 402 of row 11). The grid is
+  now drawn exactly that way (`S` = 1, 1), and a camera preset's
+  `displayAspect` (3:2 on the BetaFPV C03 and the Caddx Ratel 2) sets
+  `fpv_video_feed.display_aspect`: the renderers fit that rectangle and
+  stretch the camera's 4:3 picture into it, keeping its field of view, as
+  the DVR does. Measured on a libfpv screenshot scaled to 720 × 480, every
+  glyph edge lands within a pixel of the DVR's. Without `displayAspect` the
+  picture stays at the camera's aspect, the OSD the same grid. The field
+  crosses the client/server wire, so its protocol is version 2. The chip's white sits over the picture's
   peak (110 %), so the strokes clip to white as the DVR's do. No renderer draws the
   in-signal OSD with the host's OSD renderer any more: they build it from
   `frame.osd` and `fpv_texture_get(FPV_TEXTURE_OSD_FONT)`.

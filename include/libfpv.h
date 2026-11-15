@@ -558,7 +558,7 @@ enum fpv_video_feed_flags {
     FPV_VIDEO_FEED_NOISE = 1u << 0,
     /* Draw the picture at the signal's resolution (raster_width x
      * raster_height, analog bandwidth) and at the camera's aspect
-     * (picture_aspect), with black bars around it like in goggles. */
+     * (display_aspect), with black bars around it like in goggles. */
     FPV_VIDEO_FEED_RESOLUTION = 1u << 1,
     /* Analog: the flight controller's OSD chip writes the OSD into the
      * video before the transmitter, so it gets the noise, tears and rolls
@@ -635,6 +635,12 @@ typedef struct fpv_video_feed {
     float chroma_boost;
     float chroma_tint[2];
     float hue_sweep;
+    /* The aspect the goggles (or a DVR) show the picture at, width / height:
+     * fit this rectangle to the screen and stretch the camera's
+     * picture_aspect picture into it (a 720 x 480 DVR shows a 4:3 NTSC
+     * camera at 3:2). Equal to picture_aspect for most cameras; 0 from a
+     * libfpv older than this field (check struct_size): use picture_aspect. */
+    float display_aspect;
 } fpv_video_feed;
 
 typedef struct fpv_frame {

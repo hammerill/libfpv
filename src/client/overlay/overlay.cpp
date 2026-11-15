@@ -1526,7 +1526,11 @@ void Overlay::tabCamera() {
     float a = p.camera.aspect;
     std::snprintf(aspect, sizeof aspect, std::fabs(a - 4.0f / 3) < 0.02f ? "4:3" : std::fabs(a - 16.0f / 9) < 0.02f ? "16:9" : "%.2f:1", a);
     const char *system = vf.system == FPV_VIDEO_PAL ? "PAL" : vf.system == FPV_VIDEO_NTSC ? "NTSC" : "digital";
-    ImGui::Text("Camera  %s, %s %s", p.camera.model.empty() ? "generic" : p.camera.model.c_str(), aspect, system);
+    char shown[32] = "";
+    float d = p.camera.displayAspect;
+    if (d > 0.5f && std::fabs(d - a) > 0.02f)
+        std::snprintf(shown, sizeof shown, std::fabs(d - 1.5f) < 0.02f ? ", shown 3:2" : ", shown %.2f:1", d);
+    ImGui::Text("Camera  %s, %s%s %s", p.camera.model.empty() ? "generic" : p.camera.model.c_str(), aspect, shown, system);
     if (analog)
         ImGui::Text("Feed    %u x %u, %.0f TVL camera, about %.0f TVL through the link", vf.raster_width,
                     vf.raster_height, p.camera.tvl, vf.luma_cycles * 2 / std::max(a, 0.1f));

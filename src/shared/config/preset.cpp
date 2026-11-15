@@ -48,8 +48,8 @@ static std::string str(const json &j, const char *key, const std::string &def = 
 }
 
 // An aspect ratio: 1.333 or "4:3"
-static float aspectOf(const json &j, float def) {
-    auto it = j.find("aspect");
+static float aspectOf(const json &j, float def, const char *key = "aspect") {
+    auto it = j.find(key);
     if (it == j.end()) return def;
     if (it->is_number()) return std::clamp(it->get<float>(), 0.5f, 4.0f);
     if (it->is_string()) {
@@ -242,6 +242,7 @@ DronePreset loadPresetFile(const std::string &quadJsonPath) {
                 json m = findByName(root / "camera", str(c, "model"));
                 p.camera.model = str(m, "name");
                 p.camera.aspect = aspectOf(m, p.camera.aspect);
+                p.camera.displayAspect = aspectOf(m, p.camera.displayAspect, "displayAspect");
                 p.camera.tvl = num(m, "tvl", p.camera.tvl);
                 p.camera.system = str(m, "system", "NTSC") == "PAL" ? FPV_VIDEO_PAL : FPV_VIDEO_NTSC;
                 p.camera.sharpening = num(m, "sharpening", p.camera.sharpening);
@@ -254,6 +255,7 @@ DronePreset loadPresetFile(const std::string &quadJsonPath) {
             }
         }
         p.camera.aspect = aspectOf(c, p.camera.aspect);
+        p.camera.displayAspect = aspectOf(c, p.camera.displayAspect, "displayAspect");
         p.camera.system = str(c, "system").empty() ? p.camera.system
                           : str(c, "system") == "PAL" ? FPV_VIDEO_PAL : FPV_VIDEO_NTSC;
         p.camera.uptiltDeg = num(c, "uptiltDeg", p.camera.uptiltDeg);
@@ -373,6 +375,7 @@ DronePreset builtinDefaultPreset() {
     p.vtx.powerNoise = 0.12f;
     p.camera.model = "Caddx Ratel 2";
     p.camera.aspect = 4.0f / 3.0f;
+    p.camera.displayAspect = 1.5f;  // as presets/camera/caddx-ratel-2.json
     p.camera.tvl = 1200.0f;
     p.camera.sharpening = 0.55f;
     p.collision.propRadius = 5.1f * 0.0254f * 0.5f;

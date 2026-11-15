@@ -113,22 +113,25 @@ static const char *fpv_video_gl3__signal_fs =
     "}\n"
     "vec3 tap(vec2 p) { vec2 s = sceneUv(p);\n"
     "  return (s.x < 0.0 || s.x > 1.0 || s.y < 0.0 || s.y > 1.0) ? vec3(0.0) : texture(scene, s).rgb; }\n"
-    "// The OSD chip's picture (360 font pixels by osdLines, premultiplied, nearest): one font\n"
-    "// pixel two samples wide and one field line tall, the grid scaled to 0.95 around the\n"
-    "// picture's centre, as goggles show it with a margin of about half a character all round.\n"
-    "// Looked up at the field's own frame line (interlaced, as the chip writes it) between\n"
-    "// the four nearest font pixels, each step kept to about a sample or a line, so every\n"
-    "// glyph row stays and the edges crisp. x 0..1 across the line, line from the top. Over\n"
-    "// a picture of another aspect (resolution off) the grid stays 4:3.\n"
+    "// The OSD chip's picture (360 font pixels by osdLines, premultiplied, nearest): the\n"
+    "// chip's own grid, a font pixel two samples wide and one field line tall (S, measured\n"
+    "// on a Cobra X DVR: 24 x 36 pixel cells in its 720 x 480 frame), column 0 nine samples\n"
+    "// into the line (column 29 is cut at the right edge) and NTSC's row 0 starting two field\n"
+    "// lines above the picture; PAL's 16 rows fill its 288 lines. Looked up at the field's\n"
+    "// own frame line (interlaced, as the chip writes it) between the four nearest font\n"
+    "// pixels, each step kept to about a sample or a line, so every glyph row stays and the\n"
+    "// edges crisp. x 0..1 across the line, line from the top. Over a picture of another\n"
+    "// aspect (resolution off) the grid stays 4:3.\n"
     "vec4 osdTexel(float i, float ln) {\n"
     "  return (i < 0.0 || i >= 360.0 || ln < 0.0 || ln >= osdLines) ? vec4(0.0) : texelFetch(osd, ivec2(int(i), int(ln)), 0);\n"
     "}\n"
     "vec4 osdChip(float x, float line) {\n"
     "  if (res < 0.5) x = (x - 0.5) * picAspect / (4.0 / 3.0) + 0.5;\n"
     "  if (osdIn < 0.5) return vec4(0.0);\n"
-    "  const float S = 0.95;\n"
-    "  float gx = (x * 720.0 - 360.0 * (1.0 - S)) / (2.0 * S) - 0.5;\n"
-    "  float gy = (2.0 * line + parity + 0.5 - (activeLines - osdLines * S)) / (2.0 * S) - 0.5;\n"
+    "  const vec2 S = vec2(1.0, 1.0);  // the grid's scale across and down\n"
+    "  float top = activeLines < 288.0 ? -4.0 : activeLines - osdLines * S.y;  // row 0, frame lines\n"
+    "  float gx = (x * 720.0 - 9.0) / (2.0 * S.x) - 0.5;\n"
+    "  float gy = (2.0 * line + parity + 0.5 - top) / (2.0 * S.y) - 0.5;\n"
     "  float ix = floor(gx), iy = floor(gy);\n"
     "  vec2 f = clamp((vec2(gx - ix, gy - iy) - 0.5) * (2.0 * S) + 0.5, 0.0, 1.0);\n"
     "  return mix(mix(osdTexel(ix, iy), osdTexel(ix + 1.0, iy), f.x),\n"
@@ -489,6 +492,7 @@ void fpv_video_gl3_draw(fpv_video_gl3 *v, fpv_gl3 *ui, const fpv_frame *f, unsig
     /* an older libfpv fills no video_feed: struct_size tells */
     int has_feed = f->struct_size >= offsetof(fpv_frame, video_feed) + offsetof(fpv_video_feed, chroma_boost);
     int has_upset = f->struct_size >= offsetof(fpv_frame, video_feed) + offsetof(fpv_video_feed, hue_sweep) + sizeof(float);
+    int has_shown = f->struct_size >= offsetof(fpv_frame, video_feed) + offsetof(fpv_video_feed, display_aspect) + sizeof(float);
     uint32_t flags = has_feed ? vf->flags : 0u;
     int noise = (flags & FPV_VIDEO_FEED_NOISE) != 0, res = (flags & FPV_VIDEO_FEED_RESOLUTION) != 0;
     int analog = has_feed && vf->system != FPV_VIDEO_DIGITAL;
@@ -501,9 +505,11 @@ void fpv_video_gl3_draw(fpv_video_gl3 *v, fpv_gl3 *ui, const fpv_frame *f, unsig
     float rx = 0, ry = 0, rw = (float)fb_w, rh = (float)fb_h;
     float pic_aspect = (float)fb_w / (float)fb_h;
     if (res && vf->picture_aspect > 0.1f) {
+        /* shown at the goggles' (or DVR's) aspect: the camera's picture stretched, not cropped */
+        float shown = has_shown && vf->display_aspect > 0.1f ? vf->display_aspect : vf->picture_aspect;
         pic_aspect = vf->picture_aspect;
-        if (rw / rh > pic_aspect) rw = rh * pic_aspect, rx = (fb_w - rw) * 0.5f;
-        else rh = rw / pic_aspect, ry = (fb_h - rh) * 0.5f;
+        if (rw / rh > shown) rw = rh * shown, rx = (fb_w - rw) * 0.5f;
+        else rh = rw / shown, ry = (fb_h - rh) * 0.5f;
     }
     /* the signal's raster: an analog field, a digital frame, or the screen's pixels */
     int w = (int)rw, h = (int)rh;
