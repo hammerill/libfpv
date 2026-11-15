@@ -506,20 +506,31 @@ void Overlay::wizardUi(const std::vector<RawDevice> &devs) {
         if (m_wizard.detected())
             ImGui::TextColored(ImVec4(0.5f, 1, 0.5f, 1), "Detected%s%s", m_showRawAxes ? ": " : "",
                                m_showRawAxes ? m_wizard.detectedLabel().c_str() : "");
-        else
+        else if (!m_wizard.hasConflict())
             ImGui::TextDisabled("Waiting for movement...");
     }
-    if (m_wizard.isSwitchStep()) {
+    if (m_wizard.hasConflict()) {
+        // a switch or button that is bound already: keep both, or move it here
+        ImGui::TextColored(ImVec4(1, 0.75f, 0.3f, 1), "%s", m_wizard.conflictText(L.input.controls()).c_str());
+        if (ImGui::Button("Use it for both")) m_wizard.takeConflict(false, m_wizardHint);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Bind it here too and keep the old binding: the switch then does both.");
+        ImGui::SameLine();
+        if (ImGui::Button("Replace")) m_wizard.takeConflict(true, m_wizardHint);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Bind it here and unbind it from what used it (Back undoes it).");
+        ImGui::TextDisabled("Or use another switch.");
+    }
+#if defined(LIBFPV_KAMIKAZE)
+    if (m_wizard.step() == RadioWizard::Step::ExplodeSwitch)
+        ImGui::TextDisabled("A push button or a spring-loaded switch: press it once and let go. It explodes while "
+                            "pressed (a plain switch: while ON).");
+#endif
+    if (m_wizard.momentaryChoice()) {
         bool momentary = m_wizard.momentary();
         if (ImGui::Checkbox("It's a button, not a switch (press it, don't hold it)", &momentary))
             m_wizard.setMomentary(momentary);
         if (ImGui::IsItemHovered()) {
-#if defined(LIBFPV_KAMIKAZE)
-            if (m_wizard.step() == RadioWizard::Step::ExplodeSwitch)
-                ImGui::SetTooltip("For a push button or a spring-loaded switch: press it once and let go, the wizard "
-                                  "remembers it. It explodes while pressed.");
-            else
-#endif
             if (m_wizard.currentControl() && m_wizard.currentControl()->kind == ControlKind::Instant)
                 ImGui::SetTooltip("Ticked, for a push button or a spring-loaded switch: press it once and let go, "
                                   "the wizard remembers it. Each press does it once.\n"
@@ -582,6 +593,8 @@ void Overlay::wizardUi(const std::vector<RawDevice> &devs) {
                 RadioWizard::mergeBombSwitches(m, m_previousMapping, true);
             }
 #endif
+            // what a "Replace" unbound, also outside the part merged above
+            m_wizard.applyReplaced(m);
             L.input.setMapping(m);
             L.input.setWizardActive(false);
             m_wizardSaved = true;

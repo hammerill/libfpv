@@ -3,6 +3,7 @@
 #include "sim/flight.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 
 #include "core/bf_bridge.h"
@@ -12,6 +13,25 @@
 #include "util/log.h"
 
 namespace fpv {
+
+// ---- TEMPORARY contact trace (perch flips investigation), not for committing ----
+namespace trace {
+static FILE *g_f = nullptr;
+static FILE *file() {
+    if (g_f) return g_f;
+    const char *ad = getenv("APPDATA");
+    std::string p = ad ? std::string(ad) + "\\libfpv\\contact-trace.log" : std::string("/tmp/libfpv-contact-trace.log");
+    g_f = fopen(p.c_str(), "a");
+    if (g_f) fprintf(g_f, "# trace started\n");
+    return g_f;
+}
+struct StepAcc {
+    float approach = 0, jn = 0, jt = 0, depth = 0, ny = 0;
+    int n = 0;
+};
+static StepAcc g_acc[32];
+static bool g_any = false;
+}  // namespace trace
 
 namespace {
 constexpr float kImpactReportSpeed = 1.5f;   // m/s, below this a contact is not an "impact"
@@ -577,17 +597,21 @@ void Flight::resolveContacts(float dt) {
         Contact c;
         int motor;
         float radius;
-        float accN = 0;
+        int sphere = 0;
+        float accN = 0, accT = 0;
+        Vec3 accF{};     // friction impulse, accumulated over the iterations
+        float accS = 0;  // torsional friction impulse
         float approach = 0;
     };
     std::vector<Item> items;
     Mat3 rot = toMat3(m_rot);
-    for (const Sphere &s : m_shape) {
+    for (size_t si = 0; si < m_shape.size(); si++) {
+        const Sphere &s = m_shape[si];
         m_contacts.clear();
         Vec3 centre = m_pos + rot * s.local;
         m_world->sphereContacts(centre, s.radius, m_simTime, m_contacts);
         dropPortalHoleContacts(0);
-        for (const Contact &c : m_contacts) items.push_back({c, s.motor, s.radius});
+        for (const Contact &c : m_contacts) items.push_back({c, s.motor, s.radius, (int)si});
     }
     if (items.empty()) return;
 #if defined(LIBFPV_KAMIKAZE)
@@ -630,7 +654,11 @@ void Flight::resolveContacts(float dt) {
             m_vel += c.normal * (jn * invM);
             m_angVel += invI * cross(r, c.normal * jn);
 
-            // Coulomb friction against the accumulated normal impulse
+            // Coulomb friction: the friction impulse accumulated over the
+            // iterations stays within friction × the accumulated normal
+            // impulse. Clamping each iteration's share alone let 6 iterations
+            // add up to 6 × that: a duct corner touching down grabbed the
+            // ground (effective friction 1.2 for 0.6) and tripped the quad.
             v = m_vel + cross(m_angVel, r) - c.surfaceVel;
             Vec3 vt = v - c.normal * dot(v, c.normal);
             float vtLen = length(vt);
@@ -638,22 +666,43 @@ void Flight::resolveContacts(float dt) {
                 Vec3 t = vt / vtLen;
                 Vec3 rt = cross(r, t);
                 float kT = invM + dot(t, cross(invI * rt, r));
-                float jt = std::min(vtLen / kT, mat.friction * it.accN);
-                m_vel -= t * (jt * invM);
-                m_angVel -= invI * cross(r, t * jt);
+                Vec3 want = it.accF - t * (vtLen / kT);
+                want -= c.normal * dot(want, c.normal);
+                float maxF = mat.friction * it.accN, wl = length(want);
+                if (wl > maxF) want *= maxF / wl;
+                Vec3 jt = want - it.accF;
+                it.accF = want;
+                m_vel += jt * invM;
+                m_angVel += invI * cross(r, jt);
+                it.accT = length(it.accF);
             }
 
-            // torsional friction: the spin about the normal, relative to the surface
+            // torsional friction: the spin about the normal, relative to the
+            // surface, accumulated and clamped the same way
             float spin = dot(m_angVel - c.surfaceAngVel, c.normal);
             float kS = dot(c.normal, invI * c.normal);
             if (std::fabs(spin) > 1e-6f && kS > 0) {
                 float limit = mat.friction * it.accN * kContactPatchRatio * it.radius;
-                float js = std::clamp(-spin / kS, -limit, limit);
+                float newS = std::clamp(it.accS - spin / kS, -limit, limit);
+                float js = newS - it.accS;
+                it.accS = newS;
                 m_angVel += invI * (c.normal * js);
             }
         }
     }
 
+    for (const Item &it : items) {
+        if (it.sphere < 32) {
+            trace::StepAcc &a = trace::g_acc[it.sphere];
+            a.approach = std::max(a.approach, it.approach);
+            a.jn += it.accN;
+            a.jt += it.accT;
+            a.depth = a.n ? std::max(a.depth, it.c.depth) : it.c.depth;
+            a.ny = it.c.normal.y;
+            a.n++;
+            trace::g_any = true;
+        }
+    }
     for (const Item &it : items) {
         Material mat = m_world->material(it.c.material);
         if (it.motor >= 0 && (mat.flags & kMatKillsProps) && canDamage()) m_propDamage[it.motor] = 1.0f;
@@ -939,6 +988,71 @@ Vec3 Flight::updateWind(float dt) {
     return com;
 }
 
+void Flight::traceStep(float dt) {
+    static double lastContact = -10, airSince = 0, touchdown = -10;
+    static bool flipped = false;
+    static int lines = 0;
+    FILE *f = trace::file();
+    if (!f) return;
+    Mat3 rot = toMat3(m_rot);
+    Vec3 up = rot.col(1), fwd = rot.col(2);
+    Vec3 wb = transpose(rot) * m_angVel;  // body rates: x pitch, y yaw, z roll
+    bool any = trace::g_any;
+    // the last 300 steps before a touchdown, dumped with it
+    static char ring[300][320];
+    static int ringPos = 0, ringN = 0;
+    {
+        const StateOutput &so = SimITL::Sim::getInstance().getStateUpdate();
+        snprintf(ring[ringPos], sizeof ring[0], "pre t=%.3f armed=%d thr=%.2f y=%.3f v=(%.3f,%.3f,%.3f) upY=%.2f w=(%.1f,%.1f,%.1f) q=(%.5f,%.5f,%.5f,%.5f) wW=(%.2f,%.2f,%.2f) rpm=%.0f,%.0f,%.0f,%.0f",
+                 m_simTime, bfb_is_armed(), m_input.rcData[2], m_pos.y, m_vel.x, m_vel.y, m_vel.z, up.y, wb.x, wb.y, wb.z,
+                 m_rot.x, m_rot.y, m_rot.z, m_rot.w, m_angVel.x, m_angVel.y, m_angVel.z,
+                 so.motorRpm[0], so.motorRpm[1], so.motorRpm[2], so.motorRpm[3]);
+        ringPos = (ringPos + 1) % 300;
+        ringN = std::min(ringN + 1, 300);
+    }
+    if (any && m_simTime - lastContact > 0.3) {
+        fprintf(f, "\n--- 0.3 s before (every 10 ms) ---\n");
+        for (int k = ringN; k >= 1; k--) {
+            int idx = (ringPos - k + 600) % 300;
+            if (k % 10 == 1 || k <= 5) fprintf(f, "%s\n", ring[idx]);
+        }
+        ringN = 0;
+        touchdown = m_simTime;
+        flipped = false;
+        fprintf(f, "\n=== TOUCHDOWN t=%.3f armed=%d air=%.2fs thr=%.2f aux=%.0f,%.0f,%.0f,%.0f vel=(%.2f,%.2f,%.2f) |vh|=%.2f "
+                   "up=(%.2f,%.2f,%.2f) fwdY=%.2f bodyRates=(%.1f,%.1f,%.1f) rpm=%.0f,%.0f,%.0f,%.0f mass=%.4f\n",
+                m_simTime, bfb_is_armed(), m_simTime - airSince, m_input.rcData[2], m_input.rcData[4], m_input.rcData[5],
+                m_input.rcData[6], m_input.rcData[7], m_vel.x, m_vel.y, m_vel.z,
+                std::sqrt(m_vel.x * m_vel.x + m_vel.z * m_vel.z), up.x, up.y, up.z, fwd.y, wb.x, wb.y, wb.z,
+                SimITL::Sim::getInstance().getStateUpdate().motorRpm[0], SimITL::Sim::getInstance().getStateUpdate().motorRpm[1],
+                SimITL::Sim::getInstance().getStateUpdate().motorRpm[2], SimITL::Sim::getInstance().getStateUpdate().motorRpm[3], m_mass);
+        fprintf(f, "# spheres: 0 body, 1+2k motor k bottom, 2+2k motor k top, 9 canopy (then payload/cargo)\n");
+    }
+    if (any) lastContact = m_simTime;
+    else if (m_simTime - lastContact > 0.3) airSince = m_simTime;
+    if (m_simTime - touchdown < 1.5) {
+        fprintf(f, "t+%.3f armed=%d thr=%.2f y=%.3f v=(%.2f,%.2f,%.2f) upY=%.2f fwdY=%.2f w=(%.1f,%.1f,%.1f)", m_simTime - touchdown,
+                bfb_is_armed(), m_input.rcData[2], m_pos.y, m_vel.x, m_vel.y, m_vel.z, up.y, fwd.y, wb.x, wb.y, wb.z);
+        for (int i = 0; i < 32; i++) {
+            trace::StepAcc &a = trace::g_acc[i];
+            if (a.n) fprintf(f, " [s%d ap=%.2f jn=%.4f jt=%.4f d=%.4f ny=%.2f]", i, a.approach, a.jn, a.jt, a.depth, a.ny);
+        }
+        fputc('\n', f);
+        if (!flipped && up.y < 0) {
+            flipped = true;
+            fprintf(f, "=== FLIPPED PAST 90 at t+%.3f\n", m_simTime - touchdown);
+        }
+        if (++lines % 200 == 0) fflush(f);
+    } else if (m_simTime - touchdown < 1.6) {
+        fprintf(f, "=== END t+1.5 upY=%.2f %s\n", up.y, up.y < 0 ? "UPSIDE DOWN" : "upright");
+        fflush(f);
+        touchdown = -10;
+    }
+    for (auto &a : trace::g_acc) a = {};
+    trace::g_any = false;
+    (void)dt;
+}
+
 void Flight::step(float dt, const float channels[kChannelCount], bool radioLost) {
     std::unique_lock<std::mutex> worldLock(m_world->mutex());
 
@@ -1056,6 +1170,7 @@ void Flight::step(float dt, const float channels[kChannelCount], bool radioLost)
         }
         propStrikes(dt);
         if (hanging()) stepCargo(dt);
+        traceStep(dt);
     }
 #if defined(LIBFPV_KAMIKAZE)
     if (m_active && m_warhead.update(dt, m_simTime, m_input.rcData, bfb_is_armed(), m_pos, m_vel)) onDetonated();

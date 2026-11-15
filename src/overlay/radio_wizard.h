@@ -95,14 +95,40 @@ public:
     bool isSwitchStep() const {
         return (m_step >= Step::ArmSwitch && m_step <= lastSwitch()) || m_step == Step::GameControl;
     }
-    bool momentary() const { return m_momentary; }
+    // The explode switch is pressed, not held, by nature: its step always
+    // keeps a press after the release, and it never toggles, so it has no
+    // "It's a button" choice (momentaryChoice() is false).
+    bool momentary() const { return m_momentary || explodeStep(); }
+    bool momentaryChoice() const { return isSwitchStep() && !explodeStep(); }
     void setMomentary(bool on);
+
+    // A switch step saw a switch position or button move that another
+    // binding uses already, and nothing free moved: the UI offers to take
+    // it anyway.
+    bool hasConflict() const { return m_conflict >= 0 && m_candidate < 0; }
+    // "Button 5 is already used by Fire orange." `known` gives the labels of
+    // game controls (by name); a control not in it shows its name.
+    std::string conflictText(const std::vector<ControlDesc> &known) const;
+    // Takes the conflicting switch or button for this step and goes on, as
+    // Next does. `replace` unbinds it from what used it; otherwise both
+    // keep it.
+    bool takeConflict(bool replace, std::string &hint);
+    // Removes from `into` the bindings this setup replaced (takeConflict)
+    // that `into` still has: for the merges of a partial setup.
+    void applyReplaced(DeviceMapping &into) const;
 
 private:
     struct Candidate {
         int axis = -1, button = -1;
         float value = 0;  // raw value at the detected position
     };
+    bool explodeStep() const {
+#if defined(LIBFPV_KAMIKAZE)
+        return m_step == Step::ExplodeSwitch;
+#else
+        return false;
+#endif
+    }
     void detectAxis(const RawDevice &dev, bool allowButtons);
     bool axisUsed(int axis) const;
     bool stickAxisUsed(int axis) const;
@@ -127,6 +153,36 @@ private:
     size_t m_controlIndex = 0;
     std::string m_controlTitle, m_controlText;  // title() / instruction() of a control step
     void enterControl();  // m_controlIndex: its texts, a fresh detection
+
+    // A used input moved in this step (axis index, or 1000 + button; -1 =
+    // none), kept until something free moves or the step changes.
+    int m_conflict = -1;
+    float m_conflictValue = 0;
+    bool m_replace = false;  // the candidate unbinds the others that use it
+    // The raw state when the current step began: only what moves after it
+    // counts as a conflict, not a switch left on in an earlier step.
+    std::vector<float> m_stepAxes;
+    std::vector<uint8_t> m_stepButtons;
+    std::vector<uint8_t> m_axisMoved, m_buttonMoved;  // left the baseline in this step
+    std::vector<float> m_lastAxes;                     // the last update's raw state
+    std::vector<uint8_t> m_lastButtons;
+    Step m_snapStep = Step::PickDevice;
+    size_t m_snapIndex = 0;
+    bool m_snapped = false;
+    // Bindings unbound by a replace, to restore when its step is undone.
+    struct Replaced {
+        Step step;
+        size_t controlIndex;
+        int channel;          // or -1
+        std::string control;  // or empty
+        ChannelBinding binding;
+    };
+    std::vector<Replaced> m_replaced;
+    static bool owns(const ChannelBinding &b, int input, float value);
+    // The other channels (AUX) and controls bound to `input` at `value`,
+    // the current step's own one left out.
+    void ownersOf(int input, float value, std::vector<int> &channels, std::vector<std::string> &controls) const;
+    void restoreReplaced();
 };
 
 }  // namespace fpv

@@ -26,6 +26,12 @@ void RadioWizard::start(const RawDevice &dev) {
     m_max = dev.axes;
     m_candidate = -1;
     m_momentary = false;
+    m_conflict = -1;
+    m_replace = false;
+    m_snapped = false;
+    m_lastAxes.clear();
+    m_lastButtons.clear();
+    m_replaced.clear();
 }
 
 void RadioWizard::setMomentary(bool on) {
@@ -202,12 +208,30 @@ bool RadioWizard::buttonUsed(int button) const {
 
 // The axis (or button) that moved furthest from its rest position and is
 // not assigned yet. Switches may reuse a switch axis in a new position.
+// On a switch step, a switch position or button that is bound already but
+// moved in this step is remembered as a conflict (the UI offers it).
 void RadioWizard::detectAxis(const RawDevice &dev, bool allowButtons) {
     m_candidate = -1;
     float best = kMoveThreshold;
+    int conflict = -1;
+    float conflictValue = 0, conflictBest = kMoveThreshold;
     for (size_t i = 0; i < dev.axes.size() && i < m_rest.size(); i++) {
-        if (allowButtons ? (stickAxisUsed((int)i) || !positionFree((int)i, dev.axes[i])) : axisUsed((int)i)) continue;
+        if (allowButtons ? stickAxisUsed((int)i) : axisUsed((int)i)) continue;
         float d = std::fabs(dev.axes[i] - m_rest[i]);
+        if (allowButtons && !positionFree((int)i, dev.axes[i])) {
+            bool movedNow = i < m_axisMoved.size() && m_axisMoved[i];
+            std::vector<int> chs;
+            std::vector<std::string> ctls;
+            if (movedNow && d > conflictBest) {
+                ownersOf((int)i, dev.axes[i], chs, ctls);
+                if (!chs.empty() || !ctls.empty()) {
+                    conflictBest = d;
+                    conflict = (int)i;
+                    conflictValue = dev.axes[i];
+                }
+            }
+            continue;
+        }
         if (d > best) {
             best = d;
             m_candidate = (int)i;
@@ -216,18 +240,146 @@ void RadioWizard::detectAxis(const RawDevice &dev, bool allowButtons) {
     }
     if (m_candidate < 0 && allowButtons) {
         for (size_t i = 0; i < dev.buttons.size() && i < m_restButtons.size(); i++) {
-            if (buttonUsed((int)i)) continue;
-            if (dev.buttons[i] != m_restButtons[i]) {
-                m_candidate = 1000 + (int)i;
-                m_candidateValue = dev.buttons[i] ? 1.0f : 0.0f;
-                break;
+            if (dev.buttons[i] == m_restButtons[i]) continue;
+            if (buttonUsed((int)i)) {
+                bool movedNow = i < m_buttonMoved.size() && m_buttonMoved[i];
+                std::vector<int> chs;
+                std::vector<std::string> ctls;
+                if (movedNow && conflict < 0) {
+                    ownersOf(1000 + (int)i, 0, chs, ctls);
+                    if (!chs.empty() || !ctls.empty()) {
+                        conflict = 1000 + (int)i;
+                        conflictValue = dev.buttons[i] ? 1.0f : 0.0f;
+                    }
+                }
+                continue;
             }
+            m_candidate = 1000 + (int)i;
+            m_candidateValue = dev.buttons[i] ? 1.0f : 0.0f;
+            break;
+        }
+    }
+    if (m_candidate >= 0) {
+        m_conflict = -1;
+    } else if (conflict >= 0) {
+        m_conflict = conflict;
+        m_conflictValue = conflictValue;
+    }
+}
+
+bool RadioWizard::owns(const ChannelBinding &b, int input, float value) {
+    if (input >= 1000) return b.button == input - 1000;
+    return input >= 0 && b.axis == input && std::fabs(value - b.switchOn()) < kMoveThreshold;
+}
+
+void RadioWizard::ownersOf(int input, float value, std::vector<int> &channels,
+                           std::vector<std::string> &controls) const {
+    int self = channelForStep(m_step);
+    const ControlDesc *current = currentControl();
+    for (int c = kAux1; c < kChannelCount; c++)
+        if (c != self && owns(m_mapping.channels[c], input, value)) channels.push_back(c);
+    for (auto &kv : m_mapping.controls)
+        if ((!current || kv.first != current->name) && owns(kv.second, input, value)) controls.push_back(kv.first);
+}
+
+namespace {
+
+const char *auxName(int c) {
+    switch (c) {
+    case kAux1: return "AUX1 (arm)";
+    case kAux2: return "AUX2 (angle)";
+    case kAux3: return "AUX3 (beeper)";
+    case kAux4: return "AUX4 (turtle)";
+    case kAux5: return "AUX5 (air mode)";
+    case kAux6: return "AUX6 (OSD disable)";
+#if defined(LIBFPV_KAMIKAZE)
+    case kAux7: return "AUX7 (bomb arm)";
+    case kAux8: return "AUX8 (explode)";
+#endif
+    default: return "an AUX channel";
+    }
+}
+
+}  // namespace
+
+std::string RadioWizard::conflictText(const std::vector<ControlDesc> &known) const {
+    if (!hasConflict()) return "";
+    std::vector<int> chs;
+    std::vector<std::string> ctls;
+    ownersOf(m_conflict, m_conflictValue, chs, ctls);
+    std::vector<std::string> names;
+    for (int c : chs) names.push_back(auxName(c));
+    for (const std::string &n : ctls) {
+        std::string label = n;
+        for (const ControlDesc &d : known)
+            if (d.name == n && !d.label.empty()) label = d.label;
+        for (const ControlDesc &d : m_controls)
+            if (d.name == n && !d.label.empty()) label = d.label;
+        names.push_back("\"" + label + "\"");
+    }
+    std::string who;
+    for (size_t i = 0; i < names.size(); i++) who += (i == 0 ? "" : i + 1 == names.size() ? " and " : ", ") + names[i];
+    std::string what = m_conflict >= 1000 ? "Button " + std::to_string(m_conflict - 1000 + 1)
+                                          : "That position of axis " + std::to_string(m_conflict + 1);
+    return what + " is already used by " + who + ".";
+}
+
+bool RadioWizard::takeConflict(bool replace, std::string &hint) {
+    if (!hasConflict()) return false;
+    m_candidate = m_conflict;
+    m_candidateValue = m_conflictValue;
+    m_replace = replace;
+    bool ok = next(hint);
+    m_replace = false;
+    return ok;
+}
+
+void RadioWizard::applyReplaced(DeviceMapping &into) const {
+    auto same = [](const ChannelBinding &a, const ChannelBinding &b) {
+        return a.axis == b.axis && a.button == b.button && std::fabs(a.switchOn() - b.switchOn()) < 1e-3f;
+    };
+    for (const Replaced &r : m_replaced) {
+        if (r.channel >= 0) {
+            if (same(into.channels[r.channel], r.binding)) into.channels[r.channel] = ChannelBinding{};
+        } else {
+            auto it = into.controls.find(r.control);
+            if (it != into.controls.end() && same(it->second, r.binding)) into.controls.erase(it);
+        }
+    }
+}
+
+// The step just went back to: what its binding replaced is bound again.
+void RadioWizard::restoreReplaced() {
+    for (auto it = m_replaced.begin(); it != m_replaced.end();) {
+        if (it->step == m_step && (m_step != Step::GameControl || it->controlIndex == m_controlIndex)) {
+            if (it->channel >= 0) m_mapping.channels[it->channel] = it->binding;
+            else m_mapping.controls[it->control] = it->binding;
+            it = m_replaced.erase(it);
+        } else {
+            ++it;
         }
     }
 }
 
 void RadioWizard::update(const RawDevice &dev) {
     if (!m_active) return;
+    // a new step: its baseline is the state when it began (Next pressed)
+    if (!m_snapped || m_snapStep != m_step || m_snapIndex != m_controlIndex) {
+        m_snapped = true;
+        m_snapStep = m_step;
+        m_snapIndex = m_controlIndex;
+        m_stepAxes = m_lastAxes.empty() ? dev.axes : m_lastAxes;
+        m_stepButtons = m_lastAxes.empty() ? dev.buttons : m_lastButtons;
+        m_conflict = -1;
+        m_axisMoved.assign(m_stepAxes.size(), 0);
+        m_buttonMoved.assign(m_stepButtons.size(), 0);
+    }
+    for (size_t i = 0; i < dev.axes.size() && i < m_stepAxes.size(); i++)
+        if (std::fabs(dev.axes[i] - m_stepAxes[i]) > kMoveThreshold) m_axisMoved[i] = 1;
+    for (size_t i = 0; i < dev.buttons.size() && i < m_stepButtons.size(); i++)
+        if (dev.buttons[i] != m_stepButtons[i]) m_buttonMoved[i] = 1;
+    m_lastAxes = dev.axes;
+    m_lastButtons = dev.buttons;
     if (m_step == Step::Rest) {
         m_rest = dev.axes;
         m_restButtons = dev.buttons;
@@ -246,7 +398,7 @@ void RadioWizard::update(const RawDevice &dev) {
         int prev = m_candidate;
         float prevValue = m_candidateValue;
         detectAxis(dev, sw);
-        if (sw && m_momentary && prev >= 0) {
+        if (sw && momentary() && prev >= 0) {
             // a button springs back: keep what was pressed, at its furthest
             if (m_candidate < 0 ||
                 (m_candidate == prev && prev < 1000 &&
@@ -315,12 +467,29 @@ bool RadioWizard::next(std::string &hint) {
     int ch = channelForStep(m_step);
     if (ch < 0 && m_step != Step::GameControl) return false;
     if (m_candidate < 0) {
-        hint = m_step >= Step::ArmSwitch ? (m_momentary ? "Press the button first (the wizard has not seen it yet)."
+        hint = explodeStep()       ? "Press the explode button (or flip its switch) first: the wizard has not seen it yet."
+               : m_step >= Step::ArmSwitch ? (m_momentary ? "Press the button first (the wizard has not seen it yet)."
                                                         : "Flip the switch first (the wizard has not seen it move yet).")
                                          : "Move the stick as shown and hold it there.";
         return false;
     }
     const ControlDesc *control = currentControl();
+    if (m_replace) {
+        // the others that use this switch position or button lose it
+        std::vector<int> chs;
+        std::vector<std::string> ctls;
+        ownersOf(m_candidate, m_candidateValue, chs, ctls);
+        for (int c : chs) {
+            m_replaced.push_back({m_step, m_controlIndex, c, "", m_mapping.channels[c]});
+            m_mapping.channels[c] = ChannelBinding{};
+        }
+        for (const std::string &n : ctls) {
+            m_replaced.push_back({m_step, m_controlIndex, -1, n, m_mapping.controls[n]});
+            m_mapping.controls.erase(n);
+        }
+        m_replace = false;
+    }
+    m_conflict = -1;
     ChannelBinding &b = control ? m_mapping.controls[control->name] : m_mapping.channels[ch];
     b = ChannelBinding{};
 #if defined(LIBFPV_KAMIKAZE)
@@ -422,6 +591,7 @@ void RadioWizard::back() {
         m_controlIndex--;
         m_step = Step::GameControl;
         m_mapping.controls.erase(m_controls[m_controlIndex].name);
+        restoreReplaced();
         enterControl();
         return;
     }
@@ -435,6 +605,7 @@ void RadioWizard::back() {
     m_step = m_step == Step::Done ? lastSwitch() : (Step)((int)m_step - 1);
     int ch = channelForStep(m_step);
     if (ch >= 0) m_mapping.channels[ch] = ChannelBinding{};
+    restoreReplaced();
     m_candidate = -1;
     m_momentary = false;
     m_mapping.complete = false;

@@ -179,6 +179,7 @@ private:
     };
 
     void buildShape();
+    void traceStep(float dt);  // TEMPORARY
     float shapeBottom() const;
     void stopMotors();
     void rcRespawnGrace();  // 1 s without RC packet loss

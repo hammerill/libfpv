@@ -484,7 +484,149 @@ void testSwitchThresholds() {
     CHECK(presses == 2 && on, "and back to ON once more (%u)", presses);
 }
 
+// A switch or button that another binding uses: offered as a conflict (not
+// detected), taken for both or replacing the old binding, Back undoing the
+// replace; a switch left on in an earlier step is no conflict.
+void testConflicts() {
+    DeviceMapping m;
+    m.guid = "fake";
+    m.complete = true;
+    for (int c = kRoll; c <= kYaw; c++) m.channels[c].axis = c;
+    m.channels[kAux1].axis = 4;
+    m.channels[kAux1].min = -1, m.channels[kAux1].max = 1;
+    m.controls["other.fire"].button = 1;  // another game's control on button 2
+    std::vector<ControlDesc> controls(2);
+    controls[0].id = 1, controls[0].name = "game.jump", controls[0].label = "Jump", controls[0].kind = ControlKind::Hold;
+    controls[1].id = 2, controls[1].name = "game.use", controls[1].label = "Use", controls[1].kind = ControlKind::Hold;
+    std::vector<ControlDesc> known(1);
+    known[0].name = "other.fire", known[0].label = "Fire";
+
+    FakeRadio r;
+    RadioWizard w;
+    w.startControls(r.d, m, controls);
+    CHECK(step(w, r), "rest");
+    // the arm switch's ON position: taken by AUX1
+    r.d.axes[4] = 1;
+    w.update(r.d);
+    CHECK(!w.detected() && w.hasConflict(), "arm's position: a conflict, not detected");
+    CHECK(w.conflictText(known).find("AUX1 (arm)") != std::string::npos, "names the arm: %s",
+          w.conflictText(known).c_str());
+    r.d.axes[4] = -1;
+    w.update(r.d);
+    // the momentary button another game's control uses, pressed and released
+    r.d.buttons[1] = 1;
+    w.update(r.d);
+    r.d.buttons[1] = 0;
+    w.update(r.d);
+    CHECK(w.hasConflict(), "button 2: a conflict, kept after the release");
+    CHECK(w.conflictText(known) == "Button 2 is already used by \"Fire\".", "text: %s", w.conflictText(known).c_str());
+    std::string hint;
+    CHECK(w.takeConflict(false, hint), "jump for both");
+    CHECK(w.mapping().controls.at("game.jump").button == 1 && w.mapping().controls.at("other.fire").button == 1,
+          "jump and fire share button 2");
+    CHECK(!w.hasConflict(), "the next control starts without a conflict");
+    // the next control replaces both on button 2
+    r.d.buttons[1] = 1;
+    w.update(r.d);
+    r.d.buttons[1] = 0;
+    CHECK(w.conflictText(known) == "Button 2 is already used by \"Jump\" and \"Fire\".", "text: %s",
+          w.conflictText(known).c_str());
+    CHECK(w.takeConflict(true, hint), "use replaces");
+    CHECK(w.step() == RadioWizard::Step::Done, "done");
+    CHECK(w.mapping().controls.at("game.use").button == 1 && !w.mapping().controls.count("game.jump") &&
+              !w.mapping().controls.count("other.fire"),
+          "only use on button 2");
+    // the save: merge the controls set up, then what was replaced elsewhere
+    DeviceMapping saved = m;
+    RadioWizard::mergeControls(saved, w.mapping(), {"game.jump", "game.use"}, false);
+    w.applyReplaced(saved);
+    CHECK(!saved.controls.count("other.fire") && saved.controls.at("game.use").button == 1 &&
+              !saved.controls.count("game.jump"),
+          "saved: another game's fire unbound, use on button 2");
+    CHECK(saved.channels[kAux1].axis == 4, "the arm switch untouched");
+    // Back undoes the replace
+    w.back();
+    CHECK(w.mapping().controls.count("game.jump") && w.mapping().controls.count("other.fire"),
+          "back: jump and fire bound again");
+    DeviceMapping again = m;
+    w.applyReplaced(again);
+    CHECK(again.controls.count("other.fire") == 1, "nothing replaced any more");
+
+    // a full setup: the arm switch left ON during the angle step is no conflict,
+    // but flipping it off and on again is
+    RadioWizard f;
+    FakeRadio fr;
+    f.start(fr.d);
+    step(f, fr);
+    for (int a : {2, 3, 1, 0}) {
+        fr.d.axes[a] = 1;
+        step(f, fr);
+        fr.d.axes[a] = a == 2 ? -1 : 0;
+    }
+    for (float v : {-1.0f, 1.0f, 0.0f}) {
+        for (int a = 0; a < 4; a++) fr.d.axes[a] = v;
+        f.update(fr.d);
+    }
+    fr.d.axes[0] = fr.d.axes[1] = fr.d.axes[3] = 0;
+    fr.d.axes[2] = -1;
+    step(f, fr);
+    fr.d.axes[4] = 1;
+    CHECK(step(f, fr), "arm");
+    f.update(fr.d);
+    CHECK(!f.hasConflict(), "arm left ON: no conflict at the angle step");
+    fr.d.axes[4] = -1;
+    f.update(fr.d);
+    fr.d.axes[4] = 1;
+    f.update(fr.d);
+    CHECK(f.hasConflict(), "arm flipped again: a conflict");
+    CHECK(f.takeConflict(true, hint), "angle replaces arm");
+    CHECK(f.mapping().channels[kAux2].axis == 4 && f.mapping().channels[kAux1].axis < 0, "angle on axis 5, no arm");
+    // arm is required: the setup can't finish without one, Back restores it
+    f.back();
+    CHECK(f.step() == RadioWizard::Step::AngleSwitch && f.mapping().channels[kAux1].axis == 4,
+          "back: arm on axis 5 again");
+
+#if defined(LIBFPV_KAMIKAZE)
+    // the bomb switches' setup: the explode button another control uses
+    DeviceMapping withBomb = m;
+    RadioWizard b;
+    FakeRadio br;
+    b.startBombSwitches(br.d, withBomb);
+    step(b, br);
+    b.skip();  // no bomb arm
+    br.d.buttons[1] = 1;
+    b.update(br.d);
+    br.d.buttons[1] = 0;
+    b.update(br.d);
+    CHECK(b.hasConflict() && !b.detected(), "explode on fire's button: a conflict");
+    CHECK(b.takeConflict(false, hint), "explode for both");
+    DeviceMapping merged = withBomb;
+    RadioWizard::mergeBombSwitches(merged, b.mapping(), false);
+    b.applyReplaced(merged);
+    CHECK(merged.channels[kAux8].button == 1 && merged.controls.at("other.fire").button == 1,
+          "explode and fire share button 2");
+
+    // explode is momentary by nature: no box, a free button pressed and
+    // released before Next is kept, and it never toggles
+    RadioWizard e;
+    FakeRadio er;
+    e.startBombSwitches(er.d, withBomb);
+    step(e, er);
+    CHECK(e.momentaryChoice(), "bomb arm: the box is offered");
+    e.skip();
+    CHECK(!e.momentaryChoice() && e.momentary(), "explode: no box, always a press");
+    er.d.buttons[0] = 1;
+    e.update(er.d);
+    er.d.buttons[0] = 0;
+    CHECK(step(e, er), "explode on button 1, released before Next");
+    const ChannelBinding &ex = e.mapping().channels[kAux8];
+    CHECK(ex.button == 0 && !ex.toggle && !ex.inverted, "explode: button %d, toggle %d, inverted %d", ex.button,
+          ex.toggle, ex.inverted);
+#endif
+}
+
 int main() {
+    testConflicts();
     testGameControls();
     testSwitchThresholds();
     testInstantOnSwitch();
