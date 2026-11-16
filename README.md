@@ -1,4 +1,4 @@
-<p><a href="https://libfpv.com"><img src="docs/img/libfpv-logo.svg" alt="libfpv" width=250>></a></p>
+<p><a href="https://libfpv.com"><img src="docs/img/libfpv-logo.svg" alt="libfpv" width=250></a></p>
 
 # FPV Drone in Any Game
 
