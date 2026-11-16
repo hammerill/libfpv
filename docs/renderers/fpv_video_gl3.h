@@ -116,8 +116,9 @@ static const char *fpv_video_gl3__signal_fs =
     "// The OSD chip's picture (360 font pixels by osdLines, premultiplied, nearest): the\n"
     "// chip's own grid, a font pixel two samples wide and one field line tall (S, measured\n"
     "// on a Cobra X DVR: 24 x 36 pixel cells in its 720 x 480 frame), column 0 nine samples\n"
-    "// into the line (column 29 is cut at the right edge) and NTSC's row 0 starting two field\n"
-    "// lines above the picture; PAL's 16 rows fill its 288 lines. Looked up at the field's\n"
+    "// into the line (column 29 is cut at the right edge) and NTSC's 13 rows starting two field\n"
+    "// lines above the picture; PAL's 16 rows fill its 288 lines. NTSC with all 16 rows (288\n"
+    "// lines in 240) is scaled to fit 0.95 of the picture around its centre. Looked up at the field's\n"
     "// own frame line (interlaced, as the chip writes it) between the four nearest font\n"
     "// pixels, each step kept to about a sample or a line, so every glyph row stays and the\n"
     "// edges crisp. x 0..1 across the line, line from the top. Over a picture of another\n"
@@ -128,9 +129,12 @@ static const char *fpv_video_gl3__signal_fs =
     "vec4 osdChip(float x, float line) {\n"
     "  if (res < 0.5) x = (x - 0.5) * picAspect / (4.0 / 3.0) + 0.5;\n"
     "  if (osdIn < 0.5) return vec4(0.0);\n"
-    "  const vec2 S = vec2(1.0, 1.0);  // the grid's scale across and down\n"
-    "  float top = activeLines < 288.0 ? -4.0 : activeLines - osdLines * S.y;  // row 0, frame lines\n"
-    "  float gx = (x * 720.0 - 9.0) / (2.0 * S.x) - 0.5;\n"
+    "  // the grid's scale across and down, column 0 (samples) and row 0 (frame lines)\n"
+    "  vec2 S = vec2(1.0, 1.0); float left = 9.0, top = activeLines < 288.0 ? -4.0 : activeLines - osdLines;\n"
+    "  if (osdLines > activeLines) {\n"
+    "    S = vec2(0.95, 0.95 * activeLines / osdLines); left = 360.0 * (1.0 - S.x); top = activeLines - osdLines * S.y;\n"
+    "  }\n"
+    "  float gx = (x * 720.0 - left) / (2.0 * S.x) - 0.5;\n"
     "  float gy = (2.0 * line + parity + 0.5 - top) / (2.0 * S.y) - 0.5;\n"
     "  float ix = floor(gx), iy = floor(gy);\n"
     "  vec2 f = clamp((vec2(gx - ix, gy - iy) - 0.5) * (2.0 * S) + 0.5, 0.0, 1.0);\n"
@@ -456,9 +460,16 @@ int fpv_video_gl3_init(fpv_video_gl3 *v) {
 /* The OSD chip's picture (MAX7456 / AT7456E): it writes Betaflight's grid
  * of 12 x 18 font pixels straight into the video, a font pixel two of the
  * decoder's 720 samples wide and one field line tall, so 360 x (rows x 18)
- * here (black, white or clear). NTSC's 240 field lines show 13 rows (234
- * lines, Betaflight keeps its elements within them), PAL's 288 all 16. */
-static int fpv_video_gl3__osd_rows(int active_lines) { return active_lines >= 288 ? FPV_OSD_ROWS : 13; }
+ * here (black, white or clear). NTSC's 240 field lines show 13 rows when
+ * Betaflight's video system is NTSC (234 lines, Betaflight keeps its
+ * elements within them), else all 16 (scaled to fit); PAL's 288 all 16. */
+static int fpv_video_gl3__osd_rows(const fpv_frame *f, int active_lines) {
+    /* a libfpv older than osd_rows: 13 on NTSC */
+    if (f->struct_size >= offsetof(fpv_frame, video_feed) + offsetof(fpv_video_feed, osd_rows) + sizeof(uint32_t) &&
+        f->video_feed.osd_rows)
+        return f->video_feed.osd_rows < FPV_OSD_ROWS ? 13 : FPV_OSD_ROWS;
+    return active_lines >= 288 ? FPV_OSD_ROWS : 13;
+}
 static void fpv_video_gl3__osd_chip(const unsigned char *grid, const fpv_texture *font, int rows,
                                     unsigned char *out) {
     const int per = 18, skip = 0;
@@ -548,7 +559,7 @@ void fpv_video_gl3_draw(fpv_video_gl3 *v, fpv_gl3 *ui, const fpv_frame *f, unsig
     if (fresh && !hold) {
         if (osd_in) {
             /* the OSD chip's picture, rebuilt when the grid changes */
-            int rows = fpv_video_gl3__osd_rows((int)active), lines = rows * 18;
+            int rows = fpv_video_gl3__osd_rows(f, (int)active), lines = rows * 18;
             fpv_texture font;
             if (!v->osd_pixels) v->osd_pixels = (unsigned char *)malloc((size_t)360 * 288 * 4);
             if (v->osd_pixels && (!v->osd_tex || v->osd_lines != lines || memcmp(v->osd_grid, f->osd, sizeof v->osd_grid)) &&
@@ -612,7 +623,7 @@ void fpv_video_gl3_draw(fpv_video_gl3 *v, fpv_gl3 *ui, const fpv_frame *f, unsig
                     vf->raster_height ? (float)vf->raster_height : (float)h);
         glUniform1f(L[FPV_VU_BLOCKS], vf->block_errors);
         glUniform1f(L[FPV_VU_SOFTNESS], noise ? vf->softness : 0.0f);
-        glUniform1f(L[FPV_VU_OSDLINES], (float)(18 * fpv_video_gl3__osd_rows((int)active)));
+        glUniform1f(L[FPV_VU_OSDLINES], (float)(18 * fpv_video_gl3__osd_rows(f, (int)active)));
         if (has_upset && noise)
             glUniform4f(L[FPV_VU_UPSET], vf->chroma_boost, vf->chroma_tint[0], vf->chroma_tint[1], vf->hue_sweep);
         else

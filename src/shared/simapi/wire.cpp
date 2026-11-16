@@ -8,7 +8,7 @@ namespace fpv {
 namespace wire {
 
 std::string protocolId() {
-    std::string id = "libfpv-wire 2 " LIBFPV_VERSION_STRING;
+    std::string id = "libfpv-wire 3 " LIBFPV_VERSION_STRING;
 #if defined(LIBFPV_KAMIKAZE)
     id += " k";
 #endif
@@ -40,11 +40,11 @@ void get(Reader &r, std::string &s) {
 
 void put(Writer &w, const CameraSettings &c) {
     pack(w, c.uptiltDeg, c.fovYDeg, c.aspect, c.k1, c.k2, c.zoom, c.offset, c.model, c.tvl, c.system, c.sharpening,
-         c.displayAspect);
+         c.displayAspect, c.osdRows);
 }
 void get(Reader &r, CameraSettings &c) {
     unpack(r, c.uptiltDeg, c.fovYDeg, c.aspect, c.k1, c.k2, c.zoom, c.offset, c.model, c.tvl, c.system, c.sharpening,
-           c.displayAspect);
+           c.displayAspect, c.osdRows);
 }
 
 void put(Writer &w, const VtxSettings &v) {

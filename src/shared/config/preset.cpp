@@ -245,6 +245,7 @@ DronePreset loadPresetFile(const std::string &quadJsonPath) {
                 p.camera.displayAspect = aspectOf(m, p.camera.displayAspect, "displayAspect");
                 p.camera.tvl = num(m, "tvl", p.camera.tvl);
                 p.camera.system = str(m, "system", "NTSC") == "PAL" ? FPV_VIDEO_PAL : FPV_VIDEO_NTSC;
+                p.camera.osdRows = (int)num(m, "osdRows", (float)p.camera.osdRows);
                 p.camera.sharpening = num(m, "sharpening", p.camera.sharpening);
                 // a digital camera sets the mode it streams in
                 if (p.vtx.digital) {
@@ -258,6 +259,7 @@ DronePreset loadPresetFile(const std::string &quadJsonPath) {
         p.camera.displayAspect = aspectOf(c, p.camera.displayAspect, "displayAspect");
         p.camera.system = str(c, "system").empty() ? p.camera.system
                           : str(c, "system") == "PAL" ? FPV_VIDEO_PAL : FPV_VIDEO_NTSC;
+        p.camera.osdRows = (int)num(c, "osdRows", (float)p.camera.osdRows);
         p.camera.uptiltDeg = num(c, "uptiltDeg", p.camera.uptiltDeg);
         p.camera.fovYDeg = num(c, "fovYDeg", p.camera.fovYDeg);
         p.camera.k1 = num(c, "k1", p.camera.k1);
@@ -313,7 +315,9 @@ bool ensureCameraClearance(DronePreset &p) {
     return false;
 }
 
-bool presetNtsc(const DronePreset &p) { return !p.vtx.digital && p.camera.system == FPV_VIDEO_NTSC; }
+bool presetNtsc(const DronePreset &p) {
+    return !p.vtx.digital && p.camera.system == FPV_VIDEO_NTSC && p.camera.osdRows < FPV_OSD_ROWS;
+}
 
 DronePreset builtinDefaultPreset() {
     // assets/presets/quad/freestyler-5.json with its components
@@ -375,7 +379,6 @@ DronePreset builtinDefaultPreset() {
     p.vtx.powerNoise = 0.12f;
     p.camera.model = "Caddx Ratel 2";
     p.camera.aspect = 4.0f / 3.0f;
-    p.camera.displayAspect = 1.5f;  // as presets/camera/caddx-ratel-2.json
     p.camera.tvl = 1200.0f;
     p.camera.sharpening = 0.55f;
     p.collision.propRadius = 5.1f * 0.0254f * 0.5f;

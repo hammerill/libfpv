@@ -210,7 +210,7 @@ FPV_API const fpv_draw_data *fpv_osd_draw_data(const fpv_frame *frame, float wid
         return nullptr;
     }
     return osdRenderer().drawData(frame->osd, width, height, style,
-                                  style == FPV_OSD_STYLE_HD ? FPV_OSD_ROWS : osdVisibleRows());
+                                  style == FPV_OSD_STYLE_HD ? FPV_OSD_ROWS : osdVisibleRows(), osdNtscLines());
 }
 
 FPV_API fpv_result fpv_osd_render_rgba(const fpv_frame *frame, uint8_t *rgba, uint32_t width, uint32_t height,
@@ -221,7 +221,7 @@ FPV_API fpv_result fpv_osd_render_rgba(const fpv_frame *frame, uint8_t *rgba, ui
     if (stride == 0) stride = width * 4;
     if (stride < width * 4) return setError(FPV_ERROR_INVALID_ARGUMENT, "stride smaller than width * 4");
     osdRenderer().rasterize(frame->osd, rgba, width, height, stride, style,
-                            style == FPV_OSD_STYLE_HD ? FPV_OSD_ROWS : osdVisibleRows());
+                            style == FPV_OSD_STYLE_HD ? FPV_OSD_ROWS : osdVisibleRows(), osdNtscLines());
     return FPV_OK;
 }
 

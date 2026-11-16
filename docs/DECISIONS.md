@@ -774,6 +774,15 @@ and `fpv_osd_draw_data` (the same grid as the video feed draws it) follow
 `osdVisibleRows()`, and so does the kamikaze build's centred OSD.
 `frame.osd` stays 30×16: rows 13 to 15 are blank on NTSC.
 
+*Only where the camera preset asks (2026-11).* Making every NTSC camera
+13 rows was wrong for most quads: the Freestyler and the Nomade (Caddx
+Ratel 2) lost their bigger 16-row layout. NTSC's 13 rows are now a camera
+preset's `"osdRows": 13` (only the BetaFPV C03, the Air65 II's, whose DVR
+D34 measures); every other camera keeps 16 rows and Betaflight's video
+system PAL, NTSC picture or not (`presetNtsc()`). The feed tells the
+renderers in `fpv_video_feed.osd_rows`; a renderer reading a libfpv older
+than it keeps 13 rows on NTSC.
+
 ### D15b. RC packets at a link's rate; a fast Configurator (Betaflight patch `0011`, SimITL patch `0018`)
 
 SimITL's receiver used to answer "new frame" on every scheduler pass.
@@ -1213,7 +1222,18 @@ things the first version got wrong. The goggles' look follows the Cobra X.
   the DVR does. Measured on a libfpv screenshot scaled to 720 × 480, every
   glyph edge lands within a pixel of the DVR's. Without `displayAspect` the
   picture stays at the camera's aspect, the OSD the same grid. The field
-  crosses the client/server wire, so its protocol is version 2. The chip's white sits over the picture's
+  crosses the client/server wire, so its protocol is version 2.
+
+  *Only on the Air65 II (2026-11).* The 3:2 picture and 13 rows suit the
+  Air65 II's DVR, not the Caddx Ratel 2's quads, which show their 4:3
+  picture again with all 16 rows (D15): `displayAspect` is now only on the
+  BetaFPV C03. 16 rows (288 glyph lines) can't fit NTSC's 240 lines
+  unscaled, so the grid is scaled to 0.95 of the picture across and down
+  around its centre (a glyph row 1.58 frame lines, a font pixel 1.9
+  samples), still looked up between the four nearest font pixels, so every
+  glyph row stays and the edges stay crisp; `fpv_osd_draw_data` draws the
+  same. 13 rows and PAL keep the chip's unscaled grid. The camera's
+  `osdRows` crosses the wire: protocol version 3. The chip's white sits over the picture's
   peak (110 %), so the strokes clip to white as the DVR's do. No renderer draws the
   in-signal OSD with the host's OSD renderer any more: they build it from
   `frame.osd` and `fpv_texture_get(FPV_TEXTURE_OSD_FONT)`.

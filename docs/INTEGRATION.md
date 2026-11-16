@@ -164,12 +164,14 @@ in three steps:
    Build its picture from `frame.osd` and the font (`fpv_texture_get`,
    `FPV_TEXTURE_OSD_FONT`, 12 × 18 glyphs, 16 to a row of the atlas): a
    font pixel two of the 720 samples wide and one field line tall, all 18
-   rows of a glyph, so 360 × 288 for PAL's 16 rows and 360 × 234 for
-   NTSC's 13 (Betaflight keeps an NTSC camera's elements within them; rows
-   13 to 15 of `frame.osd` are blank). Place that grid as the chip writes
-   it, unscaled: column 0 starts 9 samples into the line (column 29 is cut
-   at the right edge), NTSC's row 0 4 frame lines above the picture's top
-   (PAL's 16 rows fill its 576 frame lines). Look it
+   rows of a glyph, `osd_rows` rows of them: 360 × 288 for 16 rows, 360 ×
+   234 for 13 (Betaflight's video system set to NTSC keeps the elements
+   within them; rows 13 to 15 of `frame.osd` are blank). Place that grid
+   as the chip writes it, unscaled: column 0 starts 9 samples into the
+   line (column 29 is cut at the right edge), 13 rows starting 4 frame
+   lines above the picture's top, PAL's 16 rows filling its 576 frame
+   lines. 16 rows on NTSC (288 lines in 240) are scaled to fit 0.95 of the
+   picture across and down, centred. Look it
    up at the line's (shifted) sample and the field's own frame line
    (`2 × line + field_parity`) between the four nearest font pixels, each
    step kept to about a sample or a line. Switch the luma to it (white at

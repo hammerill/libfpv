@@ -180,8 +180,9 @@ float3 tap(float2 p) { return withUi(lensTap(p), p); }
 // The OSD chip's picture (360 font pixels by osdLines, premultiplied, point sampled): the
 // chip's own grid, a font pixel two samples wide and one field line tall (S, measured
 // on a Cobra X DVR: 24 x 36 pixel cells in its 720 x 480 frame), column 0 nine samples
-// into the line (column 29 is cut at the right edge) and NTSC's row 0 starting two field
-// lines above the picture; PAL's 16 rows fill its 288 lines. Looked up at the field's
+// into the line (column 29 is cut at the right edge) and NTSC's 13 rows starting two field
+// lines above the picture; PAL's 16 rows fill its 288 lines. NTSC with all 16 rows (288
+// lines in 240) is scaled to fit 0.95 of the picture around its centre. Looked up at the field's
 // own frame line (interlaced, as the chip writes it) between the four nearest font
 // pixels, each step kept to about a sample or a line, so every glyph row stays and the
 // edges crisp. x 0..1 across the line, line from the top. Over a picture of another
@@ -193,9 +194,12 @@ float4 osdTexel(float i, float ln) {
 float4 osdChip(float x, float fieldLine) {
   if (res < 0.5) x = (x - 0.5) * picAspect / (4.0 / 3.0) + 0.5;
   if (osdIn < 0.5) return float4(0.0, 0.0, 0.0, 0.0);
-  const float2 S = float2(1.0, 1.0);  // the grid's scale across and down
-  float top = activeLines < 288.0 ? -4.0 : activeLines - osdLines * S.y;  // row 0, frame lines
-  float gx = (x * 720.0 - 9.0) / (2.0 * S.x) - 0.5;
+  // the grid's scale across and down, column 0 (samples) and row 0 (frame lines)
+  float2 S = float2(1.0, 1.0); float left = 9.0, top = activeLines < 288.0 ? -4.0 : activeLines - osdLines;
+  if (osdLines > activeLines) {
+    S = float2(0.95, 0.95 * activeLines / osdLines); left = 360.0 * (1.0 - S.x); top = activeLines - osdLines * S.y;
+  }
+  float gx = (x * 720.0 - left) / (2.0 * S.x) - 0.5;
   float gy = (2.0 * fieldLine + parity + 0.5 - top) / (2.0 * S.y) - 0.5;
   float ix = floor(gx), iy = floor(gy);
   float2 f = saturate((float2(gx - ix, gy - iy) - 0.5) * (2.0 * S) + 0.5);
@@ -570,9 +574,16 @@ static void fpv_video_d3d9__upload_lines(fpv_video_d3d9 *v, const fpv_video_feed
 /* The OSD chip's picture (MAX7456 / AT7456E): it writes Betaflight's grid
  * of 12 x 18 font pixels straight into the video, a font pixel two of the
  * decoder's 720 samples wide and one field line tall, so 360 x (rows x 18)
- * here (black, white or clear). NTSC's 240 field lines show 13 rows (234
- * lines, Betaflight keeps its elements within them), PAL's 288 all 16. */
-static int fpv_video_d3d9__osd_rows(int active_lines) { return active_lines >= 288 ? FPV_OSD_ROWS : 13; }
+ * here (black, white or clear). NTSC's 240 field lines show 13 rows when
+ * Betaflight's video system is NTSC (234 lines, Betaflight keeps its
+ * elements within them), else all 16 (scaled to fit); PAL's 288 all 16. */
+static int fpv_video_d3d9__osd_rows(const fpv_frame *f, int active_lines) {
+    /* a libfpv older than osd_rows: 13 on NTSC */
+    if (f->struct_size >= offsetof(fpv_frame, video_feed) + offsetof(fpv_video_feed, osd_rows) + sizeof(uint32_t) &&
+        f->video_feed.osd_rows)
+        return f->video_feed.osd_rows < FPV_OSD_ROWS ? 13 : FPV_OSD_ROWS;
+    return active_lines >= 288 ? FPV_OSD_ROWS : 13;
+}
 static int fpv_video_d3d9__osd_chip(fpv_video_d3d9 *v, IDirect3DDevice9 *dev, const fpv_frame *f, int rows) {
     const int per = 18, skip = 0, lines = rows * per;
     if (v->osd && v->osd_lines == lines && !memcmp(v->osd_grid, f->osd, sizeof v->osd_grid)) return 1;
@@ -655,7 +666,7 @@ int fpv_video_d3d9_draw(fpv_video_d3d9 *v, IDirect3DDevice9 *dev, const fpv_fram
         v->raster_w = w, v->raster_h = h;
         v->have = 0;
     }
-    if (osd_in && !fpv_video_d3d9__osd_chip(v, dev, f, fpv_video_d3d9__osd_rows((int)active))) osd_in = 0;
+    if (osd_in && !fpv_video_d3d9__osd_chip(v, dev, f, fpv_video_d3d9__osd_rows(f, (int)active))) osd_in = 0;
 
     /* save state: the state block, the render target and the depth surface */
     IDirect3DSurface9 *rt = NULL, *depth = NULL;
@@ -717,7 +728,7 @@ int fpv_video_d3d9_draw(fpv_video_d3d9 *v, IDirect3DDevice9 *dev, const fpv_fram
                 c[22][0] = rx / (float)fb_w, c[22][1] = ry / (float)fb_h;
                 c[22][2] = rw / (float)fb_w, c[22][3] = rh / (float)fb_h;
             }
-            c[23][0] = (float)(18 * fpv_video_d3d9__osd_rows((int)active));
+            c[23][0] = (float)(18 * fpv_video_d3d9__osd_rows(f, (int)active));
             if (has_upset && noise)
                 c[24][0] = vf->chroma_boost, c[24][1] = vf->chroma_tint[0], c[24][2] = vf->chroma_tint[1],
                 c[24][3] = vf->hue_sweep;

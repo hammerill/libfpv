@@ -52,6 +52,8 @@ VideoSpec videoSpec(const DronePreset &p) {
     s.digital = v.digital;
     s.aspect = c.aspect > 0.5f ? c.aspect : 4.0f / 3.0f;
     s.displayAspect = c.displayAspect > 0.5f ? c.displayAspect : s.aspect;
+    // NTSC's 13 rows only where the camera preset asks (as presetNtsc())
+    s.osdRows = !v.digital && c.system == FPV_VIDEO_NTSC && c.osdRows < FPV_OSD_ROWS ? 13 : FPV_OSD_ROWS;
     s.powerDbm = 10.0f * std::log10(std::max(v.powerMw, 0.01f));
     s.powerNoise = std::clamp(v.powerNoise, 0.0f, 1.0f);
     s.minVoltage = v.minVoltage;
@@ -194,6 +196,7 @@ void VideoFeed::update(float dt, const VideoSpec &s, const VideoInputs &in, fpv_
     o.system = (uint32_t)s.system;
     o.picture_aspect = s.aspect;
     o.display_aspect = s.displayAspect;
+    o.osd_rows = (uint32_t)s.osdRows;
     o.raster_width = (uint32_t)s.rasterW;
     o.raster_height = (uint32_t)s.rasterH;
     o.luma_cycles = s.lumaCycles;

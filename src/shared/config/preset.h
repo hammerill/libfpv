@@ -27,6 +27,10 @@ struct CameraSettings {
     float tvl = 1000.0f;         // analog horizontal resolution, TV lines
     int system = 0;              // FPV_VIDEO_NTSC or FPV_VIDEO_PAL (analog)
     float sharpening = 0.5f;     // the camera's edge enhancement 0..1
+    // The OSD rows the goggles show: 13 sets Betaflight's video system to
+    // NTSC (an NTSC camera only, as the Air65 II's DVR shows it), 16 keeps
+    // the full grid, fitted into the picture.
+    int osdRows = 16;
 };
 
 struct VtxSettings {
@@ -96,7 +100,8 @@ struct DronePreset {
 #endif
 };
 
-// An analog NTSC camera: Betaflight's OSD shows 13 rows instead of 16.
+// An analog NTSC camera whose preset asks for 13 OSD rows (`osdRows`):
+// Betaflight's video system is NTSC and its OSD shows 13 rows instead of 16.
 bool presetNtsc(const DronePreset &p);
 
 // Makes the canopy keep the FPV camera's lens kCameraClearance inside the

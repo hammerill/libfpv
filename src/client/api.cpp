@@ -203,6 +203,11 @@ CliResult runCli(const std::string &script, std::string &output) { return lib().
 
 int osdVisibleRows() { return presetNtsc(currentPreset()) ? 13 : FPV_OSD_ROWS; }
 
+bool osdNtscLines() {
+    const DronePreset &p = currentPreset();
+    return !p.vtx.digital && p.camera.system == FPV_VIDEO_NTSC;
+}
+
 fpv_result selectPreset(const std::string &key, bool applyToFlight) {
     Lib &L = lib();
     int idx = key.empty() ? L.presetIndex : findPreset(key);

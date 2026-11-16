@@ -58,7 +58,7 @@
 /* The one place the version is set: CMakeLists.txt reads these three. */
 #define LIBFPV_VERSION_MAJOR 1
 #define LIBFPV_VERSION_MINOR 0
-#define LIBFPV_VERSION_PATCH 2
+#define LIBFPV_VERSION_PATCH 3
 #define LIBFPV_STRINGIFY_(x) #x
 #define LIBFPV_STRINGIFY(x) LIBFPV_STRINGIFY_(x)
 #define LIBFPV_VERSION_STRING                                                  \
@@ -641,6 +641,12 @@ typedef struct fpv_video_feed {
      * camera at 3:2). Equal to picture_aspect for most cameras; 0 from a
      * libfpv older than this field (check struct_size): use picture_aspect. */
     float display_aspect;
+    /* Analog: the OSD rows the picture shows. 13 when Betaflight's video
+     * system is NTSC (the chip's own grid, as a DVR records it), else 16
+     * (FPV_OSD_ROWS): on NTSC's 240 lines the 16 rows are scaled to fit.
+     * 0 from a libfpv older than this field (check struct_size): 13 on NTSC,
+     * 16 on PAL. */
+    uint32_t osd_rows;
 } fpv_video_feed;
 
 typedef struct fpv_frame {

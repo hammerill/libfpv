@@ -111,7 +111,8 @@ void OsdRenderer::viewport(float width, float height, int style, float &x, float
 
 static bool blank(uint8_t c) { return c == 0 || c == ' '; }
 
-const fpv_draw_data *OsdRenderer::drawData(const uint8_t *osd, float width, float height, int style, int rows) {
+const fpv_draw_data *OsdRenderer::drawData(const uint8_t *osd, float width, float height, int style, int rows,
+                                           bool ntscLines) {
     rows = std::clamp(rows, 1, FPV_OSD_ROWS);
     m_buffer.clear();
     float vx, vy, vw, vh;
@@ -119,14 +120,16 @@ const fpv_draw_data *OsdRenderer::drawData(const uint8_t *osd, float width, floa
     // Analog: the OSD chip's own grid as the analog renderers draw it, cells
     // of 24 of the line's 720 samples by 18 field lines, column 0 nine
     // samples in (column 29 is cut at the right edge); NTSC's 13 rows start
-    // two of its 240 lines above the picture, PAL's 16 fill its 288. HD uses
-    // a margin and bigger cells the way HD goggles render the same 30x16
+    // two of its 240 lines above the picture, PAL's 16 fill its 288; all 16
+    // rows on NTSC's 240 lines fit 0.95 of the picture around its centre. HD
+    // uses a margin and bigger cells the way HD goggles render the same 30x16
     // Betaflight canvas.
     const bool hd = style == FPV_OSD_STYLE_HD, ntsc = rows < FPV_OSD_ROWS;
-    float marginX = hd ? vw * 0.06f : vw * (9.0f / 720.0f);
-    float marginY = hd ? vh * 0.04f : ntsc ? vh * (-2.0f / 240.0f) : 0.0f;
-    float cw = hd ? (vw - 2 * marginX) / FPV_OSD_COLS : vw * (24.0f / 720.0f);
-    float ch = hd ? (vh - 2 * marginY) / rows : ntsc ? vh * (18.0f / 240.0f) : vh / FPV_OSD_ROWS;
+    const bool fitted = !hd && !ntsc && ntscLines;
+    float marginX = hd ? vw * 0.06f : fitted ? vw * 0.025f : vw * (9.0f / 720.0f);
+    float marginY = hd ? vh * 0.04f : fitted ? vh * 0.025f : ntsc ? vh * (-2.0f / 240.0f) : 0.0f;
+    float cw = hd || fitted ? (vw - 2 * marginX) / FPV_OSD_COLS : vw * (24.0f / 720.0f);
+    float ch = hd || fitted ? (vh - 2 * marginY) / rows : ntsc ? vh * (18.0f / 240.0f) : vh / FPV_OSD_ROWS;
     DrawListStorage &l = m_buffer.newList();
     int font = style == FPV_OSD_STYLE_HD ? 1 : 0;
     for (int r = 0; r < rows; r++) {
@@ -161,9 +164,9 @@ const fpv_draw_data *OsdRenderer::drawData(const uint8_t *osd, float width, floa
 }
 
 void OsdRenderer::rasterize(const uint8_t *osd, uint8_t *rgba, uint32_t width, uint32_t height, uint32_t stride,
-                            int style, int rows) {
+                            int style, int rows, bool ntscLines) {
     for (uint32_t y = 0; y < height; y++) std::memset(rgba + (size_t)y * stride, 0, (size_t)width * 4);
-    const fpv_draw_data *dd = drawData(osd, (float)width, (float)height, style, rows);
+    const fpv_draw_data *dd = drawData(osd, (float)width, (float)height, style, rows, ntscLines);
     if (!dd->list_count) return;
     const fpv_draw_list &l = dd->lists[0];
     // every glyph is an axis-aligned quad: 4 vertices

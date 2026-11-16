@@ -214,8 +214,11 @@ void saveSettings();
 
 // Preset handling, called with the API mutex held.
 const DronePreset &currentPreset();
-// The OSD rows the current quad's video shows (13 NTSC, else FPV_OSD_ROWS).
+// The OSD rows the current quad's video shows (13 when its camera preset asks
+// for NTSC's 13 rows, else FPV_OSD_ROWS).
 int osdVisibleRows();
+// The current quad has an analog NTSC camera: 240 lines a field.
+bool osdNtscLines();
 fpv_result selectPreset(const std::string &nameOrFile, bool applyToFlight);
 // Erases the current quad's Betaflight EEPROM and restores its shipped preset
 // files, so it flies on libfpv's own configuration again. Disarm first.
