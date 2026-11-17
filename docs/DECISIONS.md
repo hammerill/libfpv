@@ -63,7 +63,7 @@ for v1.
     disappears.
   * SimITL's `fmt::print` and Betaflight's `printf`/`fprintf` are routed to
     libfpv's log callback. Betaflight C files are compiled with a
-    force-included header, `src/core/bf_log_redirect.h`. A game's stdout is
+    force-included header, `src/server/core/bf_log_redirect.h`. A game's stdout is
     never written to.
 * `0002-exact-contact-velocity.patch`: `StateInput::contact == 2` makes
   SimITL take the host's linear and angular velocity exactly. The existing
@@ -97,6 +97,133 @@ for v1.
   `rotorWind[4]`, the air's velocity at the centre of mass and at each
   motor hub. Every aerodynamic term works on the airspeed, the motion on
   the ground velocity (D30).
+* `0019-osd-rows-from-video-system.patch`: the fake OSD displayport has 13
+  rows when `vcd_video_system` is NTSC, 16 otherwise, as the OSD chip does;
+  Betaflight's `osdInit` then moves elements below the last row up to it
+  (D15).
+
+### D37. Client, server and shared code
+
+The source tree has three parts, built as separate CMake targets with
+their own include roots:
+
+| Part | Holds | Built as |
+| --- | --- | --- |
+| `src/shared` | libfpv's own code both sides use: presets (`config/`), collision (`world/`), the video and RC link models, the wall clock, logging, and `simapi/` (the `Server` interface and the snapshot types) | `fpv_shared` |
+| `src/server` | the simulation server: `SimServer`, the flight model, the runner, the warhead and the Betaflight glue in `core/`; `main.cpp` is `libfpv-server` | `fpv_server`, plus `simitl_core` |
+| `src/client` | the C API, the per-frame presentation, the overlay, OSD, audio and input | the `fpv` library itself |
+
+`src/web/libfpv_web.js` stays where it was: non-CMake web builds pass it to
+`--js-library` by that path.
+
+**The `Server` interface** (`simapi/server.h`) is the only way the client
+reaches the simulation, Betaflight or SimITL. Every argument and result is
+a plain value, with no callbacks and no pointers into the other side, so
+each call can be carried as a message. Betaflight's configuration logic
+(one EEPROM per quad, the first-run setup, the EEPROM upgrades, syncing the
+video system, the warm-up, reboots after an import) lives in `SimServer`.
+
+* **Channels:** the simulation pulls them each step through `ChannelSource`
+  (`input/channels.h`), which the client's `InputManager` implements.
+  Devices are still started and polled on the simulation thread.
+* **The collision world:** the client keeps its own `CollisionWorld` for its
+  rays (chase camera, wind probes, hearing) and mirrors every change to the
+  server, object ids included (`createObject(..., id)`). A server in the
+  client's process shares the client's world and ignores the mirror calls.
+* **Presets:** `DronePreset::physics` is libfpv's own `PhysicsParams`
+  (`config/physics.h`). The server turns it into SimITL's `StateInit`
+  (`toStateInit`, `flight.cpp`), so the preset code needs no SimITL header.
+* **The pilot's position** is kept on both sides (`Lib::pilotPos`), and
+  Betaflight's arming flag names are fetched once at init.
+
+**The boundary is checked.** The client and the shared code have no
+Betaflight, SimITL or `src/server` include roots. `tools/check-boundary.cmake`
+(the `license_boundary` test) also rejects any include of them through
+`third_party/`, and any client or shared file without the dual license
+line below.
+
+**Licenses.** The client and shared code (`src/client`, `src/shared`,
+`src/web`), `include/libfpv.h`, `docs/renderers` and the examples are
+`GPL-3.0-or-later OR MIT` (`LICENSE-MIT`); their contributors agreed to it.
+The server, Betaflight and SimITL stay GPL-3.0-or-later only, so a default
+build, one library holding all of it, is GPL as before.
+
+**Split builds** (`LIBFPV_SPLIT_PROCESS`, off by default, not for the web)
+run the server in `libfpv-server` (`src/server/main.cpp`). The library
+then links only the client and the shared code (`--no-undefined` proves
+nothing in it reaches the server), and `RemoteServer`
+(`client/remote_server.cpp`) carries every `Server` call there.
+
+* **Starting.** The first `Server` call (in `fpv_global_init` at the
+  latest, earlier if the game loads its world first) listens on 127.0.0.1 at a port the system picks and
+  starts `libfpv-server --port <p> --token <t>` from the library's folder
+  (`LIBFPV_SERVER` overrides). It opens two connections back, each with a
+  hello carrying the token and `wire::protocolId()`: the version, the
+  kamikaze option and the sizes of the structs that go as they are, so a
+  server from another build is refused instead of misread. A missing or
+  refused server makes `start()`, and with it `fpv_global_init`, fail with
+  the reason. One server per process: like the in-process one, it keeps
+  Betaflight booted across terminate and init.
+* **The control connection** (`simapi/wire.h`) carries the client's calls
+  in order. Calls without a result (most of them: spawn, world changes,
+  wind, heartbeat, `fpv_step`) are sent and not waited for. Calls with one
+  (snapshots, impacts, the CLI, `start`, `stop`) wait for their reply.
+  libfpv-server runs them one at a time on one thread, so a result always
+  reflects every call sent before it, as with direct calls. Plain structs
+  go as their bytes; the ones with strings or vectors (`DronePreset`,
+  `ServerConfig`, `WindState`, `HoverFeedback`) have their fields listed in
+  `wire.cpp`, which a new field must be added to.
+* **The input connection** goes the other way. `RemoteChannelSource` in
+  libfpv-server forwards each `ChannelSource` call, and a thread in the
+  client answers them from the `InputManager`: each step's channels (with
+  the previous step's hover feedback), starting and stopping the devices,
+  the radio-lost latch. The devices are thus started, polled and stopped
+  on that one thread, as on the simulation thread in-process, and the
+  keyboard hover, failsafe and manual stepping behave exactly the same. It
+  costs a round trip per step (about 0.07 ms on loopback under WSL): inside
+  the 1 ms real-time step, but `fpv_step` gets that much slower per step,
+  and the test suite takes about 4x as long. Without the game, a step gets
+  idle channels with the radio lost (failsafe).
+* **The wall clock.** The client sends its `wallEpoch()` (a
+  `steady_clock` count, system-wide) in the hello reply, so the snapshots'
+  wall times interpolate against the client's clock unchanged.
+* **The collision world.** libfpv-server's `SimServer` has its own
+  `CollisionWorld`, kept up to date by the mirror calls the client always
+  makes.
+* **Logs.** libfpv-server's lines (Betaflight's included) go over the
+  input connection and out through the game's log callback, at the level
+  the game asked for.
+* **Ending.** When the connections close (the game exits, crashes or is
+  killed), libfpv-server saves Betaflight's settings if it was running and
+  exits. At a normal exit the client asks it to first, as the in-process
+  build does. If libfpv-server dies, the client logs it once and keeps the
+  last state; the simulation is gone until the game restarts.
+* **Assets.** The OSD fonts (Betaflight Configurator's, GPL-3.0) are not
+  compiled in. They are copied to `libfpv-fonts/` next to the library, with
+  their README and the GPL text, and read from there at run time
+  (`LIBFPV_FONT_DIR` overrides the folder). The same for the shipped presets
+  (`assets/presets`, some exported from SimITL's own): `libfpv-presets/`,
+  overridden by `LIBFPV_SHIPPED_PRESET_DIR`. libfpv copies them into the
+  player's preset folder as before; with the folder missing, it logs an
+  error and flies its built-in default quad.
+* **Tested** by running the whole suite against libfpv-server: the split
+  build's `fpv_tests` goes through it, natively and on Windows.
+
+**Why:** libfpv embeds Betaflight and SimITL (GPL-3.0). A build that runs the
+simulation in its own process (libfpv-server) and keeps the client free of
+GPL code lets a mod's game-side part be under other terms. Default builds
+keep one library in the game's process with direct calls, and behave as
+before. The structure is the same in every build, so the split build cannot
+drift from the default one.
+
+**Nothing GPL-derived in the client:** the overlay's OSD element names
+(`overlay/osd_element_names.h`) are libfpv's own short descriptions, not
+the Betaflight Configurator's, and the GPL assets (fonts, shipped presets)
+ship as files in split builds.
+
+**Reversing it** means moving the files back under `src/` and calling the
+flight model and `bfb_*` from the API again. Nothing outside libfpv depends
+on the split: the public API and the exported symbols are unchanged.
 
 ## Simulation
 
@@ -111,7 +238,7 @@ right) is at (+x, +z). SimITL integrates velocities and orientation, but
 
 ### D4. Betaflight configuration goes through Betaflight's own CLI, in-process
 
-`src/core/bf_bridge.c` implements an in-memory `serialPort_t` and drives
+`src/server/core/bf_bridge.c` implements an in-memory `serialPort_t` and drives
 `cliEnter`/`cliProcess` on the simulation thread. Preset defaults, overlay
 edits and `diff all` imports are therefore just CLI commands. They go
 through the same parameter-group code as the Configurator (which uses MSP
@@ -193,6 +320,43 @@ clear and pivots on an arm, like a real quad. Contacts on motor spheres
 never bounce (restitution 0): arms and props soak up the hit. With the
 material's restitution a quad landing on an arm after a flip cartwheeled
 on over it.
+
+The last sphere is the canopy, around the FPV camera. The quad JSON's
+optional `"collision"` object sets the shape, in metres from the centre of
+mass (+Y up, +Z forward):
+
+```json
+"collision": {
+    "bodyRadius": 0.02,
+    "motorRadius": 0.017,
+    "canopy": { "offset": { "x": 0.0, "y": 0.016, "z": 0.014 }, "radius": 0.021 }
+}
+```
+
+**Every drone model must keep its camera inside its collision shape:** the
+lens (`camera.offset`) at least 13 mm (the 10 mm near plane plus 3 mm)
+inside it in every direction. This applies to every new preset. Give a
+real canopy where the quad has one, so it lands on its top like the real
+one, and treat the "canopy did not keep the camera" warning as a bug in
+the preset. The `camera_clearance` test drops every built-in preset on its
+top, nose and side and fails if a camera gets closer to the ground than
+its near plane.
+
+Why: the camera sits ahead of and above the centre, outside
+the body sphere on most frames: upside down the Fluid75's lens rested on
+the ground (0 mm), the Air65 II's 4 mm and the 3" Slayer's 9.8 mm above
+it, all inside the 10 mm near plane, so the ground was clipped away and the
+FPV view looked through it. `ensureCameraClearance()` makes every preset
+keep its lens `kCameraClearance` (near plane + 3 mm) inside the canopy:
+without one it is a sphere of that radius on the lens, and a canopy too
+small for its camera grows, with a warning. One sphere is enough for the
+guarantee: a surface closer than that to the lens is inside the sphere,
+so it is pushed out like any contact. The canopy is part of the body
+(motor -1): it bounces with the material's restitution and its hits
+damage all props. The Air65 II's own canopy stands above its ducts, so it
+rests on its top tilted on the canopy and two ducts, as the real whoop
+does; its tune's `small_angle = 180` then lets Betaflight arm it there,
+which the turtle test allows.
 
 ### D10. Warm-up, so a fresh drone can arm immediately
 
@@ -430,7 +594,7 @@ comes after about 0.5 s instead of 0.7 s (34 km/h at 0.25 s instead of
 the quad settle for 1 s after the teleport before it punches; the wobble
 from the teleport had been costing about 10 % of the thrust.
 
-### D30. Wind (patch `0017`, `src/world/wind.*`)
+### D30. Wind (patch `0017`, `src/shared/world/wind.*`)
 
 Games have weather, and a quad in wind is a different thing to fly: it
 leans into the wind to hold position, drifts in angle mode, gets bumped
@@ -591,6 +755,33 @@ format as the overlay, so a host needs only one renderer.
 `fpv_osd_render_rgba` rasterises on the CPU for hosts that prefer a
 texture. SimITL's OSD canvas is the 30×16 analog grid. "HD look" uses the
 bold font in a 16:9 viewport; it does not add an HD (53×20) canvas.
+
+**NTSC shows 13 rows (2026-11).** A real OSD chip fits 13 rows of 18-line
+glyphs in NTSC's 240 field lines, and Betaflight's displayport says so:
+elements below row 12 move up to it at boot. libfpv used to draw 16 rows on
+every camera, so an NTSC picture got its glyphs cut or squeezed (D34).
+Betaflight's video system now follows the quad's camera: `vcd_video_system`
+is NTSC for an analog NTSC camera, PAL otherwise (digital keeps the 16-row
+canvas), set by the first-run configuration, a diff import (which starts
+from `defaults`) and a check whenever a quad is activated or its camera
+changes, which reboots Betaflight when it changes (SimITL patch `0019`
+gives the displayport its rows). The first-run layout has an NTSC
+version (the bottom elements two rows up, the middle ones one), and a
+layout still exactly libfpv's default for the other system is swapped for
+it; a player's own layout is left to Betaflight, which moves what falls
+below row 12 onto it, as a real flight controller does. The F8 OSD editor
+and `fpv_osd_draw_data` (the same grid as the video feed draws it) follow
+`osdVisibleRows()`, and so does the kamikaze build's centred OSD.
+`frame.osd` stays 30×16: rows 13 to 15 are blank on NTSC.
+
+*Only where the camera preset asks (2026-11).* Making every NTSC camera
+13 rows was wrong for most quads: the Freestyler and the Nomade (Caddx
+Ratel 2) lost their bigger 16-row layout. NTSC's 13 rows are now a camera
+preset's `"osdRows": 13` (only the BetaFPV C03, the Air65 II's, whose DVR
+D34 measures); every other camera keeps 16 rows and Betaflight's video
+system PAL, NTSC picture or not (`presetNtsc()`). The feed tells the
+renderers in `fpv_video_feed.osd_rows`; a renderer reading a libfpv older
+than it keeps 13 rows on NTSC.
 
 ### D15b. RC packets at a link's rate; a fast Configurator (Betaflight patch `0011`, SimITL patch `0018`)
 
@@ -915,8 +1106,10 @@ scale it bilinearly into the camera's aspect with black bars, bobbing the
 interlaced fields half a line. On analog the OSD is drawn into the signal,
 because the flight controller's OSD chip writes into the video before the
 VTX, so it tears, rolls and drowns in snow with the picture. Pixelation
-with nearest filtering was rejected: goggles interpolate, and blocky pixels
-read as a retro game, not a video feed. In both renderers
+with nearest filtering was rejected for the picture: goggles interpolate,
+and blocky pixels read as a retro game, not a video feed. The scaler keeps
+each step between two samples to about a screen pixel ("sharp bilinear"),
+which leaves the soft picture as it was and the OSD's pixels crisp. In both renderers
 (`fpv_video_gl3.h`, `fpv_video_gl2.h`) the signal shader is built as three
 programs, one per mode (lens only, analog, digital), not one that branches
 on the mode: as one, ANGLE's Direct3D 11 backend (Chrome and Edge on
@@ -943,6 +1136,136 @@ BetaFPV C03 on its Matrix 1S AIO VTX at 25 mW (1S brownouts).
 
 Reversing: both settings off is the old picture without its static. The
 old `fpv_video_state` fields remain, derived from the new budget.
+
+**Calibrated against a DVR (2026-11).** A five-minute DVR of an Air65 II
+(25 mW, C03 camera, NTSC) flown around and inside a parked car, recorded
+by Skyzone Cobra X V4 goggles, put next to the same conditions through the
+model (a still from the DVR as the scene, the link scripted), showed five
+things the first version got wrong. The goggles' look follows the Cobra X.
+
+- *Never noisy up close.* At a few metres a whoop's carrier is 50-60 dB
+  over the noise, so even a 30 dB fade stayed clean, while the real feed
+  glitches near the pilot: a torn, sparkling band for a field, now and then,
+  much more often among reflections (inside the car). That is multipath
+  distortion: when echoes cancel the direct path, the FM demodulator's phase
+  jumps (clicks) whatever the carrier's strength. Each line's CNR now adds,
+  in power, a distortion `kVideoMultipathMarginDb` (17 dB) under the
+  selected antenna's fade, so it is reached only in deep fades. At -50 dBm
+  and 5 m/s: with K = 3.3 (a whoop 1 m over the ground) 1.6 % of the fields
+  sparkle and the colour is thrown off every 7 s; among reflections (K = 1)
+  7 % and every 2 s; with a clear line of sight (K = 10) hardly ever (none in
+  two minutes). It drives clicks and sync kicks, not
+  the FM grain, the antenna switch's glitch, the colour killer or vertical
+  sync, which follow the thermal CNR (the burst and the vertical sync are
+  long, averaged pulses that ride it out), so the picture never rolls or
+  goes grey up close.
+- *Colours too tame.* On a weak or hit signal the real decoder's colour goes
+  wrong, not away. The colour killer now acts only once the burst is really
+  gone (field CNR under -6 dB, back over -2), colour speckle is finer and
+  stronger, and clicks come mostly in the bright parts of the picture
+  (whites sparkle first; dark grass stays clean). A click is a speck a
+  sample or two long, as often coloured as dark, not the comet with a
+  fading tail it was: lone black dashes over a clean sky are not in the DVR.
+  The goggles show clicks in dense bands, so a line with few of them
+  (under ~1.5 per line) keeps fewer still, and the odd lone one is gone. A band of hit lines (25 of them two times in three), a hit or a
+  surge throws the decoder's subcarrier and colour gain off: for 2-5 fields
+  the colour is oversaturated (`chroma_boost`), turned (up to half a turn,
+  drifting down the picture), sweeping across the line (`hue_sweep`) and the
+  highlights tinted (`chroma_tint`), then it locks again within ~0.1 s, and
+  not again for 0.25-0.75 s. The DVR shows exactly that after a glitch
+  inside the car: red LEDs turned magenta, then a neon green and purple
+  picture for four or five frames.
+- *Dark lines across the picture.* The ESC's diagonal stripes and the
+  motors' hum bars were on for every analog VTX and crawled over the whole
+  picture. The DVR has none: a decent VTX filters its supply. They now
+  start above `powerNoise` 0.35 (the cheap VTX keeps them).
+- *Surges and hits.* A crash flip or a punch on a whoop's 1S supply tears a
+  band of lines sideways for a field: the line PLL holds the offset over the
+  band (it decays 0.5 % a line, not 14 %), and a line shifted past its end
+  shows the black porch and then its own start, as the DVR's crash flip
+  does. The chance follows the throttle's rise per second and `powerNoise`;
+  a hit makes one band, not one per field while the jolt decays.
+- *A soft picture and a mangled OSD.* The luma low-pass was twice too soft
+  (its -6 dB point sat at half of `luma_cycles`), so edges now rise over
+  about two samples with the camera's and the goggles' halos, like the
+  DVR's. The OSD was drawn at 3 % / 4 % margins into a linear 640 × 480
+  texture and then through the camera's filters: 16 rows of 18 glyph lines
+  squeezed onto 13.8 field lines each, then blurred and sharpened, so
+  glyphs lost rows and grew coloured garbage at the corners. It is now built
+  the way the OSD chip (MAX7456 / AT7456E) writes it: 30 × 16 cells of 12 ×
+  18 font pixels, one field line per glyph row, switched in after the
+  camera (the picture's colour off under it), softened only a little by the
+  link, with faint colour dots where its steps ring in the colour filter.
+  The DVR's cells are 24 samples by 18 field lines, the 30 columns across
+  the whole line (it starts 9 samples in, which cuts column 29), and NTSC
+  shows 13 rows: 234 of the 240 lines.
+  libfpv first squeezed its 16 rows into NTSC by cutting glyph rows, which
+  cut icons (the battery's top, the LQ bars) and drew the glyphs too tall
+  for their width; NTSC now has 13 rows like the real thing (D15), every
+  glyph complete, PAL its 16 rows in 288 lines. The grid is looked up at
+  each field's own frame line (interlaced, as the chip writes it) between
+  the four nearest font pixels, each step kept to about a sample or a
+  line, so it can take a scale across (`S.x`) and down (`S.y`) with every
+  glyph row kept and the edges crisp.
+
+  *The DVR's aspect (2026-11).* A scale of 0.95 around the centre (a margin
+  all round) made the OSD look too tall next to the DVR. The DVR records
+  720 × 480 with no aspect flag, so players show it at 3:2, a font pixel
+  square: in its frame the cells are exactly 24 × 36 pixels (the chip's
+  2 samples by 1 field line, unscaled), column 0 starts 9 pixels in
+  (column 29 is cut at the right edge) and NTSC's row 0 4 frame lines
+  above the top (a "0"'s white starts on line 402 of row 11). The grid is
+  now drawn exactly that way (`S` = 1, 1), and a camera preset's
+  `displayAspect` (3:2 on the BetaFPV C03 and the Caddx Ratel 2) sets
+  `fpv_video_feed.display_aspect`: the renderers fit that rectangle and
+  stretch the camera's 4:3 picture into it, keeping its field of view, as
+  the DVR does. Measured on a libfpv screenshot scaled to 720 × 480, every
+  glyph edge lands within a pixel of the DVR's. Without `displayAspect` the
+  picture stays at the camera's aspect, the OSD the same grid. The field
+  crosses the client/server wire, so its protocol is version 2.
+
+  *Only on the Air65 II (2026-11).* The 3:2 picture and 13 rows suit the
+  Air65 II's DVR, not the Caddx Ratel 2's quads, which show their 4:3
+  picture again with all 16 rows (D15): `displayAspect` is now only on the
+  BetaFPV C03. 16 rows (288 glyph lines) can't fit NTSC's 240 lines
+  unscaled, so the grid is scaled to 0.95 of the picture across and down
+  around its centre (a glyph row 1.58 frame lines, a font pixel 1.9
+  samples), still looked up between the four nearest font pixels, so every
+  glyph row stays and the edges stay crisp; `fpv_osd_draw_data` draws the
+  same. 13 rows and PAL keep the chip's unscaled grid. The camera's
+  `osdRows` crosses the wire: protocol version 3. The chip's white sits over the picture's
+  peak (110 %), so the strokes clip to white as the DVR's do. No renderer draws the
+  in-signal OSD with the host's OSD renderer any more: they build it from
+  `frame.osd` and `fpv_texture_get(FPV_TEXTURE_OSD_FONT)`.
+- *Coloured glyphs.* In the DVR some glyphs come out a solid colour that
+  flips to its complement every field: a green "4" then a magenta one, a
+  magenta "mA" then a green one, while wide glyphs ("0", "8") stay white.
+  It is NTSC cross-colour: the goggles' decoder separates colour with a
+  notch, and the OSD's one-pixel strokes sit near the subcarrier's period,
+  so they demodulate into a hue set by where they fall against the
+  subcarrier, which turns half a cycle a field. The renderers demodulate
+  the OSD's luma against the subcarrier over ±4 samples (σ 2.5) near a
+  glyph and add 0.35 of it. Under noise the glyphs get tinted in patches on
+  top (the noise's colour, three times stronger over the OSD's strokes).
+
+**Direct3D 9 (`fpv_video_d3d9.h`).** GTA San Andreas FPV had its own HLSL
+port of the GL3 shaders, so every renderer change meant porting it again in
+the mod. The port now lives in libfpv next to the GL headers, with what the
+mod needed: shaders compiled by `d3dcompiler_47.dll` on any thread (about
+1 s, which the mod spends on a thread at startup), the game's UI kept in
+the picture as an optional premultiplied texture, the device's state saved
+with a state block, and `FPV_VIDEO_D3D9_TEXTURE_GET` /
+`FPV_VIDEO_D3D9_OSD_DRAW_DATA` / `FPV_VIDEO_D3D9_LOG` for a game that
+loads libfpv at runtime. A renderer change is now made in libfpv's three
+headers, and the mod only rebuilds. HLSL reserves `line`, so that shader
+says `ln`.
+
+Under all of it there is now the camera's and the receiver's own fine grain
+(0.012), which the DVR shows even with the drone lying still a metre away.
+The new fields sit after `lines`, so an older host's `struct_size` leaves
+them out, and the renderers check that they are covered (an older libfpv:
+no upsets). The Cobra's habit of brightening the picture while the OSD is
+hidden (no OSD white to keep room for) is not reproduced.
 
 ### D35. The About tab: what the binary was built from
 
@@ -978,7 +1301,7 @@ The tab ends with the credits and licenses: libfpv's GPL-3.0-or-later and
 what it means for mods, Betaflight, SimITL, Dear ImGui, SDL3 (native),
 libwebsockets (native), {fmt} and nlohmann/json.
 
-### D36. The RC link: ExpressLRS packets, LQ and dynamic power (`src/rc/rc_link.*`, patch `0013`)
+### D36. The RC link: ExpressLRS packets, LQ and dynamic power (`src/shared/rc/rc_link.*`, patch `0013`)
 
 Before this the radio link was perfect unless the radio was unplugged
 (`radioLost`). The option (off by default) simulates
@@ -1109,7 +1432,7 @@ The full test suite passes on Windows 11 (run from WSL interop).
 SimITL's `string_light.c` re-implements libc's ctype and `strcasecmp`
 functions. With whole-archive linking (D20) these collide with msvcrt, so
 it is excluded on every platform and the platform libc is used. MinGW's
-missing `strcasestr` comes from `src/core/bf_compat.c`. Betaflight C files
+missing `strcasestr` comes from `src/server/core/bf_compat.c`. Betaflight C files
 are compiled with `_GNU_SOURCE`, so `strcasestr` has a real prototype
 rather than an implicit `int` that would truncate the pointer. Betaflight's
 structs use GCC bitfield layout (`-mno-ms-bitfields`), applied to C and
@@ -1160,14 +1483,14 @@ with `emcmake cmake`.
   in ticking still auto-pauses; `fpv_overlay_render`, so the radio wizard
   sees live sticks without a drone). `Runner::call` already ran jobs
   inline without a thread. Hosts need no change.
-* **Gamepad API instead of SDL.** `src/input/web_backend.cpp` gives the same
+* **Gamepad API instead of SDL.** `src/client/input/web_backend.cpp` gives the same
   `RawDevice`s: devices with the browser's "standard" mapping have the
   gamepad layout (buttons renumbered to SDL's), the rest are raw axes,
   and the radio name list is shared with the SDL backend. A game that uses
   SDL on the web brings its own, so libfpv embedding one would only add
   size.
 * **No Configurator.** Its WebSocket server cannot exist in a page.
-  libwebsockets is left out, `src/core/serial_ws_web.c` opens Betaflight's
+  libwebsockets is left out, `src/server/core/serial_ws_web.c` opens Betaflight's
   UARTs with no transport, and `FPV_INIT_NO_CONFIGURATOR` is forced. The
   overlay's tab says why and points to the CLI and diff import. Making it
   work would mean hosting the Configurator in the same page with a
@@ -1367,7 +1690,7 @@ flight controller, reads them. The radio wizard adds both steps after the
 OSD switch, both skippable; the keyboard fallback uses K (bomb toggle) and
 X (explode, held), the gamepad West (toggle) and the right shoulder.
 
-**Rules,** in `src/sim/kamikaze.cpp` (`Warhead`, simulation thread):
+**Rules,** in `src/server/sim/kamikaze.cpp` (`Warhead`, simulation thread):
 
 * The motors do not arm while the bomb arm switch is on, and a destroyed
   drone never arms. libfpv holds AUX1 low towards Betaflight, and keeps

@@ -1,0 +1,41 @@
+diff --git a/extern/betaflightext/src/main/io/displayport_fake.c b/extern/betaflightext/src/main/io/displayport_fake.c
+--- a/extern/betaflightext/src/main/io/displayport_fake.c
++++ b/extern/betaflightext/src/main/io/displayport_fake.c
+@@ -5,6 +5,7 @@
+ 
+ #include "displayport_fake.h"
+ #include "drivers/display.h"
++#include "drivers/osd.h"
+ #include "common/utils.h"
+ #include "pg/vcd.h"
+ 
+@@ -20,6 +21,11 @@
+ // 0 foreground, 1 background
+ static uint8_t currentLayer = 0;
+ 
++// The rows the video system shows, as the OSD chip does: NTSC's 13 (the
++// buffers keep 16, the rest stays blank), PAL's and the rest 16. Betaflight
++// moves elements below the last row up to it (osdInit).
++static uint8_t displayRows = VIDEO_LINES;
++
+ static displayPort_t fakeDisplayPort;
+ 
+ extern unsigned int resumeRefreshAt;
+@@ -137,7 +143,7 @@
+ }
+ 
+ static void resync(displayPort_t *displayPort) {
+-    displayPort->rows = VIDEO_LINES;
++    displayPort->rows = displayRows;
+     displayPort->cols = CHARS_PER_LINE;
+ }
+ 
+@@ -250,7 +256,7 @@
+ //displayPort_t *max7456DisplayPortInit(const struct vcdProfile_s *vcdProfile) {
+ 
+ bool max7456DisplayPortInit(const vcdProfile_t *vcdProfile, displayPort_t **displayPort) {
+-    UNUSED(vcdProfile);
++    displayRows = vcdProfile && vcdProfile->video_system == VIDEO_SYSTEM_NTSC ? 13 : VIDEO_LINES;
+ 
+     //printf("display init\n");
+     displayInit(&fakeDisplayPort, &fakeDispVTable, DISPLAYPORT_DEVICE_TYPE_MSP);

@@ -8,7 +8,7 @@
 //    survive a reload with no save call from the game.
 //  - Clipboard for the overlay: copy writes the system clipboard; Ctrl+V and
 //    the Import tab's Paste button read it (the browser may ask once).
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: GPL-3.0-or-later OR MIT
 
 addToLibrary({
   $libfpvDataDir: () => Module['libfpvDataDir'] || '/libfpv',

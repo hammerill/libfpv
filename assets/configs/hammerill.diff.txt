@@ -16,7 +16,10 @@ signature
 
 # feature
 feature -TELEMETRY
-feature -AIRMODE
+
+# beeper
+beeper -BAT_CRIT_LOW
+beeper -BAT_LOW
 
 # aux
 aux 0 0 0 1700 2100 0 0

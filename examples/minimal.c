@@ -6,7 +6,7 @@
  * the scripted channels with nothing at all (libfpv reads the player's
  * radio itself) and draws frame.camera / frame.osd instead of printing.
  *
- * SPDX-License-Identifier: GPL-3.0-or-later
+ * SPDX-License-Identifier: GPL-3.0-or-later OR MIT
  */
 #include <stdio.h>
 

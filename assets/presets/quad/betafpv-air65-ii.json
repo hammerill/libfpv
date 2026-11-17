@@ -51,6 +51,10 @@
     },
     "collision": {
         "bodyRadius": 0.02,
-        "motorRadius": 0.017
+        "motorRadius": 0.017,
+        "canopy": {
+            "offset": { "x": 0.0, "y": 0.016, "z": 0.014 },
+            "radius": 0.021
+        }
     }
 }

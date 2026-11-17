@@ -28,6 +28,7 @@ option(LIBFPV_WITH_OVERLAY "Build the Dear ImGui overlay" ON)
 option(LIBFPV_BUILD_TESTS "Build the test suite" ON)
 option(LIBFPV_BUILD_EXAMPLES "Build the examples" ON)
 option(LIBFPV_KAMIKAZE "Kamikaze FPV: warhead with bomb arm and explode switches (docs/INTEGRATION.md#kamikaze-builds)" OFF)
+option(LIBFPV_SPLIT_PROCESS "Client-only libfpv: the simulation runs in libfpv-server (docs/DECISIONS.md, D37)" OFF)
 option(LIBFPV_KAMIKAZE_PROMOTE "Kamikaze tab that points to the Kamikaze version instead (docs/INTEGRATION.md#kamikaze-builds)" OFF)
 if(LIBFPV_KAMIKAZE AND LIBFPV_KAMIKAZE_PROMOTE)
   # both fill the overlay's Kamikaze tab
@@ -36,6 +37,12 @@ endif()
 if(EMSCRIPTEN)
   # Browser builds read radios and gamepads through the Gamepad API (docs/WEB.md)
   set(LIBFPV_WITH_SDL OFF)
+endif()
+if(LIBFPV_SPLIT_PROCESS)
+  if(EMSCRIPTEN)
+    message(FATAL_ERROR "LIBFPV_SPLIT_PROCESS: a web page cannot start libfpv-server; build without it")
+  endif()
+  message(STATUS "libfpv: split build (the simulation in libfpv-server, OSD fonts in libfpv-fonts/, shipped presets in libfpv-presets/)")
 endif()
 
 include(cmake/SimITLCore.cmake)
@@ -47,37 +54,104 @@ file(GLOB_RECURSE LIBFPV_PRESET_FILES CONFIGURE_DEPENDS
   ${PROJECT_SOURCE_DIR}/assets/presets/*.diff.txt)
 list(SORT LIBFPV_PRESET_FILES)
 set(LIBFPV_GEN_DIR ${CMAKE_BINARY_DIR}/generated)
-libfpv_embed_files(${LIBFPV_GEN_DIR}/embedded_presets.cpp kEmbeddedPresets
-  ${PROJECT_SOURCE_DIR}/assets/presets ${LIBFPV_PRESET_FILES})
 file(GLOB LIBFPV_FONT_FILES CONFIGURE_DEPENDS ${PROJECT_SOURCE_DIR}/assets/fonts/*.mcm)
-libfpv_embed_files(${LIBFPV_GEN_DIR}/embedded_fonts.cpp kEmbeddedFonts
-  ${PROJECT_SOURCE_DIR}/assets/fonts ${LIBFPV_FONT_FILES})
+if(NOT LIBFPV_SPLIT_PROCESS)
+  # The shipped presets (some exported from SimITL's) and Betaflight's OSD
+  # fonts, both GPL-3.0, inside the library; split builds ship them as
+  # files instead (below)
+  libfpv_embed_files(${LIBFPV_GEN_DIR}/embedded_presets.cpp kEmbeddedPresets
+    ${PROJECT_SOURCE_DIR}/assets/presets ${LIBFPV_PRESET_FILES})
+  libfpv_embed_files(${LIBFPV_GEN_DIR}/embedded_fonts.cpp kEmbeddedFonts
+    ${PROJECT_SOURCE_DIR}/assets/fonts ${LIBFPV_FONT_FILES})
+endif()
 
 # --- libfpv --------------------------------------------------------------------
-set(LIBFPV_SOURCES
-  src/api.cpp
-  src/api_present.cpp
-  src/frame.cpp
-  src/config/bf_config.cpp
-  src/config/preset.cpp
-  src/input/input.cpp
-  src/input/sdl_backend.cpp
-  src/input/web_backend.cpp
-  src/sim/flight.cpp
-  src/sim/runner.cpp
-  src/util/fs.cpp
-  src/util/log.cpp
-  src/util/platform.cpp
-  src/world/collision.cpp
-  src/world/wind.cpp
-  src/osd/osd.cpp
-  src/audio/synth.cpp
-  src/video/video_link.cpp
-  src/rc/rc_link.cpp
-  ${LIBFPV_GEN_DIR}/embedded_presets.cpp
-  ${LIBFPV_GEN_DIR}/embedded_fonts.cpp
+# Three parts with their own include roots (docs/DECISIONS.md, D37):
+#   src/shared  libfpv's own code both sides use (presets, collision, the
+#               links, the Server interface); never Betaflight or SimITL
+#   src/server  the simulation server: Betaflight, SimITL's flight model and
+#               the real-time loop (GPL-3.0-or-later, like Betaflight)
+#   src/client  the C API, presentation, overlay, OSD, audio and input
+# The client and the shared code never see the server's or the flight
+# model's headers; tools/check-boundary.cmake also rejects any include of
+# Betaflight or SimITL in them (the license_boundary test).
+#   src/web     the browser runtime (libfpv_web.js); its path is public:
+#               non-CMake web builds pass it to --js-library
+
+# Build options every part compiles with.
+add_library(fpv_options INTERFACE)
+target_compile_definitions(fpv_options INTERFACE LIBFPV_BUILD FMT_HEADER_ONLY=1)
+target_include_directories(fpv_options INTERFACE
+  ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src/shared)
+if(LIBFPV_KAMIKAZE)
+  target_compile_definitions(fpv_options INTERFACE LIBFPV_KAMIKAZE=1)
+endif()
+if(LIBFPV_KAMIKAZE_PROMOTE)
+  target_compile_definitions(fpv_options INTERFACE LIBFPV_KAMIKAZE_PROMOTE=1)
+endif()
+if(EMSCRIPTEN)
+  target_compile_options(fpv_options INTERFACE $<$<COMPILE_LANGUAGE:CXX>:-fwasm-exceptions>)
+endif()
+
+function(libfpv_part target)
+  set_target_properties(${target} PROPERTIES
+    C_VISIBILITY_PRESET hidden
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN ON
+    POSITION_INDEPENDENT_CODE ON)
+  if(EMSCRIPTEN)
+    set_target_properties(${target} PROPERTIES POSITION_INDEPENDENT_CODE OFF)
+  endif()
+  target_link_libraries(${target} PRIVATE fpv_options)
+endfunction()
+
+add_library(fpv_shared OBJECT
+  src/shared/config/bf_config.cpp
+  src/shared/config/preset.cpp
+  src/shared/rc/rc_link.cpp
+  src/shared/util/clock.cpp
+  src/shared/util/fs.cpp
+  src/shared/util/log.cpp
+  src/shared/video/video_link.cpp
+  src/shared/world/collision.cpp
+  src/shared/world/wind.cpp)
+libfpv_part(fpv_shared)
+target_include_directories(fpv_shared PRIVATE ${PROJECT_SOURCE_DIR}/third_party)
+if(LIBFPV_SPLIT_PROCESS)
+  # the Server calls as messages over loopback sockets, both ends
+  target_sources(fpv_shared PRIVATE src/shared/ipc/socket.cpp src/shared/simapi/wire.cpp)
+endif()
+
+add_library(fpv_server OBJECT
+  src/server/sim/flight.cpp
+  src/server/sim/runner.cpp
+  src/server/sim/sim_server.cpp)
+if(LIBFPV_KAMIKAZE)
+  target_sources(fpv_server PRIVATE src/server/sim/kamikaze.cpp)
+endif()
+libfpv_part(fpv_server)
+target_include_directories(fpv_server PRIVATE
+  ${PROJECT_SOURCE_DIR}/src/server
+  ${PROJECT_SOURCE_DIR}/src/shared  # before SimITL's own util/ and sim/
+  ${SIMITL_DIR}/src
+  ${SIMITL_DIR}/lib
+  ${FMT_DIR}/include)
+
+set(LIBFPV_CLIENT_SOURCES
+  src/client/api.cpp
+  src/client/api_present.cpp
+  src/client/frame.cpp
+  src/client/input/input.cpp
+  src/client/input/sdl_backend.cpp
+  src/client/input/web_backend.cpp
+  src/client/osd/osd.cpp
+  src/client/audio/synth.cpp
+  src/client/util/platform.cpp
   ${LIBFPV_GEN_DIR}/build_info.cpp
 )
+if(NOT LIBFPV_SPLIT_PROCESS)
+  list(APPEND LIBFPV_CLIENT_SOURCES ${LIBFPV_GEN_DIR}/embedded_presets.cpp ${LIBFPV_GEN_DIR}/embedded_fonts.cpp)
+endif()
 
 # The About tab's build references (commits, dirty flags, dates), refreshed
 # on every build: a commit made without re-running CMake still shows.
@@ -91,23 +165,27 @@ add_custom_target(libfpv_build_info
   COMMENT "libfpv: build references"
   VERBATIM)
 
+# libfpv itself: the client, the shared code and, in the game's process, the
+# server. Split builds leave the server out: it runs in libfpv-server.
+if(LIBFPV_SPLIT_PROCESS)
+  list(APPEND LIBFPV_CLIENT_SOURCES src/client/remote_server.cpp)
+  set(LIBFPV_PART_OBJECTS $<TARGET_OBJECTS:fpv_shared>)
+else()
+  set(LIBFPV_PART_OBJECTS $<TARGET_OBJECTS:fpv_shared> $<TARGET_OBJECTS:fpv_server>)
+endif()
 if(EMSCRIPTEN)
   # linked statically into the game's WebAssembly module
-  add_library(fpv STATIC ${LIBFPV_SOURCES})
+  add_library(fpv STATIC ${LIBFPV_CLIENT_SOURCES} ${LIBFPV_PART_OBJECTS})
 else()
-  add_library(fpv SHARED ${LIBFPV_SOURCES})
+  add_library(fpv SHARED ${LIBFPV_CLIENT_SOURCES} ${LIBFPV_PART_OBJECTS})
 endif()
 add_library(libfpv::fpv ALIAS fpv)
 add_dependencies(fpv libfpv_build_info)
+libfpv_part(fpv)
 set_target_properties(fpv PROPERTIES
   OUTPUT_NAME fpv
-  C_VISIBILITY_PRESET hidden
-  CXX_VISIBILITY_PRESET hidden
-  VISIBILITY_INLINES_HIDDEN ON
-  POSITION_INDEPENDENT_CODE ON
   VERSION ${PROJECT_VERSION}
   SOVERSION 0)
-target_compile_definitions(fpv PRIVATE LIBFPV_BUILD FMT_HEADER_ONLY=1)
 # the About tab's build type (multi-config generators decide it at build time)
 target_compile_definitions(fpv PRIVATE LIBFPV_BUILD_CONFIG=$<CONFIG>)
 target_include_directories(fpv
@@ -115,11 +193,42 @@ target_include_directories(fpv
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
   PRIVATE
-    ${PROJECT_SOURCE_DIR}/src
-    ${PROJECT_SOURCE_DIR}/third_party
-    ${SIMITL_DIR}/src
-    ${SIMITL_DIR}/lib
-    ${FMT_DIR}/include)
+    ${PROJECT_SOURCE_DIR}/src/client
+    ${PROJECT_SOURCE_DIR}/third_party)
+if(LIBFPV_KAMIKAZE)
+  # public: the kamikaze API in libfpv.h exists only with this definition
+  target_compile_definitions(fpv PUBLIC LIBFPV_KAMIKAZE=1)
+endif()
+if(LIBFPV_SPLIT_PROCESS)
+  target_compile_definitions(fpv PRIVATE LIBFPV_SPLIT_PROCESS=1)
+  # The OSD fonts and the shipped presets as files in libfpv-fonts/ and
+  # libfpv-presets/ next to the library, each with its README and the GPL
+  # text; a game ships both folders with libfpv.
+  target_compile_definitions(fpv PRIVATE LIBFPV_FONTS_EXTERNAL=1 LIBFPV_PRESETS_EXTERNAL=1)
+  set(_out $<TARGET_FILE_DIR:fpv>)
+  set(_preset_copies "")
+  foreach(_f ${LIBFPV_PRESET_FILES})
+    file(RELATIVE_PATH _rel ${PROJECT_SOURCE_DIR}/assets/presets ${_f})
+    get_filename_component(_reldir ${_rel} DIRECTORY)
+    list(APPEND _preset_copies
+      COMMAND ${CMAKE_COMMAND} -E make_directory ${_out}/libfpv-presets/${_reldir}
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_f} ${_out}/libfpv-presets/${_rel})
+  endforeach()
+  add_custom_command(TARGET fpv POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${_out}/libfpv-fonts
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${LIBFPV_FONT_FILES}
+            ${PROJECT_SOURCE_DIR}/assets/fonts/README.md ${_out}/libfpv-fonts/
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${PROJECT_SOURCE_DIR}/LICENSE
+            ${_out}/libfpv-fonts/LICENSE.txt
+    # a fresh copy, so a preset removed from assets/ doesn't linger
+    COMMAND ${CMAKE_COMMAND} -E rm -rf ${_out}/libfpv-presets
+    ${_preset_copies}
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${PROJECT_SOURCE_DIR}/assets/presets/README.md
+            ${_out}/libfpv-presets/README.md
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${PROJECT_SOURCE_DIR}/LICENSE
+            ${_out}/libfpv-presets/LICENSE.txt
+    VERBATIM)
+endif()
 
 # Betaflight registers its parameter groups in a linker section that nothing
 # references by name: link every object of the core.
@@ -151,19 +260,24 @@ if(EMSCRIPTEN)
     COMMAND ${CMAKE_RANLIB} $<TARGET_FILE:fpv>
     VERBATIM)
   # The game's link needs: C++ exceptions as WebAssembly instructions (the
-  # fastest kind; libfpv's JSON parsing catches them), the IndexedDB file
-  # system and libfpv's browser runtime (docs/WEB.md).
-  target_compile_options(fpv PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fwasm-exceptions>)
+  # fastest kind; libfpv's JSON parsing catches them; fpv_options compiles
+  # with them), the IndexedDB file system and libfpv's browser runtime
+  # (docs/WEB.md).
   target_link_options(fpv INTERFACE -fwasm-exceptions -lidbfs.js
     "SHELL:--js-library ${PROJECT_SOURCE_DIR}/src/web/libfpv_web.js")
-  set_target_properties(fpv PROPERTIES POSITION_INDEPENDENT_CODE OFF)
-else()
+elseif(NOT LIBFPV_SPLIT_PROCESS)
   target_link_libraries(fpv PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,simitl_core>" websockets)
 endif()
 
+# Betaflight's parameter groups need SimITL's linker script, wherever the
+# core is linked: libfpv, or libfpv-server in split builds.
+set(_core_script "")
+if(NOT LIBFPV_SPLIT_PROCESS AND (CMAKE_SYSTEM_NAME STREQUAL "Linux" OR WIN32))
+  set(_core_script -T${SIMITL_LINKER_SCRIPT})
+endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_options(fpv PRIVATE
-    -T${SIMITL_LINKER_SCRIPT}
+    ${_core_script}
     -Wl,--version-script=${PROJECT_SOURCE_DIR}/cmake/libfpv.map
     -Wl,--exclude-libs,ALL
     -Wl,-z,nodelete
@@ -175,9 +289,42 @@ elseif(APPLE)
     -Wl,-exported_symbols_list,${PROJECT_SOURCE_DIR}/cmake/libfpv.exp)
 elseif(WIN32)
   # libfpv.def lets MSVC hosts make an import library: lib /def:libfpv.def /machine:x64
-  target_link_options(fpv PRIVATE -T${SIMITL_LINKER_SCRIPT} -static-libgcc -static-libstdc++ -static
+  target_link_options(fpv PRIVATE ${_core_script} -static-libgcc -static-libstdc++ -static
     -Wl,--output-def,${CMAKE_BINARY_DIR}/libfpv.def)
   target_link_libraries(fpv PRIVATE ws2_32 wsock32 winmm iphlpapi userenv)
+endif()
+
+if(LIBFPV_SPLIT_PROCESS)
+  # libfpv-server: the simulation, next to the library (the game's libfpv
+  # starts it from there). GPL-3.0-or-later, like Betaflight.
+  add_executable(libfpv-server src/server/main.cpp $<TARGET_OBJECTS:fpv_shared> $<TARGET_OBJECTS:fpv_server>)
+  libfpv_part(libfpv-server)
+  target_include_directories(libfpv-server PRIVATE
+    ${PROJECT_SOURCE_DIR}/src/server
+    ${PROJECT_SOURCE_DIR}/src/shared  # before SimITL's own util/ and sim/
+    ${SIMITL_DIR}/src
+    ${SIMITL_DIR}/lib
+    ${FMT_DIR}/include)
+  # in libfpv's own folder (a DLL is a runtime file, a .so a library file)
+  if(WIN32)
+    get_target_property(_fpv_dir fpv RUNTIME_OUTPUT_DIRECTORY)
+  else()
+    get_target_property(_fpv_dir fpv LIBRARY_OUTPUT_DIRECTORY)
+  endif()
+  if(NOT _fpv_dir)
+    set(_fpv_dir ${CMAKE_CURRENT_BINARY_DIR})
+  endif()
+  set_target_properties(libfpv-server PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${_fpv_dir})
+  target_link_libraries(libfpv-server PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,simitl_core>" websockets)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_options(libfpv-server PRIVATE -T${SIMITL_LINKER_SCRIPT})
+    target_link_libraries(libfpv-server PRIVATE pthread dl m)
+  elseif(WIN32)
+    target_link_options(libfpv-server PRIVATE -T${SIMITL_LINKER_SCRIPT} -static-libgcc -static-libstdc++ -static)
+    target_link_libraries(libfpv-server PRIVATE ws2_32 wsock32 winmm iphlpapi userenv)
+  endif()
+  # built with libfpv: a game (or a test) that links libfpv gets both
+  add_dependencies(fpv libfpv-server)
 endif()
 
 if(LIBFPV_WITH_OVERLAY)
@@ -185,20 +332,14 @@ if(LIBFPV_WITH_OVERLAY)
   target_sources(fpv PRIVATE
     ${IMGUI_DIR}/imgui.cpp ${IMGUI_DIR}/imgui_draw.cpp
     ${IMGUI_DIR}/imgui_tables.cpp ${IMGUI_DIR}/imgui_widgets.cpp
-    src/overlay/overlay.cpp src/overlay/bf_cache.cpp src/overlay/radio_wizard.cpp)
+    src/client/overlay/overlay.cpp src/client/overlay/bf_cache.cpp src/client/overlay/radio_wizard.cpp)
   target_include_directories(fpv PRIVATE ${IMGUI_DIR})
 else()
-  target_sources(fpv PRIVATE src/overlay/overlay_stub.cpp)
+  target_sources(fpv PRIVATE src/client/overlay/overlay_stub.cpp)
 endif()
 
 if(LIBFPV_KAMIKAZE)
-  target_sources(fpv PRIVATE src/sim/kamikaze.cpp src/api_kamikaze.cpp)
-  # public: the kamikaze API in libfpv.h exists only with this definition
-  target_compile_definitions(fpv PUBLIC LIBFPV_KAMIKAZE=1)
-endif()
-if(LIBFPV_KAMIKAZE_PROMOTE)
-  # private: only the overlay's tab changes, the API stays the plain one
-  target_compile_definitions(fpv PRIVATE LIBFPV_KAMIKAZE_PROMOTE=1)
+  target_sources(fpv PRIVATE src/client/api_kamikaze.cpp)
 endif()
 
 if(LIBFPV_WITH_SDL)

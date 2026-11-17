@@ -2,11 +2,13 @@
  * libfpv - drop-in Betaflight-flown FPV quadcopter for any game.
  *
  * Copyright (C) 2026 libfpv contributors
- * SPDX-License-Identifier: GPL-3.0-or-later
+ * SPDX-License-Identifier: GPL-3.0-or-later OR MIT
  *
- * libfpv embeds Betaflight (via SimITL) and is licensed under the GPL-3.0.
- * Any mod or program that links libfpv must be distributed under GPL-3.0
- * compatible terms.
+ * libfpv embeds Betaflight (via SimITL), so a default build, one library
+ * holding all of it, is GPL-3.0: any mod or program that links it must be
+ * distributed under GPL-3.0 compatible terms. Split builds
+ * (LIBFPV_SPLIT_PROCESS) run Betaflight in libfpv-server instead, and the
+ * library itself is then under MIT as well (docs/PUBLISHING.md#licensing).
  *
  * Kamikaze builds (CMake -DLIBFPV_KAMIKAZE=ON, which defines LIBFPV_KAMIKAZE
  * for libfpv and for every target linking libfpv::fpv) add a warhead: bomb
@@ -54,9 +56,9 @@
 #include <stdint.h>
 
 /* The one place the version is set: CMakeLists.txt reads these three. */
-#define LIBFPV_VERSION_MAJOR 0
-#define LIBFPV_VERSION_MINOR 3
-#define LIBFPV_VERSION_PATCH 1
+#define LIBFPV_VERSION_MAJOR 1
+#define LIBFPV_VERSION_MINOR 0
+#define LIBFPV_VERSION_PATCH 3
 #define LIBFPV_STRINGIFY_(x) #x
 #define LIBFPV_STRINGIFY(x) LIBFPV_STRINGIFY_(x)
 #define LIBFPV_VERSION_STRING                                                  \
@@ -556,11 +558,12 @@ enum fpv_video_feed_flags {
     FPV_VIDEO_FEED_NOISE = 1u << 0,
     /* Draw the picture at the signal's resolution (raster_width x
      * raster_height, analog bandwidth) and at the camera's aspect
-     * (picture_aspect), with black bars around it like in goggles. */
+     * (display_aspect), with black bars around it like in goggles. */
     FPV_VIDEO_FEED_RESOLUTION = 1u << 1,
     /* Analog: the flight controller's OSD chip writes the OSD into the
-     * video before the transmitter, so it gets the noise and the blur too.
-     * Draw it into the picture, not over it. */
+     * video before the transmitter, so it gets the noise, tears and rolls
+     * too, while staying as crisp as the chip's pixels. Draw it into the
+     * picture, not over it. */
     FPV_VIDEO_FEED_OSD_IN_SIGNAL = 1u << 2
 };
 
@@ -600,7 +603,8 @@ typedef struct fpv_video_feed {
     float seed;                /* changes every field, seeds the noise */
     /* Interference from the motors and ESCs on the power wiring, a luma
      * offset of amplitude * sin(2 pi (x * cycles_per_line + line * step + phase))
-     * (x 0..1 across the line): diagonal stripes that crawl with throttle. */
+     * (x 0..1 across the line): diagonal stripes that crawl with throttle,
+     * only from a VTX with a poorly filtered supply (0 on most). */
     float interference[4];     /* amplitude, cycles per line, step per line, phase (cycles) */
     /* Digital links: the share of macroblocks lost in this frame, how much the
      * low bitrate smears the picture (0..1), and whether the goggles hold the
@@ -621,6 +625,28 @@ typedef struct fpv_video_feed {
      * Upload it as a 2 x line_count texture, nearest filtering. */
     uint32_t line_count;
     uint8_t lines[FPV_VIDEO_MAX_LINES * 8];
+    /* Analog: the goggles' colour decoder thrown off by a hit on the colour
+     * burst, for a few fields after it. All 0 while it holds (and from a
+     * libfpv older than these fields: check struct_size). The colour's extra
+     * gain (gain = 1 + chroma_boost: oversaturated), a tint added in
+     * proportion to luma (I, Q per unit of luma: highlights go green or
+     * magenta), and the hue's sweep across the line in turns (the decoder's
+     * subcarrier off frequency: rainbows across the picture). */
+    float chroma_boost;
+    float chroma_tint[2];
+    float hue_sweep;
+    /* The aspect the goggles (or a DVR) show the picture at, width / height:
+     * fit this rectangle to the screen and stretch the camera's
+     * picture_aspect picture into it (a 720 x 480 DVR shows a 4:3 NTSC
+     * camera at 3:2). Equal to picture_aspect for most cameras; 0 from a
+     * libfpv older than this field (check struct_size): use picture_aspect. */
+    float display_aspect;
+    /* Analog: the OSD rows the picture shows. 13 when Betaflight's video
+     * system is NTSC (the chip's own grid, as a DVR records it), else 16
+     * (FPV_OSD_ROWS): on NTSC's 240 lines the 16 rows are scaled to fit.
+     * 0 from a libfpv older than this field (check struct_size): 13 on NTSC,
+     * 16 on PAL. */
+    uint32_t osd_rows;
 } fpv_video_feed;
 
 typedef struct fpv_frame {

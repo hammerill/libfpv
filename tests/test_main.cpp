@@ -280,11 +280,20 @@ void testTurtle() {
         d.preset = name;
         CHECK(fpv_drone_create(&d, &s.drone) == FPV_OK, "drone_create: %s", fpv_last_error());
         s.run(1.0f);
-        CHECK(bodyUp(s.f) < -0.9f, "%s rests upside down, up %.2f", name, bodyUp(s.f));
-        s.arm();
-        CHECK(!s.armed(), "%s does not arm upside down without turtle", name);
-        CHECK(std::strstr(s.f.arming_disable_text, "ANGLE") != nullptr, "reports ANGLE: \"%s\"",
-              s.f.arming_disable_text);
+        CHECK(bodyUp(s.f) < -0.8f, "%s rests upside down, up %.2f", name, bodyUp(s.f));
+        // A whoop rests on its canopy and two ducts, tilted, and a tune with
+        // small_angle = 180 (the Air65's) arms it like that, as on the real
+        // quad. Any smaller small_angle must refuse.
+        char *o = nullptr;
+        fpv_cli_exec("get small_angle", &o);
+        bool anyAngle = o && std::strstr(o, "small_angle = 180");
+        fpv_free(o);
+        if (!anyAngle) {
+            s.arm();
+            CHECK(!s.armed(), "%s does not arm upside down without turtle", name);
+            CHECK(std::strstr(s.f.arming_disable_text, "ANGLE") != nullptr, "reports ANGLE: \"%s\"",
+                  s.f.arming_disable_text);
+        }
         s.rc.ch[4] = -1;
         s.rc.ch[7] = 1;  // turtle switch
         s.run(0.3f);
@@ -313,6 +322,43 @@ void testTurtle() {
         s.run(1.0f);
         CHECK(h.up(s.f.position) > 0.5f, "%s flies away, %.2f m", name, h.up(s.f.position));
         s.destroy();
+    }
+}
+
+// Dropped upside down, on its nose or on its side, every preset's FPV camera
+// stays further from the ground than its near plane: the canopy (or the
+// automatic sphere around the lens) keeps the camera out of the ground.
+void testCameraClearance() {
+    Host h(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1));
+    loadWorld(makeLevel(h, 100, 0));
+    struct Drop {
+        const char *what;
+        const float *axis;
+        float deg;
+    } drops[] = {{"upside down", h.F, 180},  {"upside down, nose down", h.R, 150}, {"on its nose", h.R, 90},
+                 {"on its side", h.F, 90},    {"upside down, tail down", h.R, -150}, {"rolled 160", h.F, 160}};
+    for (uint32_t i = 0; i < fpv_preset_count(); i++) {
+        const char *name = fpv_preset_name(i);
+        for (const Drop &dr : drops) {
+            Session s;
+            fpv_drone_desc d;
+            fpv_drone_desc_defaults(&d);
+            h.pos(0, 0.3f, 0, d.position);
+            float a = dr.deg * 3.14159265f / 360.0f;
+            for (int k = 0; k < 3; k++) d.rotation[k] = dr.axis[k] * std::sin(a);
+            d.rotation[3] = std::cos(a);
+            d.preset = name;
+            CHECK(fpv_drone_create(&d, &s.drone) == FPV_OK, "drone_create: %s", fpv_last_error());
+            float lowest = 1e9f, nearPlane = 0;
+            s.run(2.0f, [&](float t) {
+                if (t <= 0) return;
+                lowest = std::min(lowest, h.up(s.f.camera.position));
+                nearPlane = s.f.camera.near_plane / h.upm;
+            });
+            CHECK(lowest > nearPlane, "%s dropped %s: camera %.1f mm above the ground, near plane %.1f mm", name,
+                  dr.what, lowest * 1000, nearPlane * 1000);
+            s.destroy();
+        }
     }
 }
 
@@ -1119,7 +1165,7 @@ void testOsdElementNames() {
 #if defined(LIBFPV_KAMIKAZE)
     CHECK(fpv::osdElementLabel("osd_custom_msg0_pos") == "Bomb status", "custom message 1 is the bomb status");
 #else
-    CHECK(fpv::osdElementLabel("osd_custom_msg0_pos") == "Custom message 1", "custom message 1");
+    CHECK(fpv::osdElementLabel("osd_custom_msg0_pos") == "Custom text 1", "custom message 1");
 #endif
     CHECK(fpv::osdElementLabel("osd_new_thing_pos") == "New thing", "fallback label");
     // position bits: HD column bit 10, other profiles and the type kept
@@ -1937,6 +1983,15 @@ void testOsdAudioOverlay() {
     CHECK(osdChars() == chars, "OSD back after the switch (%d of %d characters)", osdChars(), chars);
     fpv_texture tex{};
     CHECK(fpv_texture_get(FPV_TEXTURE_OSD_FONT, &tex) == FPV_OK && tex.width > 0 && tex.rgba, "OSD font texture");
+    {
+        // both fonts loaded (embedded, or from libfpv-fonts/ in split builds):
+        // each half of the atlas has opaque glyph pixels
+        int opaque[2] = {0, 0};
+        for (uint32_t y = 0; tex.rgba && y < tex.height; y++)
+            for (uint32_t x = 0; x < tex.width; x++)
+                if (tex.rgba[((size_t)y * tex.width + x) * 4 + 3] != 0) opaque[x < tex.width / 2 ? 0 : 1]++;
+        CHECK(opaque[0] > 1000 && opaque[1] > 1000, "OSD fonts loaded (%d, %d opaque pixels)", opaque[0], opaque[1]);
+    }
     for (int style = 0; style < 2; style++) {
         const fpv_draw_data *dd = fpv_osd_draw_data(&s.f, 1280, 720, (fpv_osd_style)style);
         CHECK(dd && dd->list_count == 1 && dd->total_index_count == (uint32_t)chars * 6, "OSD quads style %d", style);
@@ -2038,7 +2093,11 @@ bool osdBlank(const fpv_frame &f) {
 }
 
 // libfpv's aiming dot (Betaflight font 0x09) in the OSD's centre
-bool osdAimDot(const fpv_frame &f) { return f.osd[(FPV_OSD_ROWS / 2 - 1) * FPV_OSD_COLS + FPV_OSD_COLS / 2 - 1] == 0x09; }
+// the crosshairs' row: 7 of 16 rows, 6 of an NTSC camera's 13
+bool osdAimDot(const fpv_frame &f) {
+    const int col = FPV_OSD_COLS / 2 - 1;
+    return f.osd[6 * FPV_OSD_COLS + col] == 0x09 || f.osd[7 * FPV_OSD_COLS + col] == 0x09;
+}
 
 fpv_kamikaze_state warhead(fpv_drone *d) {
     fpv_kamikaze_state k{};
@@ -2381,10 +2440,10 @@ void testKamikazeInstall() {
     CHECK(osdHas(s.f, "!ACTIVE!"), "OSD shows !ACTIVE!");
     // the OSD line is the custom message 1 element: it moves, and the OSD
     // disable switch hides it
-    cli("set osd_custom_msg0_pos = 2434\nsave");  // column 2, row 12
+    cli("set osd_custom_msg0_pos = 2338\nsave");  // column 2, row 9: free in the NTSC and PAL layouts
     s.run(0.5f);
-    std::string row12((const char *)&s.f.osd[12 * FPV_OSD_COLS], FPV_OSD_COLS);
-    CHECK(row12.find("!ACTIVE!") != std::string::npos, "moved to row 12: \"%s\"", row12.c_str());
+    std::string row9((const char *)&s.f.osd[9 * FPV_OSD_COLS], FPV_OSD_COLS);
+    CHECK(row9.find("!ACTIVE!") != std::string::npos, "moved to row 9: \"%s\"", row9.c_str());
     s.rc.ch[9] = 1;
     s.run(0.5f);
     CHECK(!osdHas(s.f, "!ACTIVE!"), "hidden by the OSD disable switch");
@@ -3402,6 +3461,7 @@ int main(int argc, char **argv) {
     std::vector<Test> tests = {
         {"arm_disarm", testArmDisarm},
         {"turtle", testTurtle},
+        {"camera_clearance", testCameraClearance},
         {"eeprom_upgrade", testEepromUpgrade},
         {"default_diff", testDefaultDiff},
         {"second_drone_rejected", testSecondDroneRejected},

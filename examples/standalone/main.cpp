@@ -48,7 +48,7 @@
 // --kamikaze-demo flies a scripted strike, then checks the ending options,
 // and exits 0 (pass) or 1 (fail).
 //
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: GPL-3.0-or-later OR MIT
 #include <SDL3/SDL.h>
 
 #include <cmath>
