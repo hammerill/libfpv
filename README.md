@@ -4,23 +4,13 @@
 
 <p><a href="https://github.com/hammerill/sm64ex-fpv"><img src="https://raw.githubusercontent.com/hammerill/sm64ex-fpv/nightly/sm64-fpv.gif" alt="SM64 FPV" width=512></a></p>
 
-*(example with [sm64ex-fpv](https://github.com/hammerill/sm64ex-fpv))*
-
-<p><a href="https://github.com/hammerill/gtaiv-fpv"><img src="https://raw.githubusercontent.com/hammerill/gtaiv-fpv/main/gtaiv-fpv.gif" alt="GTA IV FPV" width=512></a></p>
-
-*(another one with [gtaiv-fpv](https://github.com/hammerill/gtaiv-fpv))*
+<p><a href="https://github.com/hammerill/portal-2-fpv"><img src="https://raw.githubusercontent.com/hammerill/portal-2-fpv/main/portal-2-fpv.gif" alt="Portal 2 FPV" width=512></a></p>
 
 <p><a href="https://github.com/hammerill/gtasa-fpv"><img src="https://raw.githubusercontent.com/hammerill/gtasa-fpv/main/gtasa-fpv.gif" alt="GTA SA FPV" width=512></a></p>
 
-*(yet another with [gtasa-fpv](https://github.com/hammerill/gtasa-fpv))*
+<p><a href="https://github.com/hammerill/gtaiv-fpv"><img src="https://raw.githubusercontent.com/hammerill/gtaiv-fpv/main/gtaiv-fpv.gif" alt="GTA IV FPV" width=512></a></p>
 
 <p><a href="https://github.com/hammerill/reVC-mac-fpv"><img src="https://raw.githubusercontent.com/hammerill/reVC-mac-fpv/main/revc-mac-fpv.gif" alt="reVC FPV" width=512></a></p>
-
-*([reVC-mac-fpv](https://github.com/hammerill/reVC-mac-fpv))*
-
-<p><a href="https://github.com/hammerill/portal-2-fpv"><img src="https://raw.githubusercontent.com/hammerill/portal-2-fpv/main/portal-2-fpv.gif" alt="Portal 2 FPV" width=512></a></p>
-
-*([portal-2-fpv](https://github.com/hammerill/portal-2-fpv))*
 
 A drop-in FPV quadcopter for any game. libfpv runs real Betaflight firmware
 (through [SimITL](https://github.com/AJ92/SimITL)) on its own 1 kHz
