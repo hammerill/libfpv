@@ -58,7 +58,7 @@
 /* The one place the version is set: CMakeLists.txt reads these three. */
 #define LIBFPV_VERSION_MAJOR 1
 #define LIBFPV_VERSION_MINOR 0
-#define LIBFPV_VERSION_PATCH 5
+#define LIBFPV_VERSION_PATCH 6
 #define LIBFPV_STRINGIFY_(x) #x
 #define LIBFPV_STRINGIFY(x) LIBFPV_STRINGIFY_(x)
 #define LIBFPV_VERSION_STRING                                                  \
@@ -1426,8 +1426,9 @@ typedef enum fpv_osd_style {
     FPV_OSD_STYLE_HD = 1       /* crisp, larger glyphs (DJI/HDZero/Walksnail look) */
 } fpv_osd_style;
 
-/* Quads for the current OSD grid, textured with FPV_TEXTURE_OSD_FONT and
- * scaled to fill a viewport of width x height pixels at 4:3 (analog) or 16:9
+/* Quads for the current OSD grid, textured with FPV_TEXTURE_OSD_FONT (a
+ * quad per run of font pixels, each one texel's colour, so nearest and
+ * bilinear filtering draw the font pixel for pixel alike) and scaled to fill a viewport of width x height pixels at 4:3 (analog) or 16:9
  * (HD), centred. Draw it with the overlay renderer. */
 FPV_API const fpv_draw_data *fpv_osd_draw_data(const fpv_frame *frame, float width, float height,
                                               fpv_osd_style style);

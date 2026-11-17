@@ -1994,8 +1994,19 @@ void testOsdAudioOverlay() {
     }
     for (int style = 0; style < 2; style++) {
         const fpv_draw_data *dd = fpv_osd_draw_data(&s.f, 1280, 720, (fpv_osd_style)style);
-        CHECK(dd && dd->list_count == 1 && dd->total_index_count == (uint32_t)chars * 6, "OSD quads style %d", style);
-        if (dd && dd->list_count) CHECK(dd->lists[0].commands[0].texture_id == FPV_TEXTURE_OSD_FONT, "OSD texture id");
+        CHECK(dd && dd->list_count == 1 && dd->total_index_count >= (uint32_t)chars * 6, "OSD quads style %d", style);
+        if (dd && dd->list_count) {
+            const fpv_draw_list &l = dd->lists[0];
+            CHECK(l.commands[0].texture_id == FPV_TEXTURE_OSD_FONT, "OSD texture id");
+            // font pixel by font pixel: each quad samples one texel's centre,
+            // so filtering never reaches a neighbouring glyph in the atlas
+            bool oneTexel = true;
+            for (uint32_t v = 0; v + 3 < l.vertex_count; v += 4)
+                for (int k = 1; k < 4; k++)
+                    oneTexel = oneTexel && l.vertices[v + k].uv[0] == l.vertices[v].uv[0] &&
+                               l.vertices[v + k].uv[1] == l.vertices[v].uv[1];
+            CHECK(oneTexel, "OSD quads each one font texel (style %d)", style);
+        }
     }
     std::vector<uint8_t> img(640 * 480 * 4);
     CHECK(fpv_osd_render_rgba(&s.f, img.data(), 640, 480, 0, FPV_OSD_STYLE_ANALOG) == FPV_OK, "OSD raster");

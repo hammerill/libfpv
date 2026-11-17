@@ -132,22 +132,43 @@ const fpv_draw_data *OsdRenderer::drawData(const uint8_t *osd, float width, floa
     float ch = hd || fitted ? (vh - 2 * marginY) / rows : ntsc ? vh * (18.0f / 240.0f) : vh / FPV_OSD_ROWS;
     DrawListStorage &l = m_buffer.newList();
     int font = style == FPV_OSD_STYLE_HD ? 1 : 0;
+    // Each glyph goes in font pixel by font pixel, as the analog video
+    // renderers' OSD chip picture does: a quad per run of same-coloured font
+    // pixels in a glyph row, every vertex of it on the centre of one atlas
+    // texel, so any filtering (games sample the atlas bilinear) gives that
+    // texel's exact colour and never reaches into the neighbouring glyphs.
+    const float fw = cw / kGlyphW, fh = ch / kGlyphH;
+    const uint32_t white = 0xFFFFFFFFu;
     for (int r = 0; r < rows; r++) {
         for (int c = 0; c < FPV_OSD_COLS; c++) {
             uint8_t g = osd[r * FPV_OSD_COLS + c];
             if (blank(g)) continue;
             float x0 = vx + marginX + c * cw, y0 = vy + marginY + r * ch;
-            float u0 = (float)((g % 16) * kGlyphW + font * kGlyphW * 16) / kAtlasW;
-            float v0 = (float)((g / 16) * kGlyphH) / kAtlasH;
-            float u1 = u0 + (float)kGlyphW / kAtlasW, v1 = v0 + (float)kGlyphH / kAtlasH;
-            uint32_t base = (uint32_t)l.vertices.size();
-            const uint32_t white = 0xFFFFFFFFu;
-            l.vertices.push_back({{x0, y0}, {u0, v0}, white});
-            l.vertices.push_back({{x0 + cw, y0}, {u1, v0}, white});
-            l.vertices.push_back({{x0 + cw, y0 + ch}, {u1, v1}, white});
-            l.vertices.push_back({{x0, y0 + ch}, {u0, v1}, white});
-            uint32_t q[6] = {base, base + 1, base + 2, base, base + 2, base + 3};
-            l.indices.insert(l.indices.end(), q, q + 6);
+            float x1 = vx + marginX + (c + 1) * cw, y1 = vy + marginY + (r + 1) * ch;
+            int ax0 = (g % 16) * kGlyphW + font * kGlyphW * 16, ay0 = (g / 16) * kGlyphH;
+            for (int py = 0; py < kGlyphH; py++) {
+                const uint8_t *row = &m_atlas[((size_t)(ay0 + py) * kAtlasW + ax0) * 4];
+                float top = y0 + py * fh, bottom = py + 1 == kGlyphH ? y1 : y0 + (py + 1) * fh;
+                for (int px = 0; px < kGlyphW;) {
+                    const uint8_t *s = row + px * 4;
+                    if (!s[3]) {
+                        px++;
+                        continue;
+                    }
+                    int end = px + 1;
+                    while (end < kGlyphW && std::memcmp(row + end * 4, s, 4) == 0) end++;
+                    float left = x0 + px * fw, right = end == kGlyphW ? x1 : x0 + end * fw;
+                    float u = (ax0 + px + 0.5f) / kAtlasW, v = (ay0 + py + 0.5f) / kAtlasH;
+                    uint32_t base = (uint32_t)l.vertices.size();
+                    l.vertices.push_back({{left, top}, {u, v}, white});
+                    l.vertices.push_back({{right, top}, {u, v}, white});
+                    l.vertices.push_back({{right, bottom}, {u, v}, white});
+                    l.vertices.push_back({{left, bottom}, {u, v}, white});
+                    uint32_t q[6] = {base, base + 1, base + 2, base, base + 2, base + 3};
+                    l.indices.insert(l.indices.end(), q, q + 6);
+                    px = end;
+                }
+            }
         }
     }
     if (!l.indices.empty()) {
@@ -169,23 +190,19 @@ void OsdRenderer::rasterize(const uint8_t *osd, uint8_t *rgba, uint32_t width, u
     const fpv_draw_data *dd = drawData(osd, (float)width, (float)height, style, rows, ntscLines);
     if (!dd->list_count) return;
     const fpv_draw_list &l = dd->lists[0];
-    // every glyph is an axis-aligned quad: 4 vertices
+    // every run of font pixels is an axis-aligned quad (4 vertices) of one
+    // texel's colour; it covers the pixels whose centres lie inside it, so
+    // neighbouring quads never overlap or leave gaps
     for (uint32_t q = 0; q + 3 < l.vertex_count; q += 4) {
         const fpv_draw_vertex &a = l.vertices[q], &c = l.vertices[q + 2];
-        int x0 = (int)std::floor(a.pos[0]), y0 = (int)std::floor(a.pos[1]);
-        int x1 = (int)std::ceil(c.pos[0]), y1 = (int)std::ceil(c.pos[1]);
-        for (int y = std::max(0, y0); y < std::min((int)height, y1); y++) {
-            float tv = (y + 0.5f - a.pos[1]) / (c.pos[1] - a.pos[1]);
-            int ay = (int)((a.uv[1] + (c.uv[1] - a.uv[1]) * tv) * kAtlasH);
-            for (int x = std::max(0, x0); x < std::min((int)width, x1); x++) {
-                float tu = (x + 0.5f - a.pos[0]) / (c.pos[0] - a.pos[0]);
-                int ax = (int)((a.uv[0] + (c.uv[0] - a.uv[0]) * tu) * kAtlasW);
-                ax = std::clamp(ax, 0, kAtlasW - 1);
-                ay = std::clamp(ay, 0, kAtlasH - 1);
-                const uint8_t *s = &m_atlas[((size_t)ay * kAtlasW + ax) * 4];
-                if (s[3]) std::memcpy(rgba + (size_t)y * stride + (size_t)x * 4, s, 4);
-            }
-        }
+        int x0 = (int)std::ceil(a.pos[0] - 0.5f), y0 = (int)std::ceil(a.pos[1] - 0.5f);
+        int x1 = (int)std::ceil(c.pos[0] - 0.5f), y1 = (int)std::ceil(c.pos[1] - 0.5f);
+        int ax = std::clamp((int)(a.uv[0] * kAtlasW), 0, kAtlasW - 1);
+        int ay = std::clamp((int)(a.uv[1] * kAtlasH), 0, kAtlasH - 1);
+        const uint8_t *s = &m_atlas[((size_t)ay * kAtlasW + ax) * 4];
+        for (int y = std::max(0, y0); y < std::min((int)height, y1); y++)
+            for (int x = std::max(0, x0); x < std::min((int)width, x1); x++)
+                std::memcpy(rgba + (size_t)y * stride + (size_t)x * 4, s, 4);
     }
 }
 
