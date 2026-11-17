@@ -1,0 +1,3 @@
+# Patches must keep their exact bytes: with core.autocrlf=true (the Git for
+# Windows default) a patch would get CRLF lines and no longer apply.
+*.patch -text

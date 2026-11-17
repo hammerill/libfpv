@@ -25,21 +25,39 @@ function(libfpv_apply_patches source_dir patch_dir)
   execute_process(COMMAND git diff --quiet WORKING_DIRECTORY "${source_dir}" RESULT_VARIABLE _dirty)
   if(NOT _dirty EQUAL 0)
     # A tree patched before newer patches were added to the series would
-    # otherwise silently miss them: apply each patch that applies forward
-    # but not in reverse (i.e. is not in the tree yet).
-    foreach(_patch IN LISTS _patches)
-      execute_process(COMMAND git apply --check -R --whitespace=nowarn "${_patch}"
+    # otherwise silently miss them. Find them by taking the series off a
+    # copy of the tree's index, last patch first: a patch that comes off is
+    # in the tree. (One patch at a time against the tree does not work: a
+    # later patch that edits its lines makes it fit neither way.)
+    execute_process(COMMAND git rev-parse --git-path index WORKING_DIRECTORY "${source_dir}"
+      OUTPUT_VARIABLE _index OUTPUT_STRIP_TRAILING_WHITESPACE)
+    get_filename_component(_index "${_index}" ABSOLUTE BASE_DIR "${source_dir}")
+    get_filename_component(_name "${patch_dir}" NAME)
+    set(_tmp_index "${CMAKE_BINARY_DIR}/libfpv-${_name}-patch-check.index")
+    file(COPY_FILE "${_index}" "${_tmp_index}")
+    set(_git ${CMAKE_COMMAND} -E env GIT_INDEX_FILE=${_tmp_index} git)
+    execute_process(COMMAND ${_git} add -A WORKING_DIRECTORY "${source_dir}" OUTPUT_QUIET ERROR_QUIET)
+    set(_reversed ${_patches})
+    list(REVERSE _reversed)
+    set(_missing)
+    foreach(_patch IN LISTS _reversed)
+      execute_process(COMMAND ${_git} apply --cached -R --whitespace=nowarn "${_patch}"
         WORKING_DIRECTORY "${source_dir}" RESULT_VARIABLE _rev OUTPUT_QUIET ERROR_QUIET)
-      if(_rev EQUAL 0)
-        continue()
+      if(NOT _rev EQUAL 0)
+        list(PREPEND _missing "${_patch}")
       endif()
-      execute_process(COMMAND git apply --check --whitespace=nowarn "${_patch}"
-        WORKING_DIRECTORY "${source_dir}" RESULT_VARIABLE _fwd OUTPUT_QUIET ERROR_QUIET)
-      if(_fwd EQUAL 0)
-        execute_process(COMMAND git apply --whitespace=nowarn "${_patch}"
-          WORKING_DIRECTORY "${source_dir}")
-        message(STATUS "libfpv: applied missing ${_patch}")
+    endforeach()
+    file(REMOVE "${_tmp_index}")
+    foreach(_patch IN LISTS _missing)
+      execute_process(COMMAND git apply --whitespace=nowarn "${_patch}"
+        WORKING_DIRECTORY "${source_dir}" RESULT_VARIABLE _fwd ERROR_VARIABLE _err)
+      if(NOT _fwd EQUAL 0)
+        message(FATAL_ERROR "libfpv: ${_patch} fits ${source_dir} neither forward nor in reverse. "
+          "Either the patch is broken (for example, it has CRLF lines and the files have LF), "
+          "or local changes edit its lines. Capture local changes with tools/new-patch.sh, "
+          "or reset the submodule (see \"Updating\" in README.md) and configure again.\n${_err}")
       endif()
+      message(STATUS "libfpv: applied missing ${_patch}")
     endforeach()
     message(STATUS "libfpv: ${source_dir} has local changes, assuming the rest of its patch series is applied")
     return()
