@@ -45,13 +45,26 @@ endif()
 
 # Windows loads a DLL from the exe's folder first: copy the fresh libfpv.dll
 # beside the examples on every build, so a stale copy there never shadows it
-# (and a clean build folder runs at all).
+# (and a clean build folder runs at all). A split build's libfpv.dll starts
+# libfpv-server and reads libfpv-fonts/ and libfpv-presets/ from its own
+# folder, so those come along too.
 get_target_property(_fpv_type fpv TYPE)
 if(WIN32 AND _fpv_type STREQUAL "SHARED_LIBRARY")
+  set(_split_copies "")
+  if(TARGET libfpv-server)
+    set(_split_copies
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:libfpv-server> $<TARGET_FILE_DIR:@EXAMPLE@>
+      COMMAND ${CMAKE_COMMAND} -E rm -rf $<TARGET_FILE_DIR:@EXAMPLE@>/libfpv-fonts $<TARGET_FILE_DIR:@EXAMPLE@>/libfpv-presets
+      COMMAND ${CMAKE_COMMAND} -E copy_directory $<TARGET_FILE_DIR:fpv>/libfpv-fonts $<TARGET_FILE_DIR:@EXAMPLE@>/libfpv-fonts
+      COMMAND ${CMAKE_COMMAND} -E copy_directory $<TARGET_FILE_DIR:fpv>/libfpv-presets $<TARGET_FILE_DIR:@EXAMPLE@>/libfpv-presets)
+  endif()
   foreach(_example fpv_minimal fpv_standalone)
     if(TARGET ${_example})
+      string(REPLACE "@EXAMPLE@" "${_example}" _copies "${_split_copies}")
       add_custom_command(TARGET ${_example} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:fpv> $<TARGET_FILE_DIR:${_example}>)
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:fpv> $<TARGET_FILE_DIR:${_example}>
+        ${_copies}
+        VERBATIM)
     endif()
   endforeach()
 endif()
