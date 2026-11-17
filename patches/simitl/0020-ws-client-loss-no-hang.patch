@@ -1,0 +1,77 @@
+diff --git a/extern/betaflightext/src/main/drivers/serial_ws.c b/extern/betaflightext/src/main/drivers/serial_ws.c
+index a963430..6f343e6 100644
+--- a/extern/betaflightext/src/main/drivers/serial_ws.c
++++ b/extern/betaflightext/src/main/drivers/serial_ws.c
+@@ -93,19 +93,27 @@ static int callback_minimal(struct lws *wsi, enum lws_callback_reasons reason,vo
+ 	case LWS_CALLBACK_ESTABLISHED:
+     fprintf(stderr, "LWS_CALLBACK_ESTABLISHED\n");
+     fprintf(stderr, "New connection on UART%u, %d\n", wsPort->id + 1, wsPort->clientCount);
++    // the newest client gets the port; drop what was left over for an
++    // earlier one so it does not start on a half reply
++    wsPort->port.txBufferTail = wsPort->port.txBufferHead;
+     wsPort->wsi = wsi;
+     wsPort->connected = true;
+-    if (wsPort->clientCount > 0) {
+-      break;
+-    }
+     wsPort->clientCount++;
+     fprintf(stderr, "[NEW]UART%u: %d,%d\n", wsPort->id + 1, wsPort->connected, wsPort->clientCount);
+ 		break;
+ 
+ 	case LWS_CALLBACK_CLOSED:
+     fprintf(stderr, "LWS_CALLBACK_CLOSED\n");
+-    wsPort->clientCount--;
+-    wsPort->wsi = NULL;
++    if (wsPort->clientCount > 0) {
++      wsPort->clientCount--;
++    }
++    // a stale client closing (the Configurator often reconnects before the
++    // old socket times out) must not cut off the one that replaced it
++    if (wsPort->wsi == wsi) {
++      wsPort->wsi = NULL;
++      // nobody will read what is still queued
++      wsPort->port.txBufferTail = wsPort->port.txBufferHead;
++    }
+     fprintf(stderr, "[CLS]UART%u: %d,%d\n", wsPort->id + 1, wsPort->connected, wsPort->clientCount);
+     if (wsPort->clientCount == 0) {
+       wsPort->connected = false;
+@@ -331,6 +339,13 @@ uint32_t wsTotalTxBytesFree(const serialPort_t *instance) {
+     wsPort_t *s = (wsPort_t *)instance;
+     uint32_t bytesUsed;
+ 
++    // Without a client nothing drains the buffer, and Betaflight's blocking
++    // writes (the CLI) would spin forever. Report it empty: wsWrite() drops
++    // the bytes, like a USB VCP with no host.
++    if (!s->wsi) {
++        return s->port.txBufferSize - 1;
++    }
++
+     if (s->port.txBufferHead >= s->port.txBufferTail) {
+         bytesUsed = s->port.txBufferHead - s->port.txBufferTail;
+     } else {
+@@ -371,6 +386,11 @@ void wsWrite(serialPort_t *instance, uint8_t ch) {
+ 
+   // fprintf(stderr, "%c", ch);
+ 
++  // no client: drop the byte (see wsTotalTxBytesFree)
++  if (!s->wsi) {
++    return;
++  }
++
+   // TODO: lock/thread sync ?
+ 
+   s->port.txBuffer[s->port.txBufferHead] = ch;
+diff --git a/extern/betaflightext/src/main/drivers/serial_ws.h b/extern/betaflightext/src/main/drivers/serial_ws.h
+index fd809bd..e79926e 100644
+--- a/extern/betaflightext/src/main/drivers/serial_ws.h
++++ b/extern/betaflightext/src/main/drivers/serial_ws.h
+@@ -37,7 +37,8 @@ typedef struct {
+     //server context
+     struct lws_context *context;
+     //client ?
+-    struct lws *wsi;
++    // written by the websocket thread, polled by blocking writes
++    struct lws * volatile wsi;
+ 
+     //dyad_Stream *serv;
+     //dyad_Stream *conn;
