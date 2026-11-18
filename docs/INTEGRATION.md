@@ -1492,6 +1492,14 @@ what it needed (the distances and the on/off switch come from
   - Right after the warp back in, the ped's position catches up with the
     car only on the next frame. Measure anything from the car instead (a
     respawn in front of the pilot, for example).
+  - Put the character in its seat yourself on the frame the stand-in
+    ends. SA ends it from the drone's step, after the world's update, so
+    nothing moves the ped until the next frame. It was drawn, visible
+    again, where it stood in: right at the drone's camera, with its legs
+    across the picture for one frame. That looked like a flicker every
+    time the drone came back near the car. Set its matrix from the saved
+    seat, then rebuild its frame and bone matrices at once. Do the same
+    when it goes home on foot.
 - **The price:** with the stand-in on, the population follows the drone,
   so the pilot's surroundings empty out ([Audio](#audio)). Players who
   want a living world around the pilot turn the stand-in off.
