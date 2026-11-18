@@ -684,8 +684,7 @@ void Overlay::tabRadio() {
             }
             ImGui::EndCombo();
         }
-        ImGui::SameLine();
-        ImGui::TextDisabled("(Automatic: a set-up radio, then a gamepad, then the keyboard)");
+        ImGui::TextDisabled("Automatic: a set-up radio, then a gamepad, then the keyboard.");
         if (st.preferredMissing) {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 0.35f, 0.3f, 1));
             ImGui::TextWrapped("%s is not connected. Only the keyboard flies until it is back. Every switch reads "
@@ -693,8 +692,12 @@ void Overlay::tabRadio() {
                                "turns on.",
                                st.preferredName.c_str());
             ImGui::PopStyleColor();
+#if defined(_WIN32)
             ImGui::TextWrapped("Plug it in again. If it still does not show up, check that Windows lists it in "
                                "\"Set up USB game controllers\" (joy.cpl).");
+#else
+            ImGui::TextWrapped("Plug it in again.");
+#endif
         }
         ImGui::Separator();
     }
