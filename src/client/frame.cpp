@@ -82,7 +82,7 @@ static void makeCamera(fpv_camera &c, Vec3 pos, Vec3 fwd, Vec3 up, float fovY, f
 }
 
 // Host raycast callback -> temporary collision planes around the drone.
-static void refreshRaycastProxies(const FlightSnapshot &s) {
+void refreshRaycastProxies(const FlightSnapshot &s) {
     Lib &L = lib();
     if (!L.raycast || !s.active) return;
     const CoordConverter &cv = L.conv;
@@ -394,8 +394,13 @@ extern "C" FPV_API fpv_result fpv_drone_tick(fpv_drone *d, float frameDt, fpv_fr
     Quat rot = prev.active ? slerp(prev.rot, cur.rot, alpha) : cur.rot;
     Vec3 vel = prev.active ? lerp(prev.vel, cur.vel, alpha) : cur.vel;
 
-    refreshRaycastProxies(cur);
-    refreshVideoProbe(cur);
+    // Not before the server steps a newly placed drone: this snapshot is
+    // still the old drone's or the old spot's. The planes cast at the new
+    // spot (api.cpp) stay, and no ray starts where the drone was.
+    if (cur.simTime != L.placedSnapTime) {
+        refreshRaycastProxies(cur);
+        refreshVideoProbe(cur);
+    }
     refreshWind(cur, frameDt);
     refreshHearing(cur, pos, hearsFromPilot(), frameDt);
 

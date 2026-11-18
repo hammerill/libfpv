@@ -6,6 +6,7 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -226,6 +227,73 @@ void testSharedDataDir() {
     CHECK(fpv_shared_data_dir(buf, 3) == FPV_ERROR_INVALID_ARGUMENT, "a too small buffer must fail");
     CHECK(fpv_shared_data_dir(buf, sizeof buf) == FPV_OK && g_dataDir == buf, "LIBFPV_DATA_DIR override: %s", buf);
     setEnv("LIBFPV_DATA_DIR", "");
+}
+
+// Host ground at y = 50 (Y up), only through the raycast callback.
+static int raycastLedge(void *, const float o[3], const float d[3], float maxDist, fpv_raycast_hit *hit) {
+    if (d[1] >= 0 || o[1] < 50) return 0;
+    float t = (o[1] - 50) / -d[1];
+    if (t > maxDist) return 0;
+    *hit = fpv_raycast_hit{};
+    hit->distance = t;
+    hit->normal[1] = 1;
+    return 1;
+}
+
+// The host's first fpv_drone_tick can come late (it sets up its camera, the
+// game hitches). The sim must already stand the drone on the raycast ground,
+// whether the callback was set before or after fpv_drone_create.
+void testRaycastGroundAtSpawn() {
+    for (int after = 0; after < 2; after++) {
+        if (!after) fpv_world_set_raycast_callback(raycastLedge, nullptr);
+        Session s;
+        float p[3] = {0, 50, 0};
+        s.spawn(p);
+        if (after) fpv_world_set_raycast_callback(raycastLedge, nullptr);
+        s.rc.send();  // disarmed, not the previous test's sticks
+        for (int i = 0; i < 50; i++) fpv_step(0.01f);  // 0.5 s with no tick
+        s.run(1.0f);
+        CHECK(std::fabs(s.f.position[1] - 50) < 0.1f, "callback set %s create: rests at y %.2f",
+              after ? "after" : "before", s.f.position[1]);
+        s.destroy();
+        fpv_world_set_raycast_callback(nullptr, nullptr);
+    }
+}
+
+// Where each of the host's rays started.
+static std::vector<std::array<float, 3>> g_rayFrom;
+static int raycastLedgeLogged(void *u, const float o[3], const float d[3], float maxDist, fpv_raycast_hit *hit) {
+    g_rayFrom.push_back({o[0], o[1], o[2]});
+    return raycastLedge(u, o, d, maxDist, hit);
+}
+
+// A drone deleted and created again 100 m away: until the server steps the
+// new drone, its snapshot is still the old drone's. The first fpv_drone_tick
+// must keep the planes cast at the new spot, not cast them at the old one.
+void testRaycastGroundAfterRecreate() {
+    fpv_world_set_raycast_callback(raycastLedgeLogged, nullptr);
+    Session s;
+    float a[3] = {0, 50, 0};
+    s.spawn(a);
+    s.rc.send();
+    s.run(0.5f);
+    s.destroy();
+    g_rayFrom.clear();
+    float b[3] = {100, 50, 0};
+    s.spawn(b);
+    size_t atCreate = g_rayFrom.size();
+    fpv_drone_tick(s.drone, 0.01f, &s.f);  // before any step
+    int stale = 0;
+    for (auto &o : g_rayFrom)
+        if (std::fabs(o[0] - 100) > 5) stale++;
+    CHECK(atCreate > 0, "fpv_drone_create casts the planes");
+    CHECK(stale == 0, "%d of %zu rays start at the old drone", stale, g_rayFrom.size());
+    s.run(1.0f);
+    CHECK(std::fabs(s.f.position[0] - 100) < 1 && std::fabs(s.f.position[1] - 50) < 0.1f,
+          "rests at the new spot: x %.2f, y %.2f", s.f.position[0], s.f.position[1]);
+    s.destroy();
+    fpv_world_set_raycast_callback(nullptr, nullptr);
+    g_rayFrom.clear();
 }
 
 void testArmDisarm() {
@@ -3510,6 +3578,8 @@ int main(int argc, char **argv) {
         {"hearing", testHearing},
         {"video_host_raycast", testVideoHostRaycast},
         {"rc_link", testRcLink},
+        {"raycast_ground_at_spawn", testRaycastGroundAtSpawn},
+        {"raycast_ground_after_recreate", testRaycastGroundAfterRecreate},
         {"pinned", testPinned},
         {"terminate_reinit", testTerminateReinit},
         {"threaded", testThreadedMode},
