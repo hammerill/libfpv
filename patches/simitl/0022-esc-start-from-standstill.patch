@@ -1,0 +1,59 @@
+diff --git a/src/sim/physics.cpp b/src/sim/physics.cpp
+index c572079..c992299 100644
+--- a/src/sim/physics.cpp
++++ b/src/sim/physics.cpp
+@@ -273,6 +273,14 @@ float Physics::motorTorque(float volts, float rpm, float kV, float R, float I0)
+     return torque;
+   }
+ 
++  // libfpv: a sensorless ESC cannot drive a stopped motor at once: it has
++  // to find the rotor's position first. A blackbox log of a 1S whoop
++  // (Bluejay) shows about a tenth of a second at 0 rpm whenever a motor
++  // starts from standstill (arming, every push of a turtle flip), then the
++  // usual spin-up. Below ESC_STOPPED_RPM the motor counts as stopped.
++  constexpr float ESC_START_TIME = 0.12f;   // s
++  constexpr float ESC_STOPPED_RPM = 300.0f;
++
+   // libfpv: share of static thrust left at an axial inflow of `vel` m/s
+   // (climbing, positive). Measured small-prop thrust coefficients follow
+   // CT(J) ~ CT0 * (1 - (J / J0)^2), with zero thrust (J0) at about 0.9 of the
+@@ -637,6 +645,16 @@ float Physics::motorTorque(float volts, float rpm, float kV, float R, float I0)
+       float volts = 0.0f;
+ 
+       
++      // libfpv: starting from standstill (ESC_START_TIME)
++      if (std::abs(motors[i].rpm) >= ESC_STOPPED_RPM) {
++        motors[i].escStartTime = ESC_START_TIME;  // running
++      } else if (motors[i].pwm <= 0.0f) {
++        motors[i].escStartTime = 0.0f;  // stopped, nothing to start
++      } else if (motors[i].escStartTime < ESC_START_TIME) {
++        motors[i].escStartTime += static_cast<float>(dt);
++      }
++      const bool escStarting = motors[i].escStartTime < ESC_START_TIME;
++
+       if(mSimState->stateInput.openLoop == 1){
+         // immediate response
+         volts = motors[i].pwmLowPassFilter.update(motors[i].pwm, dt, 500.0f) * vbat;
+@@ -660,6 +678,7 @@ float Physics::motorTorque(float volts, float rpm, float kV, float R, float I0)
+ 
+         // 4. Feed the delayed PWM into the low-pass filter (which simulates inductive rise time)
+         volts = motors[i].pwmLowPassFilter.update(delayed_pwm, dt, 100.0f) * vbat;
++        if (escStarting) volts = 0.0f;
+       }
+ 
+       // Add this right before `motorTorque()` is called
+diff --git a/src/sim/state.h b/src/sim/state.h
+index aa07f1b..407e558 100644
+--- a/src/sim/state.h
++++ b/src/sim/state.h
+@@ -76,6 +76,10 @@ namespace SimITL{
+ 
+     // History queue to hold previous PWM frames for transport delay
+     std::deque<float> pwmHistory;
++
++    // libfpv: seconds the ESC has been starting the stopped motor
++    // (\see ESC_START_TIME)
++    float escStartTime = 0.0f;
+   };
+ 
+   struct BatteryState {

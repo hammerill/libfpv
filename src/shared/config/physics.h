@@ -34,6 +34,7 @@ struct PhysicsParams {
     float rotorDragFactor = 0.0f;
     float ductThrustGain = 0.0f;
     float electronicsPower = 5.0f;  // watts besides the motors
+    float rotorTurbulence = 0.0f;   // unsteady share of each rotor's thrust
 
     // frame
     Vec3 frameDragArea;

@@ -3,19 +3,19 @@
     "name": "Gemfan 1219S 3-blade",
     "fileName": "gemfan-1219s-3",
     "buildIn": true,
-    "description": "Gemfan's 31 mm (1.2\") 3-blade whoop prop with 1.9\" pitch, 0.18 g, on a 1 mm shaft.",
+    "description": "Gemfan's 31 mm (1.2\") 3-blade whoop prop with 1.9\" pitch, 0.18 g, on a 1 mm shaft. Thrust and torque fitted to a flying Air65 II's blackbox logs: about 6.5 g per prop at 27000 rpm in its duct, 24 g at 53000 rpm.",
     "bladeCount": 3,
     "diameterInch": 1.22,
     "pitchInch": 1.9,
     "propMaxRpm": 48000.0,
     "propAudioPitch": 1.0,
     "propAFactor": 1.432e-10,
-    "propTorqueFactor": 0.0038,
-    "propInertia": 0.000000025,
+    "propTorqueFactor": 0.0065,
+    "propInertia": 0.000000022,
     "propThrustFactor": {
         "x": 0.0,
         "y": 0.0,
-        "z": 0.33
+        "z": 0.1506
     },
     "propHarmonic1Amp": 0.1,
     "propHarmonic2Amp": 0.3,

@@ -283,7 +283,7 @@ enum fpv_material_flags {
 
 typedef struct fpv_material {
     float restitution; /* bounce 0..1, default 0.2 */
-    float friction;    /* Coulomb coefficient, default 0.6 */
+    float friction;    /* Coulomb coefficient, default 0.3 (smooth floors) */
     uint32_t flags;    /* fpv_material_flags */
 } fpv_material;
 

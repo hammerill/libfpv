@@ -1,0 +1,142 @@
+diff --git a/src/main/config/config_eeprom.c b/src/main/config/config_eeprom.c
+index afe9e5c57..85d560aef 100644
+--- a/src/main/config/config_eeprom.c
++++ b/src/main/config/config_eeprom.c
+@@ -434,7 +434,12 @@ bool loadEEPROM(void)
+         } else {
+             pgReset(reg);
+ 
++#if !defined(SIMULATOR_BUILD)
+             success = false;
++#endif
++            // a simulator update can add parameter groups (the RPM filter's
++            // came with rpm telemetry): they start from their defaults, and
++            // the rest of a player's configuration is kept
+         }
+         *reg->fnv_hash = fnv_update(FNV_OFFSET_BASIS, reg->address, pgSize(reg));
+     }
+diff --git a/src/main/drivers/dshot.c b/src/main/drivers/dshot.c
+index 3e1100987..f2af009d4 100644
+--- a/src/main/drivers/dshot.c
++++ b/src/main/drivers/dshot.c
+@@ -34,7 +34,9 @@
+ #ifdef USE_DSHOT
+ 
+ #include "build/debug.h"
++#if !defined(SIMULATOR_BUILD)
+ #include "build/atomic.h"
++#endif
+ 
+ #include "common/filter.h"
+ #include "common/maths.h"
+@@ -116,7 +118,12 @@ FAST_CODE uint16_t prepareDshotPacket(dshotProtocolControl_t *pcb)
+ {
+     uint16_t packet;
+ 
++#if defined(SIMULATOR_BUILD)
++    // no interrupts in a simulator
++    {
++#else
+     ATOMIC_BLOCK(NVIC_PRIO_DSHOT_DMA) {
++#endif
+         packet = (pcb->value << 1) | (pcb->requestTelemetry ? 1 : 0);
+         pcb->requestTelemetry = false;    // reset telemetry request to make sure it's triggered only once in a row
+     }
+@@ -174,8 +181,9 @@ static const dshotTelemetryType_t extendedTelemetryLookup[8] = {
+ 
+ void initDshotTelemetry(const timeUs_t looptimeUs)
+ {
+-    // if bidirectional DShot is not available
+-    if (!motorConfig()->dev.useDshotTelemetry && !featureIsEnabled(FEATURE_ESC_SENSOR)) {
++    // if bidirectional DShot is not available (a simulator sets
++    // useDshotTelemetry itself: its ESCs report rpm over any protocol)
++    if (!useDshotTelemetry && !motorConfig()->dev.useDshotTelemetry && !featureIsEnabled(FEATURE_ESC_SENSOR)) {
+         return;
+     }
+ 
+@@ -184,7 +192,7 @@ void initDshotTelemetry(const timeUs_t looptimeUs)
+     edtAlwaysDecode = motorConfig()->dev.useDshotEdt == DSHOT_EDT_FORCE;
+ 
+ #ifdef USE_RPM_FILTER
+-    if (motorConfig()->dev.useDshotTelemetry) {
++    if (motorConfig()->dev.useDshotTelemetry || useDshotTelemetry) {
+         // init LPFs for RPM data
+         for (unsigned i = 0; i < dshotMotorCount; i++) {
+             pt1FilterInit(&motorFreqLpf[i], pt1FilterGain(rpmFilterConfig()->rpm_filter_lpf_hz, looptimeUs * 1e-6f));
+diff --git a/src/main/fc/core.c b/src/main/fc/core.c
+index 275fb657e..230205d60 100644
+--- a/src/main/fc/core.c
++++ b/src/main/fc/core.c
+@@ -582,9 +582,11 @@ void tryArm(void)
+             setMotorSpinDirection(crashFlipModeActive ? DSHOT_CMD_SPIN_DIRECTION_REVERSED : DSHOT_CMD_SPIN_DIRECTION_NORMAL);
+         }
+ #endif // USE_DSHOT
+-#if defined(SITL) && !defined(USE_DSHOT)
++#if defined(SITL)
+         // the simulator reverses the motors itself (isCrashFlipModeActive())
+-        crashFlipModeActive = IS_RC_MODE_ACTIVE(BOXCRASHFLIP);
++        if (!isMotorProtocolDshot()) {
++            crashFlipModeActive = IS_RC_MODE_ACTIVE(BOXCRASHFLIP);
++        }
+ #endif
+ 
+ #ifdef USE_LAUNCH_CONTROL
+diff --git a/src/main/flight/mixer_init.c b/src/main/flight/mixer_init.c
+index 2b0b05caf..123372319 100644
+--- a/src/main/flight/mixer_init.c
++++ b/src/main/flight/mixer_init.c
+@@ -33,6 +33,7 @@
+ #include "config/feature.h"
+ 
+ #include "drivers/dshot.h"
++#include "drivers/motor.h"
+ 
+ #include "fc/controlrate_profile.h"
+ #include "fc/runtime_config.h"
+@@ -350,7 +351,9 @@ void mixerInitProfile(void)
+     mixerRuntime.dynIdleStartIncrease = motorConfig()->motorIdle * 0.0001f;
+     mixerRuntime.minRpsDelayK = 800 * pidGetDT() / 20.0f; //approx 20ms D delay, arbitrarily suits many motors
+     if (!mixerRuntime.feature3dEnabled && mixerRuntime.dynIdleMinRps) {
+-        mixerRuntime.motorOutputLow = DSHOT_MIN_THROTTLE; // Override value set by initEscEndpoints to allow zero motor drive
++        // Override value set by initEscEndpoints to allow zero motor drive
++        // (a simulator's analog ESCs report rpm too: their zero is mincommand)
++        mixerRuntime.motorOutputLow = isMotorProtocolDshot() ? DSHOT_MIN_THROTTLE : motorConfig()->mincommand;
+     }
+ #endif
+ 
+diff --git a/src/main/io/beeper.c b/src/main/io/beeper.c
+index a41d741fe..41ef6b6c8 100644
+--- a/src/main/io/beeper.c
++++ b/src/main/io/beeper.c
+@@ -29,6 +29,7 @@
+ 
+ #include "drivers/dshot_command.h"
+ #include "drivers/io.h"
++#include "drivers/motor.h"
+ #include "drivers/pwm_output.h"
+ #include "drivers/sound_beeper.h"
+ #include "drivers/system.h"
+@@ -429,7 +430,9 @@ void beeperUpdate(timeUs_t currentTimeUs)
+     }
+ 
+ #ifdef USE_DSHOT
+-    if (!areMotorsRunning()
++    // only ESCs on DShot can beacon (a simulator's analog ESCs report rpm
++    // with DShot telemetry, but take no DShot commands)
++    if (isMotorProtocolDshot() && !areMotorsRunning()
+         && (DSHOT_BEACON_ALLOWED_MODES & BEEPER_GET_FLAG(currentBeeperEntry->mode))
+         && !(beeperConfig()->dshotBeaconOffFlags & BEEPER_GET_FLAG(currentBeeperEntry->mode)) ) {
+         const timeDelta_t dShotBeaconInterval = (currentBeeperEntry->mode == BEEPER_RX_SET)
+diff --git a/src/main/msp/msp_box.c b/src/main/msp/msp_box.c
+index 9dce45971..12b41f7da 100644
+--- a/src/main/msp/msp_box.c
++++ b/src/main/msp/msp_box.c
+@@ -289,7 +289,7 @@ void initActiveBoxIds(void)
+         BME(BOXCRASHFLIP);
+     }
+ #endif
+-#if defined(SITL) && !defined(USE_DSHOT)
++#if defined(SITL)
+     BME(BOXCRASHFLIP);  // the simulator reverses the motors itself
+ #endif
+ 

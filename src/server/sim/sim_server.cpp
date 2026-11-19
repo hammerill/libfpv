@@ -29,7 +29,14 @@ const char *const kEepromUpgrades[] = {"turtle-2", "air-osd-3"
 #if defined(LIBFPV_KAMIKAZE)
                                        , "bomb-osd-4"
 #endif
+                                       , "crashflip-tune-5"
 };
+// Index of the upgrade called `name` (the kamikaze one is not in every build).
+size_t upgradeIndex(const char *name) {
+    for (size_t i = 0; i < std::size(kEepromUpgrades); i++)
+        if (std::strcmp(kEepromUpgrades[i], name) == 0) return i;
+    return std::size(kEepromUpgrades);
+}
 const char *const kEepromUpgrade = kEepromUpgrades[std::size(kEepromUpgrades) - 1];
 fs::path upgradeMarker(const std::string &eeprom) { return pathFromUtf8(eeprom + ".upgrade"); }
 
@@ -129,6 +136,19 @@ void SimServer::ensureEssentials(const DronePreset &p, bool reboot) {
         FPV_LOGW("motor protocol was changed away from PWM; restoring PWM");
         cliRun("set motor_pwm_protocol = PWM\nsave noreboot");
     }
+    // Synced PWM makes Betaflight raise pid_process_denom to run the PID loop
+    // no faster than the ESCs' 480 Hz, and it keeps that denominator: put
+    // both back (an EEPROM made while synced PWM was the default, or a
+    // Configurator edit). Takes effect after the reboot below.
+    if (cliRun("get use_unsynced_pwm").find("= ON") == std::string::npos) {
+        FPV_LOGW("unsynced PWM was off; turning it back on");
+        std::string denom = cliRun("get pid_process_denom");
+        size_t def = denom.find("Default value: ");
+        std::string fix = "set use_unsynced_pwm = ON\n";
+        if (def != std::string::npos) fix += "set pid_process_denom = " + std::to_string(std::atoi(denom.c_str() + def + 15)) + "\n";
+        cliRun(fix + "save noreboot");
+        reboot = true;
+    }
 
     // the simulated GPS (D22). Features only take effect at boot.
     if (!bfb_gps_configured()) {
@@ -169,6 +189,14 @@ void SimServer::ensureEssentials(const DronePreset &p, bool reboot) {
         if (pos == std::string::npos || !(std::atoi(out.c_str() + pos + 22) & 0x800)) script += betaflightBombOsdLine();
     }
 #endif
+    if (next <= upgradeIndex("crashflip-tune-5")) {
+        // a quad whose own tune sets crashflip_rate (the Air65 II: 0, its
+        // real firmware's full turtle power, D21) gets it on an EEPROM made
+        // before the tune had it
+        std::istringstream tune(p.betaflightDiff);
+        for (std::string line; std::getline(tune, line);)
+            if (line.rfind("set crashflip_rate", 0) == 0) script += line + "\n";
+    }
     if (!script.empty()) {
         FPV_LOGI("upgrading Betaflight configuration for new switches and OSD elements");
         cliRun(script + "save noreboot");

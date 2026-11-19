@@ -1209,6 +1209,9 @@ answer libfpv's rays with the engine's own line test.
   only a ped's torso and head, and a drone 0.45 m up flew between a ped's
   legs. That's acceptable for flying, but don't expect hits on arms or
   legs.
+- **Give rough ground its friction.** `fpv_material.friction` is 0.3 by
+  default, a smooth floor (wood, laminate, tiles). Concrete, asphalt,
+  gravel and grass are about 0.6: set it on their materials.
 
 ### Impacts and game effects
 

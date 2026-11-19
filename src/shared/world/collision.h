@@ -16,7 +16,7 @@ namespace fpv {
 
 struct Material {
     float restitution = 0.2f;
-    float friction = 0.6f;
+    float friction = 0.3f;  // smooth floors; rough ground is about 0.6 (D38)
     uint32_t flags = 0;
 };
 

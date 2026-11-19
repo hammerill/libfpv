@@ -126,6 +126,7 @@ set(BF_MAIN_SOURCES
   flight/failsafe.c flight/mixer.c flight/mixer_init.c
   flight/mixer_tricopter.c flight/servos.c flight/servos_tricopter.c
   flight/imu.c flight/pid.c flight/pid_init.c flight/position.c
+  flight/rpm_filter.c drivers/dshot_command.c
   flight/gps_rescue_multirotor.c flight/autopilot_multirotor.c
   io/beeper.c io/statusindicator.c io/rcdevice_cam.c io/rcdevice.c io/gps.c
   io/displayport_msp.c io/serial_resource.c io/gps_virtual.c

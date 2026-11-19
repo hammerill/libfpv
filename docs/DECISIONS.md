@@ -101,6 +101,17 @@ for v1.
   rows when `vcd_video_system` is NTSC, 16 otherwise, as the OSD chip does;
   Betaflight's `osdInit` then moves elements below the last row up to it
   (D15).
+* `0021-esc-rpm-telemetry.patch`: the simulated ESCs report each motor's
+  rpm to Betaflight as bidirectional DShot does, so dynamic idle and the
+  RPM filter work (D38). The SITL target compiles `USE_DSHOT` and its
+  telemetry; the motors still run on PWM.
+* `0022-esc-start-from-standstill.patch`: an ESC starting a stopped motor
+  drives nothing for 0.12 s first (D38).
+* `0023-reversed-props-no-duct-thrust.patch`: props spun backwards (turtle
+  mode) give 30 % of their forward thrust (was 50 %) and no duct lip
+  thrust (D21, D38).
+* `0024-rotor-turbulence.patch`: `StateInit::rotorTurbulence`, unsteady
+  thrust per rotor (D38).
 
 ### D37. Client, server and shared code
 
@@ -254,6 +265,16 @@ power-on grace (`BOOTGRACE`), and gyro calibration (`CALIB`) takes about
 4 s of sim time. libfpv's defaults set `pwr_on_arm_grace = 0`, PWM, and
 `aux 0 0 0 1700 2100 0 0` (ARM on AUX1).
 
+They also set `use_unsynced_pwm = ON`. Since the SITL build compiles DShot
+(D38), Betaflight's defaults are DShot600 and synced updates. With PWM and
+synced updates, its config validation raises `pid_process_denom` so the
+PID loop runs no faster than the ESCs' 480 Hz, and the quad wobbles at
+about 20 Hz. The import puts both settings right after `defaults nosave`:
+a `profile` line computes the mixer's output range for the protocol of that
+moment, and with DShot's range PWM motors stayed at zero. `ensureEssentials`
+turns unsynced PWM back on if it is off, with `pid_process_denom` back to
+its default.
+
 ### D6. Betaflight patches
 
 * `0001-cli-array-set-null-deref.patch`: `cliSet` parsed array settings
@@ -278,6 +299,17 @@ power-on grace (`BOOTGRACE`), and gyro calibration (`CALIB`) takes about
   parameter group registry and reset data use sections named like C
   identifiers there, so that wasm-ld provides `__start_`/`__stop_` symbols
   for them (D28).
+* `0018-sitl-rpm-telemetry-analog-esc.patch`, for the SITL's DShot
+  telemetry over PWM motors (D38): `initDshotTelemetry` also starts from
+  the `useDshotTelemetry` flag the simulator sets; dynamic idle's zero
+  drive is `mincommand` on analog protocols, not DShot's 48; the DShot
+  beacon only runs on DShot (it stamped a beacon time anyway, and that
+  held arming back for good); crash flip keeps working on SITL with
+  `USE_DSHOT`; and in simulator builds a parameter group missing from the
+  EEPROM starts from its defaults instead of making Betaflight reset the
+  whole EEPROM. The RPM filter's group is new to the SITL, and without
+  this every player's EEPROM, tunes and switches included, would be reset
+  on upgrade. `dshot.c` skips its interrupt guard in a simulator.
 
 ### D7. One EEPROM per quad preset
 
@@ -307,9 +339,24 @@ every 64 steps so Configurator edits apply live. It flies stably both ways
 The collision shape is a sphere at the centre of mass plus one under each
 motor bell, with level bottoms. With only a body sphere the drone rested
 on a single point and ground friction could not stop yaw spin (measured:
-12.8 rad/s forever). Propeller discs are not collided with; they are tested
-separately for prop strikes, which damage the props (`durability` from the
-prop JSON). `FPV_MATERIAL_KILLS_PROPS` destroys them on contact.
+12.8 rad/s forever). Prop strikes are tested on the propeller discs
+separately and damage the props (`durability` from the prop JSON);
+`FPV_MATERIAL_KILLS_PROPS` destroys them on contact. A prop touching
+something also stops within a few revolutions and its ESC loses sync: the
+motor stays stalled, without thrust, until the ESC starts it again
+(about 0.1 s, D38).
+
+Prop tips and duct rims (turtle flips and perches). Open props collide at
+their tips: a ring of 12 small spheres (4 mm) at the prop's radius. A quad
+coming over in a turtle flip, or landing tilted, touches down on them
+first, as far out as they reach, and that far-out hit takes the spin out of
+it. On motor feet alone (a 5" lands on them 6 cm out) it kept a third of
+its spin and rolled on over. A ducted quad's ducts are rings, not balls: a
+core sphere plus a ring of 8 small spheres at the duct's bottom and its
+top, so it stands on flat rims and tips over an edge. These small spheres
+are detail on larger parts (`Sphere::fine`): the collision substeps stay
+sized by the large ones, and an Air65 II costs about 40 % more simulation
+time than with its 10 spheres.
 
 A second sphere sits on top of each motor (bell and prop nut, 6 mm above
 the prop disc). Without them an upside-down drone balanced on the body
@@ -479,14 +526,16 @@ quads of the class:
 
 | Measurement | Freestyler 5" (6S, 580 g) | Air65 II (1S, 26 g) | Nomade 7" (6S Li-ion, 940 g) |
 |---|---|---|---|
-| Hover throttle (stick) | 22 % | 29 % | 27 % |
-| Drop 1 s after cutting throttle (free fall: 4.9 m) | 4.2 m | 3.9 m | 4.4 m |
-| Climb speed 0.25 s into a full punch | 70 km/h | 34 km/h | 45 km/h |
-| Climb speed 1 s into a full punch | 137 km/h | 59 km/h | 99 km/h |
-| Top speed, level | 141 km/h | 63 km/h | 108 km/h |
-| Coast from 40 to 20 km/h after levelling out | 1.3 s | 0.6 s | 1.2 s |
+| Hover throttle (stick) | 22 % | 33 % | 27 % |
+| Drop 1 s after cutting throttle (free fall: 4.9 m) | 4.2 m | 3.8 m | 4.4 m |
+| Climb speed 0.25 s into a full punch | 70 km/h | 23 km/h | 45 km/h |
+| Climb speed 1 s into a full punch | 137 km/h | 49 km/h | 99 km/h |
+| Top speed, level | 141 km/h | 56 km/h | 108 km/h |
+| Coast from 40 to 20 km/h after levelling out | 1.3 s | 0.5 s | 1.2 s |
 
-(Air65 II figures after D27.)
+(Air65 II figures after D38, which calibrated it against a real Air65 II's
+blackbox logs: its thrust, motors, pack and idle. The parts figures below
+were its first build.)
 
 The Freestyler and Air65 II presets were built from real parts.
 Freestyler is the default and is a typical 5" freestyle quad: 2207
@@ -575,9 +624,13 @@ voltage drops below 3.5 V:
 
 | | Freestyler 5" | Air65 II |
 |---|---|---|
-| Hover draw | 4.1 A | 2.9 A |
-| Full-throttle draw | 77 A | 19 A |
-| Hard pack lands after | 124 s | 128 s (251 of 320 mAh) |
+| Hover draw | 4.1 A | 2.0 A |
+| Full-throttle draw | 77 A | 18 A |
+| Hard pack lands after | 124 s | 140 s (247 of 320 mAh) |
+
+(Air65 II figures after D38. Its logs show 2.45 A at hover on a 3.7 V
+cell, about 2.1 A on a fresh one, and replace the 3 A estimate above, the
+1.3 A no-load current and the 0.33 ohm.)
 
 Punch. BetaFPV's bench figures (32 g at 23000 kV and 35.4 g at 27000 kV
 on the 1219S) give about 34 g per motor and a 5.2:1 thrust to weight.
@@ -593,6 +646,10 @@ comes after about 0.5 s instead of 0.7 s (34 km/h at 0.25 s instead of
 27), and hover throttle drops from 32 % to 29 %. `flight_realism` now lets
 the quad settle for 1 s after the teleport before it punches; the wobble
 from the teleport had been costing about 10 % of the thrust.
+
+D38 replaced the bench figures with the real quad's: about 6.5 g per prop
+at hover (27000 rpm) and 24 g at 53000 rpm, about 4:1 with the duct. Its
+punch builds to 23 km/h in 0.25 s.
 
 ### D30. Wind (patch `0017`, `src/shared/world/wind.*`)
 
@@ -724,6 +781,88 @@ and the damage to props and motors. Both are on by default.
   It goes through the same switch, so the game never has to check it.
 
 Reversing: drop the two checks; nothing else depends on them.
+
+### D38. The Air65 II against its own blackbox logs
+
+The Air65 II preset was built from parts figures (D25, D27). Pilots of the
+real quad found libfpv's less reactive and lively than flying it indoors.
+It is now calibrated against a real Air65 II on the preset's own tune
+(the `.diff.txt` is that quad's): 24 armed flights in a room, about
+8 minutes at 810 Hz (gyro, setpoints, motor commands, eRPM, current,
+voltage), and the goggles' DVR. Each finding was checked by replaying the
+logged sticks into libfpv (manual timing, the log's pack voltage) and
+comparing with the log.
+
+**Thrust.** The accelerometer against the motors' rpm gives
+8.5e-11 N per rpm² per prop, duct included. That is 6.5 g at the hover's
+27000 rpm and 24 g at the 53000 rpm it reaches flat out, about 4:1. The
+preset had 2.2 times that: it hovered at 18000 rpm with 7.4:1. Its
+`propThrustFactor.z` went from 0.33 to 0.151; `ductThrustGain` stays 0.3.
+
+**Motors.** rpm against motor command × voltage, and the pack current,
+fit kV 25000 with `motorR` 0.226 ohm, `motorI0` 0.25 A and
+`propTorqueFactor` 0.0065. The old 1.3 A no-load current was more than
+5.5 % idle could drive: the props stood still at idle, where the real ones
+turn at 3000-4000 rpm. eRPM follows the command about 25 ms behind going
+up and 35 ms going down, after about 2.5 ms; `propInertia` 2.2e-8 gives
+about 30 ms with SimITL's ESC delay and filter.
+
+**Dynamic idle (rpm telemetry).** The real quad runs bidirectional DShot
+with dynamic idle (`dyn_idle_min_rpm = 30`) and the RPM filter. With
+dynamic idle on, Betaflight starts the motor range at zero drive instead of
+`motor_idle` and holds the minimum rpm instead. Without rpm telemetry the
+simulator kept the 5.5 % offset under every throttle: +0.036 motor command
+throughout, about 10 % more thrust at hover. A replayed indoor flight
+climbed 150-280 m. Now SimITL feeds every motor's rpm to Betaflight as
+DShot telemetry (SimITL `0021`, Betaflight `0018`), and the replay stays at
+room height, with motor commands and rpm within a few percent of the log.
+Quads whose tune has no dynamic idle only gain the RPM filter.
+
+**Inertia.** Angular acceleration against the rpm differences at flips
+gives roll 8.5e-6 and pitch 1.2e-5 kg m²; a parts estimate gives 7.5e-6
+and 9e-6. Both axes were 1e-5. `invInertia` is now 118000 (roll, z) and
+83000 (pitch, x).
+
+**Pack.** Voltage against current in five logs: 45 mOhm, not 35.
+
+**ESC start.** Every motor starting from standstill (arming, each push of a
+turtle flip) stays at 0 rpm for about 0.1 s, then spins up. SimITL `0022`
+drives nothing for 0.12 s below 300 rpm. Real dynamic idle keeps motors
+running in flight, and so does the simulator's.
+
+**Turtle.** The logged flips: full power held (`crashflip_rate` 0, in the
+Air65 II's tune, D21), about 60000 rpm backwards, about
+14500 deg/s². Reversed props now give 30 % of their forward thrust, not
+50 %, and no duct lip thrust (`0023`).
+
+**Turbulence.** Indoors the real quad is bumped all the time: its rate
+error in 3-30 Hz, as a median over half-second windows, is about twice
+the clean simulator's. Its own wash comes back round in a room. Each rotor
+now gets unsteady thrust, `rotorTurbulence` in the quad JSON (the share of
+thrust, standard deviation; 0 by default, 0.015 on the Air65 II), as a
+Gauss-Markov process with a 60 ms correlation time (`0024`). That matches
+roll and pitch; 15 ms put the power above 10 Hz and overshot there.
+
+**Perched yaw.** Sitting on the floor at zero throttle, full yaw turns the
+real quad at about 500 deg/s after 0.2 s. The simulator does that on a
+floor with friction 0.3-0.4; on 0.6 it turns slower. The default material
+friction is now 0.3, a smooth floor; rough ground is 0.6 where the game
+sets it (INTEGRATION.md).
+
+Not changed:
+
+* Air mode. The real quad flies with `feature -AIRMODE` (its logs show the
+  non-air-mode mixer); the preset keeps libfpv's air mode on (D25). Without
+  it, zero throttle is looser, and full yaw on the floor drives the motors
+  half as hard: about 0.45 against 0.78. With air mode the simulated Air65
+  II hops off the floor in that yaw, as a real one with air mode would.
+* Heave. Thrust against vertical speed in the logs falls about 5 % at
+  ±1.25 m/s; the model loses about 3 % climbing and nothing descending.
+* Yaw buffeting stays below the log's. The unsteady thrust doesn't change
+  the motors' reaction torque.
+
+The `air65_blackbox` test checks the hover rpm and drive, the idle rpm and
+the ESC start against the logs.
 
 ## Presentation
 
@@ -1535,18 +1674,27 @@ already used by a switch again only in a position no switch uses yet.
 Saved mappings keep their format (on = `max`, or `min` when inverted).
 
 libfpv sets `crashflip_rate = 30`, the default of Betaflight's Race Pro
-builds (stock is 0). It cuts the turtle power as the quad spins faster
-and once it has turned about 90°, so holding the stick works and
-Betaflight can tell the flip succeeded; turning the switch off then
-re-arms in normal mode at once (quick restart). Measured with stock 0:
-releasing the stick at the right moment was needed, overflips were
-common and props were often destroyed. With 30, every shipped preset
-flips upright in about 0.5 s with 60 % stick held, with no prop damage.
+builds (stock is 0). It cuts the turtle power as the quad spins faster and
+once it has turned about 90°, so holding the stick works, and turning the
+switch off re-arms in normal mode at once (quick restart). At stock 0 a 5"
+launches off its pivot above about 60 % stick (two reversed props lift
+1.4-2.9 times its weight) and rolls on. The Air65 II's tune keeps its real
+firmware's 0: its reversed props lift a third of its weight, it pivots and
+lands upright. The `turtle` test holds the stick until upright with the
+cut-off, and with full power lets go after about 35°.
+
+A real Air65 II's turtle flips (D38) show what the simulator now does too.
+The ESCs take about 0.1 s to start a stopped motor before it turns at all
+(SimITL `0022`). The flips turn it at about 14500 deg/s² at 60000 rpm
+backwards: a reversed prop gives about 30 % of its forward thrust (SimITL
+had 50 %), and a ducted one gets no lip thrust from its duct (`0023`).
 
 EEPROMs made before this get, once, the turtle switch on AUX4 (if there is
 no crash flip mode yet and AUX4 is free) and `crashflip_rate = 30` (if it
-is 0). A `<eeprom>.upgrade` file records that this ran, so later edits by
-the player stay.
+is 0). A quad whose tune sets `crashflip_rate` (the Air65 II) gets the
+tune's value on an older EEPROM (upgrade `crashflip-tune-5`). A
+`<eeprom>.upgrade` file records the last upgrade applied, so later edits
+by the player stay.
 
 ### D23. Air mode and OSD disable switches (AUX5, AUX6)
 

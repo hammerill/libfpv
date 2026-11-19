@@ -68,8 +68,18 @@ std::string modeLine(int slot, ModeSwitch m) {
 }
 }  // namespace
 
+namespace {
+// PWM with unsynced updates: with synced PWM, Betaflight slows the PID loop
+// down to the ESCs' 480 Hz (pid_process_denom), see D5. Right after any
+// `defaults`: Betaflight's default protocol is DShot, and a `profile` line
+// sets the mixer's output range for the protocol of that moment.
+const char *const kMotorDefaults =
+    "set motor_pwm_protocol = PWM\n"
+    "set use_unsynced_pwm = ON\n";
+}  // namespace
+
 std::string betaflightBaseDefaults() {
-    return "set motor_pwm_protocol = PWM\n"
+    return std::string(kMotorDefaults) +
            "set pwr_on_arm_grace = 0\n"
            "feature OSD\n"
            "feature GPS\n"
@@ -235,7 +245,7 @@ DiffImport buildDiffImport(const std::string &diffText, bool ntsc) {
         {"motor_pwm_rate", "ESC hardware"},
         {"dshot_", "DShot ESC hardware"},
         {"motor_poles", "ESC telemetry hardware"},
-        {"use_unsynced_pwm", "ESC hardware"},
+        {"use_unsynced_pwm", "forced on, with the PWM protocol"},
         {"serialrx_", "receiver hardware: RC arrives over MSP"},
         {"rx_spi_", "receiver hardware"},
         {"spektrum_", "receiver hardware"},
@@ -426,7 +436,7 @@ DiffImport buildDiffImport(const std::string &diffText, bool ntsc) {
 
     // --- assemble ------------------------------------------------------------
     std::ostringstream s;
-    s << "defaults nosave\n";
+    s << "defaults nosave\n" << kMotorDefaults;
     for (auto &l : body) {
         s << l << "\n";
         imp.applied.push_back(l);

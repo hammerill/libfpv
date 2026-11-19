@@ -1,0 +1,32 @@
+diff --git a/src/sim/physics.cpp b/src/sim/physics.cpp
+index c992299..53e35b8 100644
+--- a/src/sim/physics.cpp
++++ b/src/sim/physics.cpp
+@@ -10,8 +10,11 @@ namespace SimITL{
+   #endif
+ 
+   const auto AIR_RHO = 1.225f;
+-  // thrust of a prop spun backwards relative to forwards (turtle mode)
+-  const auto REVERSED_PROP_EFFICIENCY = 0.5f;
++  // thrust of a prop spun backwards relative to forwards (turtle mode).
++  // libfpv: 0.3, from a real Air65 II's turtle flips (its blackbox logs:
++  // about 14500 deg/s^2 at 60000 rpm backwards); reversed props are
++  // usually quoted at 20-40 %
++  const auto REVERSED_PROP_EFFICIENCY = 0.3f;
+ 
+   // -1.0 , 1.0
+   inline float randf(){
+@@ -713,7 +716,12 @@ float Physics::motorTorque(float volts, float rpm, float kV, float R, float I0)
+       // a prop spun backwards pushes the other way, with a less efficient
+       // (inverted) airfoil
+       const float spinDir = state.motorsReversed ? -1.0f : 1.0f;
+-      if (state.motorsReversed) thrust *= -REVERSED_PROP_EFFICIENCY;
++      if (state.motorsReversed) {
++        // libfpv: and without the duct's lip suction, which needs the air
++        // drawn in over the lip; spun backwards the lip is the exit
++        thrust /= ductThrustFactor(mSimState->stateInit.ductThrustGain, mSimState->stateInit.propPitch, rpm, vel);
++        thrust *= -REVERSED_PROP_EFFICIENCY;
++      }
+ 
+       // 1. HEAT GENERATION FIX
+       // Only ~35% of the system ESR (motorR) is inside the copper stator. 

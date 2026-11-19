@@ -114,6 +114,7 @@ private:
         Vec3 local;
         float radius;
         int motor;  // -1 body, 0..3 motor bell
+        bool fine = false;  // detail on a larger part: not sized for substeps
     };
 
     void buildShape();

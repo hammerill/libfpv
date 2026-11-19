@@ -19,6 +19,8 @@ set gyro_lpf1_dyn_max_hz = 550
 set fpv_mix_degrees = 15
 set yaw_motors_reversed = ON
 set small_angle = 180
+# full turtle power, as its firmware's stock crashflip_rate (libfpv sets 30)
+set crashflip_rate = 0
 set simplified_gyro_filter_multiplier = 120
 set vbat_max_cell_voltage = 440
 set vbat_warning_cell_voltage = 345

@@ -258,8 +258,9 @@ void testArmDisarm() {
 
 // Upside down on the ground: it will not arm normally; in turtle mode
 // (AUX4) it arms, the props spin backwards and a roll stick flips it over.
-// libfpv's crashflip_rate cuts the power once it has turned over, so the
-// stick can simply be held. Every preset must make it.
+// libfpv's crashflip_rate (30) cuts the power once the quad has turned
+// over; the Air65 II keeps its firmware's stock 0 (full power while the
+// stick is held). Every preset must make it.
 void testTurtle() {
     Host h(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1));
     loadWorld(makeLevel(h, 100, 0));
@@ -300,22 +301,44 @@ void testTurtle() {
         s.arm();
         CHECK(s.armed(), "%s arms in turtle mode (%s)", name, s.f.arming_disable_text);
         CHECK(s.f.flags & FPV_DRONE_TURTLE, "turtle flag set while armed");
-        s.rc.ch[0] = 0.6f;
-        float upright = -1, damage = 0;
-        s.run(1.5f, [&](float t) {
-            if (upright < 0 && bodyUp(s.f) > 0.9f) upright = t;
-        });
+        // like a pilot at Betaflight's stock full turtle power: a push,
+        // let go as it starts over, and a harder one if it did not go over
+        // With libfpv's crashflip_rate (30) Betaflight cuts the power as it
+        // turns, so the stick is held until it is over. At full power (the
+        // Air65 II's 0), let go once it has tipped about 35 degrees:
+        // momentum does the rest.
+        char *rateOut = nullptr;
+        fpv_cli_exec("get crashflip_rate", &rateOut);
+        const bool cutOff = rateOut && !std::strstr(rateOut, "crashflip_rate = 0\n") &&
+                            !std::strstr(rateOut, "crashflip_rate = 0\r");
+        fpv_free(rateOut);
+        const float held[4] = {0.6f, 0.8f, 1.0f, 1.0f}, tapped[4] = {0.5f, 0.75f, 1.0f, 1.0f};
+        const float *sticks = cutOff ? held : tapped, letGo = cutOff ? 0.9f : -0.8f;
+        float upright = -1, damage = 0, elapsed = 0;
+        int tries = 0;
+        while (tries < 4 && bodyUp(s.f) < 0.9f) {
+            s.rc.ch[0] = sticks[tries++];
+            for (int i = 0; i < (cutOff ? 150 : 60) && bodyUp(s.f) <= letGo; i++, elapsed += 0.01f) s.run(0.01f);
+            s.rc.ch[0] = 0;
+            s.run(0.6f, [&](float t) {
+                if (upright < 0 && bodyUp(s.f) > 0.9f) upright = elapsed + t;
+            });
+            elapsed += 0.6f;
+        }
         s.rc.ch[0] = 0;
         s.run(0.5f);
         for (auto &m : s.f.motors) damage = std::max(damage, m.prop_damage);
-        std::printf("    %s: upright after %.2f s, final up %.2f, prop damage %.2f\n", name, upright, bodyUp(s.f),
-                    damage);
+        std::printf("    %s: upright after %.2f s (%d %s), final up %.2f, prop damage %.2f\n", name, upright, tries,
+                    tries == 1 ? "push" : "pushes", bodyUp(s.f), damage);
         CHECK(bodyUp(s.f) > 0.9f, "%s flipped back upright, up %.2f", name, bodyUp(s.f));
         CHECK(damage < 0.3f, "%s props survive the flip, damage %.2f", name, damage);
-        // after a successful flip, turning turtle off re-arms in normal mode
-        // at once (Betaflight's quick restart): it can fly away
+        // turtle off (with crashflip_rate 30 it re-arms at once, with 0 it
+        // disarms); arm again and it flies away
         s.rc.ch[7] = -1;
         s.run(0.3f);
+        s.rc.ch[4] = -1;
+        s.run(0.3f);
+        s.arm();
         CHECK(s.armed(), "%s armed again after turtle off (%s)", name, s.f.arming_disable_text);
         CHECK(!(s.f.flags & FPV_DRONE_TURTLE), "turtle flag cleared");
         s.rc.ch[2] = 0.3f;
@@ -641,7 +664,7 @@ void testFlightRealism() {
     loadWorld(makeLevel(h, 300, 0));
     const RealismBand bands[] = {
         {"freestyler-5", 15, 30, 3.5f, 80, 170, 55, 110, 180, 2.5f},
-        {"betafpv-air65-ii", 20, 45, 3.0f, 40, 110, 31, 45, 85, 1.5f},
+        {"betafpv-air65-ii", 20, 45, 3.0f, 40, 110, 20, 45, 85, 1.5f},
         {"nomade-7", 15, 40, 3.5f, 50, 150, 30, 100, 180, 3.5f},
     };
     for (const RealismBand &b : bands) {
@@ -709,6 +732,71 @@ void testFlightRealism() {
 }
 
 
+// The Air65 II against blackbox logs of the real quad flown indoors (an
+// Air65 II on its own tune, docs/DECISIONS.md D38): rpm and motor command at
+// hover, the idle rpm dynamic idle holds, and the ESC's start from
+// standstill on a turtle push.
+void testAir65Blackbox() {
+    Host h(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1));
+    loadWorld(makeLevel(h, 300, 0));
+    const char *q = "betafpv-air65-ii";
+    auto avg = [](const fpv_frame &f, float fpv_motor_state::*field) {
+        float sum = 0;
+        for (const fpv_motor_state &m : f.motors) sum += std::fabs(m.*field) / 4;
+        return sum;
+    };
+
+    // hover: 27000 rpm at a motor command of 0.35 on a 3.7 V cell, so
+    // command x cell voltage 1.3 V
+    float thr = findHoverThrottle(h, q);
+    Session s;
+    hoverFromRest(s, h, thr, q);
+    s.run(1.0f);
+    float rpm = avg(s.f, &fpv_motor_state::rpm), drive = avg(s.f, &fpv_motor_state::command) * s.f.battery.cell_voltage;
+    s.destroy();
+
+    // idle: armed on the ground at zero throttle (logs: 3000-4000 rpm)
+    float p[3];
+    h.pos(0, 0, 0, p);
+    s.spawn(p, q);
+    s.arm();
+    s.run(1.0f);
+    float idle = avg(s.f, &fpv_motor_state::rpm);
+    s.destroy();
+
+    // turtle: the ESCs start the stopped motors after about 0.1 s, then
+    // spin them up to about 60000 rpm backwards within a few hundredths
+    fpv_drone_desc d;
+    fpv_drone_desc_defaults(&d);
+    h.pos(0, 0.1f, 0, d.position);
+    float flip[4] = {h.F[0], h.F[1], h.F[2], 0};
+    std::memcpy(d.rotation, flip, sizeof(flip));
+    d.preset = q;
+    CHECK(fpv_drone_create(&d, &s.drone) == FPV_OK, "drone_create: %s", fpv_last_error());
+    s.run(0.5f);
+    s.rc.ch[7] = 1;
+    s.run(0.3f);
+    s.arm();
+    s.rc.ch[0] = 1.0f;
+    float early = 0, late = 0;
+    s.run(0.3f, [&](float t) {
+        float r = 0;
+        for (const fpv_motor_state &m : s.f.motors) r = std::max(r, std::fabs(m.rpm));
+        if (t < 0.06f) early = std::max(early, r);
+        late = std::max(late, r);
+    });
+    s.destroy();
+
+    std::printf("    air65: hover %.0f rpm at %.2f V of drive (real 27000, 1.3) | idle %.0f rpm (real 3000-4000) | "
+                "turtle push: %.0f rpm in the first 0.06 s, peak %.0f in 0.3 s\n",
+                rpm, drive, idle, early, late);
+    CHECK(rpm > 24000 && rpm < 31000, "air65 hover rpm %.0f", rpm);
+    CHECK(drive > 1.1f && drive < 1.5f, "air65 hover drive %.2f V", drive);
+    CHECK(idle > 2800 && idle < 5500, "air65 idle rpm %.0f", idle);
+    CHECK(early < 300, "air65 turtle: the ESC is still starting the motor, %.0f rpm", early);
+    CHECK(late > 40000, "air65 turtle: spun up, %.0f rpm", late);
+}
+
 // Battery draw and flight time against real quads of each class. A hard
 // freestyle pack is flown as a repeating 4 s cycle: 1 s full throttle, 1 s at
 // 60 %, 1 s at zero throttle, 1 s hovering, teleported back each cycle. The
@@ -726,7 +814,7 @@ void testBatteryEndurance() {
     loadWorld(makeLevel(h, 300, 0));
     const BatteryBand bands[] = {
         {"freestyler-5", 3, 8, 60, 130, 100, 240},
-        {"betafpv-air65-ii", 2.5f, 4, 12, 22, 110, 165},
+        {"betafpv-air65-ii", 1.8f, 3.5f, 12, 22, 110, 165},
         {"nomade-7", 5, 14, 35, 130, 200, 600},
     };
     for (const BatteryBand &b : bands) {
@@ -3482,6 +3570,7 @@ int main(int argc, char **argv) {
         {"flight_realism", testFlightRealism},
         {"idle_attitude", testIdleAttitude},
         {"battery_endurance", testBatteryEndurance},
+        {"air65_blackbox", testAir65Blackbox},
         {"wall_crash", testWallCrash},
         {"thirty_mps_thin_wall", testThirtyMetersPerSecond},
         {"motor_burnout", testMotorBurnout},

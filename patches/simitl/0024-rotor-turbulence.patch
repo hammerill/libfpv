@@ -1,0 +1,63 @@
+diff --git a/src/network/packets.h b/src/network/packets.h
+index dac7599..c159fa0 100644
+--- a/src/network/packets.h
++++ b/src/network/packets.h
+@@ -69,6 +69,9 @@ struct StateInit{
+   // libfpv: watts drawn by everything but the motors (FC, receiver, camera,
+   // VTX), on top of the motors.
+   float electronicsPower = 5.0f;
++  // libfpv: unsteady share of each rotor's thrust (standard deviation): the
++  // turbulent air a prop draws in, its own wash coming back round in a room
++  float rotorTurbulence = 0.0f;
+ 
+   Vec3F frameDragArea {};
+   float frameDragConstant = 0.0f;
+diff --git a/src/sim/physics.cpp b/src/sim/physics.cpp
+index c8e34ec..d7c26dc 100644
+--- a/src/sim/physics.cpp
++++ b/src/sim/physics.cpp
+@@ -281,6 +281,18 @@ float Physics::motorTorque(float volts, float rpm, float kV, float R, float I0)
+   constexpr float ESC_START_TIME = 0.12f;   // s
+   constexpr float ESC_STOPPED_RPM = 300.0f;
+ 
++  // libfpv: the unsteady thrust (stateInit.rotorTurbulence) is a
++  // Gauss-Markov process per rotor with this correlation time: most of its
++  // power below about 10 Hz, where a quad's rate loop feels it as bumps.
++  constexpr float ROTOR_TURBULENCE_TIME = 0.06f;  // s
++
++  // a standard normal sample
++  static float randn() {
++    float u1 = std::max(static_cast<float>(rand()) / static_cast<float>(RAND_MAX), 1e-7f);
++    float u2 = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
++    return std::sqrt(-2.0f * std::log(u1)) * std::cos(2.0f * float(M_PI) * u2);
++  }
++
+   // libfpv: share of static thrust left at an axial inflow of `vel` m/s
+   // (climbing, positive). Measured small-prop thrust coefficients follow
+   // CT(J) ~ CT0 * (1 - (J / J0)^2), with zero thrust (J0) at about 0.9 of the
+@@ -710,6 +722,12 @@ float Physics::motorTorque(float volts, float rpm, float kV, float R, float I0)
+       float thrust = propThrust(rpm, vel) *
+                      ductThrustFactor(mSimState->stateInit.ductThrustGain, mSimState->stateInit.propPitch, rpm, vel) *
+                      propHealthFactor * groundEffect * propwashEffect * propDamageEffect;
++      // libfpv: unsteady inflow
++      if (mSimState->stateInit.rotorTurbulence > 0.0f) {
++        const float a = std::min(1.0f, static_cast<float>(dt) / ROTOR_TURBULENCE_TIME);
++        motors[i].turbulence += -motors[i].turbulence * a + std::sqrt(2.0f * a) * randn();
++        thrust *= std::max(0.0f, 1.0f + mSimState->stateInit.rotorTurbulence * motors[i].turbulence);
++      }
+       // a prop spun backwards pushes the other way, with a less efficient
+       // (inverted) airfoil
+       const float spinDir = state.motorsReversed ? -1.0f : 1.0f;
+diff --git a/src/sim/state.h b/src/sim/state.h
+index 407e558..f3f724b 100644
+--- a/src/sim/state.h
++++ b/src/sim/state.h
+@@ -80,6 +80,8 @@ namespace SimITL{
+     // libfpv: seconds the ESC has been starting the stopped motor
+     // (\see ESC_START_TIME)
+     float escStartTime = 0.0f;
++    // libfpv: the rotor's unsteady thrust, unit variance (\see ROTOR_TURBULENCE_TIME)
++    float turbulence = 0.0f;
+   };
+ 
+   struct BatteryState {

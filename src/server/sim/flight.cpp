@@ -23,6 +23,15 @@ constexpr float kRestingSpeed = 0.6f;        // m/s, no bounce below this
 // points none, and friction under the centre of mass makes no yaw torque.
 constexpr float kContactPatchRatio = 0.5f;
 constexpr float kPropDiscHalfThickness = 0.012f;
+// A prop whose blades touch something stops within a few revolutions
+// (time constant, s), and below this rpm it is stalled for its ESC.
+constexpr float kPropStrikeStopTime = 0.004f;
+// Detail spheres (Sphere::fine): duct rims and prop tips, as rings of small
+// spheres
+constexpr float kRimSphereRadius = 0.004f;
+constexpr int kRimSpheres = 8;
+constexpr int kPropTipSpheres = 12;
+constexpr float kPropStrikeStalledRpm = 300.0f;
 constexpr float kPropNutHeight = 0.006f;     // motor top above the prop disc
 constexpr float kMaxSpeed = 120.0f;          // m/s, sanity clamp
 constexpr float kWinchSpeed = 0.5f;          // m/s, the cargo line reeled in or out
@@ -83,6 +92,7 @@ StateInit toStateInit(const PhysicsParams &p) {
     s.propDiameter = p.propDiameter;
     s.rotorDragFactor = p.rotorDragFactor;
     s.ductThrustGain = p.ductThrustGain;
+    s.rotorTurbulence = p.rotorTurbulence;
     s.electronicsPower = p.electronicsPower;
     s.frameDragArea = toVec3F(p.frameDragArea);
     s.frameDragConstant = p.frameDragConstant;
@@ -148,13 +158,34 @@ void Flight::syncPropDirection() {
 void Flight::buildShape() {
     m_shape.clear();
     const CollisionSettings &c = m_preset.collision;
+    const bool ducted = m_preset.physics.ductThrustGain > 0;
     m_shape.push_back({{0, 0, 0}, c.bodyRadius, -1});
     for (int i = 0; i < 4; i++) {
         const Vec3 &p = m_preset.physics.quadMotorPos[i];
-        float y = -c.bodyRadius + c.motorRadius;
-        m_shape.push_back({{p.x, std::min(p.y, y), p.z}, c.motorRadius, i});
+        float bottom = -c.bodyRadius;  // level with the body's bottom
         float top = std::max(c.bodyRadius, p.y + kPropDiscHalfThickness + kPropNutHeight);
+        if (ducted) {
+            // A duct is a ring: a flat rim at its bottom and its top with an
+            // edge the quad tips and lands on, round a core that keeps
+            // walls out of it (D38)
+            m_shape.push_back({{p.x, 0.5f * (bottom + top), p.z}, c.motorRadius, i});
+            float ring = c.motorRadius - kRimSphereRadius;
+            for (float y : {bottom + kRimSphereRadius, top - kRimSphereRadius})
+                for (int k = 0; k < kRimSpheres; k++) {
+                    float a = 6.2831853f * k / kRimSpheres;
+                    m_shape.push_back({{p.x + ring * std::cos(a), y, p.z + ring * std::sin(a)}, kRimSphereRadius, i, true});
+                }
+            continue;
+        }
+        m_shape.push_back({{p.x, std::min(p.y, bottom + c.motorRadius), p.z}, c.motorRadius, i});
         m_shape.push_back({{p.x, top - c.motorRadius, p.z}, c.motorRadius, i});
+        // the prop's tips: a quad landing tilted or tipping over touches
+        // down on them first, as far out as they reach (D38)
+        float ring = c.propRadius - kRimSphereRadius;
+        for (int k = 0; k < kPropTipSpheres; k++) {
+            float a = 6.2831853f * k / kPropTipSpheres;
+            m_shape.push_back({{p.x + ring * std::cos(a), p.y, p.z + ring * std::sin(a)}, kRimSphereRadius, i, true});
+        }
     }
     m_shape.push_back({c.canopyOffset, c.canopyRadius, -1});
 #if defined(LIBFPV_KAMIKAZE)
@@ -634,7 +665,14 @@ void Flight::resolveContacts(float dt) {
         Vec3 centre = m_pos + rot * s.local;
         m_world->sphereContacts(centre, s.radius, m_simTime, m_contacts);
         dropPortalHoleContacts(0);
-        for (const Contact &c : m_contacts) items.push_back({c, s.motor, s.radius});
+        for (const Contact &c : m_contacts) {
+            // a detail sphere sits on the outside: a surface can only push
+            // it back towards the drone. One pushing it outwards has passed
+            // its centre (a thin wall moving faster than the sphere is
+            // wide) and would pull the drone through.
+            if (s.fine && dot(c.normal, m_pos - c.point) <= 0) continue;
+            items.push_back({c, s.motor, s.radius});
+        }
     }
     if (items.empty()) return;
 #if defined(LIBFPV_KAMIKAZE)
@@ -730,7 +768,6 @@ void Flight::resolveContacts(float dt) {
 
 // Propeller discs touching geometry damage the props.
 void Flight::propStrikes(float dt) {
-    (void)dt;
     Mat3 rot = toMat3(m_rot);
     Vec3 up = rot.col(1);
     const StateOutput &out = SimITL::Sim::getInstance().getStateUpdate();
@@ -751,6 +788,15 @@ void Flight::propStrikes(float dt) {
             if (mat.flags & kMatKillsProps) {
                 if (canDamage()) m_propDamage[i] = 1.0f;
                 break;
+            }
+            // the blades hit it: the prop stops within a few revolutions and
+            // its ESC loses sync, so the motor stays stalled until the ESC
+            // starts it again (SimITL 0022). Its thrust is gone with it.
+            SimITL::MotorState &ms = SimITL::Sim::getInstance().mSimState.motorsState[i];
+            ms.rpm *= std::exp(-dt / kPropStrikeStopTime);
+            if (std::fabs(ms.rpm) < kPropStrikeStalledRpm) {
+                ms.rpm = 0.0f;
+                ms.escStartTime = 0.0f;
             }
             if (m_simTime - m_lastMotorStrike[i + 1] < 0.02) continue;
             Vec3 r = c.point - m_pos;
@@ -1102,7 +1148,8 @@ void Flight::step(float dt, const float channels[kChannelCount], bool radioLost)
         // Substeps keep every sphere moving less than half its radius, so
         // thin geometry cannot be skipped (conservative advancement).
         float minRadius = m_preset.collision.motorRadius;
-        for (const Sphere &s : m_shape) minRadius = std::min(minRadius, s.radius);
+        for (const Sphere &s : m_shape)
+            if (!s.fine) minRadius = std::min(minRadius, s.radius);
         float travel = length(m_vel) * dt + length(m_angVel) * dt * 0.15f;
         int sub = std::clamp((int)std::ceil(travel / (0.5f * minRadius)), 1, 64);
         float h = dt / (float)sub;

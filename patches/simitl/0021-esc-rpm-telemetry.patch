@@ -1,0 +1,2472 @@
+diff --git a/extern/betaflightext/src/main/target/simITL/target.c b/extern/betaflightext/src/main/target/simITL/target.c
+index 60a00c8..f69c665 100644
+--- a/extern/betaflightext/src/main/target/simITL/target.c
++++ b/extern/betaflightext/src/main/target/simITL/target.c
+@@ -1,521 +1,575 @@
+-/*
+- * This file is part of Cleanflight and Betaflight.
+- *
+- * Cleanflight and Betaflight are free software. You can redistribute
+- * this software and/or modify this software under the terms of the
+- * GNU General Public License as published by the Free Software
+- * Foundation, either version 3 of the License, or (at your option)
+- * any later version.
+- *
+- * Cleanflight and Betaflight are distributed in the hope that they
+- * will be useful, but WITHOUT ANY WARRANTY; without even the implied
+- * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+- * See the GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this software.
+- *
+- * If not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-#include <stdint.h>
+-#include <stdio.h>
+-#include <stdlib.h>
+-#include <math.h>
+-#include <string.h>
+-
+-#include <errno.h>
+-#include <time.h>
+-
+-#include "common/maths.h"
+-
+-#include "drivers/adc.h"
+-#include "drivers/io.h"
+-#include "drivers/dma.h"
+-#include "drivers/motor_impl.h"
+-#include "drivers/serial.h"
+-#include "drivers/serial_tcp.h"
+-#include "drivers/system.h"
+-#include "drivers/time.h"
+-#include "drivers/pwm_output.h"
+-#include "drivers/pwm_output_impl.h"
+-#include "drivers/light_led.h"
+-
+-#include "drivers/timer.h"
+-#include "timer_def.h"
+-
+-const timerHardware_t timerHardware[1]; // unused
+-
+-#include "drivers/accgyro/accgyro_virtual.h"
+-#include "drivers/barometer/barometer_virtual.h"
+-#include "flight/imu.h"
+-
+-#include "config/feature.h"
+-#include "config/config.h"
+-#include "config/config_streamer.h"
+-#include "config/config_streamer_impl.h"
+-#include "config/config_eeprom_impl.h"
+-#include "scheduler/scheduler.h"
+-
+-#include "pg/rx.h"
+-#include "pg/motor.h"
+-
+-#include "rx/rx.h"
+-#include "cli/cli.h"
+-#include "fc/init.h"
+-
+-#include "dyad.h"
+-
+-uint32_t SystemCoreClock;
+-uint64_t micros_passed;
+-int64_t sleep_timer;
+-
+-static struct timespec start_time;
+-static double simRate = 1.0;
+-static bool workerRunning = true;
+-
+-
+-int timeval_sub(struct timespec *result, struct timespec *x, struct timespec *y);
+-
+-int lockMainPID(void)
+-{
+-    return 0;
+-}
+-
+-void timerInit(void)
+-{
+-    printf("[timer]Init...\n");
+-}
+-
+-void timerStart(TIM_TypeDef *tim)
+-{
+-}
+-
+-void failureMode(failureMode_e mode)
+-{
+-    printf("[failureMode]!!! %d\n", mode);
+-    //while (1);
+-}
+-
+-void indicateFailure(failureMode_e mode, int repeatCount)
+-{
+-    UNUSED(repeatCount);
+-    printf("Failure LED flash for: [failureMode]!!! %d\n", mode);
+-}
+-
+-int32_t clockCyclesToMicros(int32_t clockCycles)
+-{
+-    return clockCycles;
+-}
+-
+-int32_t clockCyclesTo10thMicros(int32_t clockCycles)
+-{
+-    return clockCycles;
+-}
+-
+-int32_t clockCyclesTo100thMicros(int32_t clockCycles)
+-{
+-    return clockCycles;
+-}
+-
+-uint32_t clockMicrosToCycles(uint32_t micros)
+-{
+-    return micros;
+-}
+-uint32_t getCycleCounter(void)
+-{
+-    return (uint32_t) (micros64() & 0xFFFFFFFF);
+-}
+-
+-
+-// Subtract the ‘struct timespec’ values X and Y,  storing the result in RESULT.
+-// Return 1 if the difference is negative, otherwise 0.
+-// result = x - y
+-// from: http://www.gnu.org/software/libc/manual/html_node/Elapsed-Time.html
+-int timeval_sub(struct timespec *result, struct timespec *x, struct timespec *y)
+-{
+-    unsigned int s_carry = 0;
+-    unsigned int ns_carry = 0;
+-    // Perform the carry for the later subtraction by updating y.
+-    if (x->tv_nsec < y->tv_nsec) {
+-        int nsec = (y->tv_nsec - x->tv_nsec) / 1000000000 + 1;
+-        ns_carry += 1000000000 * nsec;
+-        s_carry += nsec;
+-    }
+-
+-    // Compute the time remaining to wait. tv_usec is certainly positive.
+-    result->tv_sec = x->tv_sec - y->tv_sec - s_carry;
+-    result->tv_nsec = x->tv_nsec - y->tv_nsec + ns_carry;
+-
+-    // Return 1 if result is negative.
+-    return x->tv_sec < y->tv_sec;
+-}
+-
+-
+-// PWM part
+-pwmOutputPort_t motors[MAX_SUPPORTED_MOTORS];
+-static pwmOutputPort_t servos[MAX_SUPPORTED_SERVOS];
+-
+-// real value to send
+-int16_t motorsPwm[MAX_SUPPORTED_MOTORS];
+-static int16_t servosPwm[MAX_SUPPORTED_SERVOS];
+-static int16_t idlePulse;
+-
+-void servoDevInit(const servoDevConfig_t *servoConfig)
+-{
+-    UNUSED(servoConfig);
+-    for (uint8_t servoIndex = 0; servoIndex < MAX_SUPPORTED_SERVOS; servoIndex++) {
+-        servos[servoIndex].enabled = true;
+-    }
+-}
+-
+-static motorDevice_t motorPwmDevice; // Forward
+-
+-pwmOutputPort_t *pwmGetMotors(void)
+-{
+-    return pwmMotors;
+-}
+-
+-static float pwmConvertFromExternal(uint16_t externalValue)
+-{
+-    return (float)externalValue;
+-}
+-
+-static uint16_t pwmConvertToExternal(float motorValue)
+-{
+-    return (uint16_t)motorValue;
+-}
+-
+-static void pwmDisableMotors(void)
+-{
+-    // NOOP
+-}
+-
+-static void pwmWriteMotor(uint8_t index, float value)
+-{
+-    if (index < MAX_SUPPORTED_MOTORS) {
+-        motorsPwm[index] = value - idlePulse;
+-    }
+-}
+-
+-static void pwmWriteMotorInt(uint8_t index, uint16_t value)
+-{
+-    pwmWriteMotor(index, (float)value);
+-}
+-
+-static void pwmShutdownPulsesForAllMotors(void)
+-{
+-    // NOOP
+-}
+-
+-static void pwmCompleteMotorUpdate(void)
+-{
+-    double outScale = 1000.0;
+-    if (featureIsEnabled(FEATURE_3D)) {
+-        outScale = 500.0;
+-    }
+-}
+-
+-void pwmWriteServo(uint8_t index, float value)
+-{
+-    servosPwm[index] = value;
+-}
+-
+-static const motorVTable_t vTable = {
+-  .postInit = motorPostInitNull,
+-  .convertExternalToMotor = pwmConvertFromExternal,
+-  .convertMotorToExternal = pwmConvertToExternal,
+-  .enable = pwmEnableMotors,
+-  .disable = pwmDisableMotors,
+-  .isMotorEnabled = pwmIsMotorEnabled,
+-  .decodeTelemetry = motorDecodeTelemetryNull,
+-  .write = pwmWriteMotor,
+-  .writeInt = pwmWriteMotorInt,
+-  .updateComplete = pwmCompleteMotorUpdate,
+-  .shutdown = pwmShutdownPulsesForAllMotors,
+-  .requestTelemetry = NULL,
+-  .isMotorIdle = NULL,
+-  .getMotorIO = NULL,
+-};
+-
+-bool motorPwmDevInit(motorDevice_t *device, const motorDevConfig_t *motorConfig, uint16_t _idlePulse)
+-{
+-  UNUSED(motorConfig);
+-
+-  if (!device) {
+-      return false;
+-  }
+-  device->vTable = &vTable;
+-  const uint8_t motorCount = device->count;
+-  pwmMotorCount = device->count;
+-  printf("Initialized motor count %d\n", motorCount);
+-
+-  idlePulse = _idlePulse;
+-
+-  for (int motorIndex = 0; motorIndex < MAX_SUPPORTED_MOTORS && motorIndex < motorCount; motorIndex++) {
+-      pwmMotors[motorIndex].enabled = true;
+-  }
+-
+-  return true;
+-}
+-
+-// ADC part
+-uint16_t adcGetChannel(uint8_t channel)
+-{
+-    UNUSED(channel);
+-    return 0;
+-}
+-
+-// stack part
+-char _estack;
+-char _Min_Stack_Size;
+-
+-// fake EEPROM
+-static FILE *eepromFd = NULL;
+-
+-char * EEPROM_FILENAME = 0;
+-
+-bool loadEEPROMFromFile(void)
+-{
+-    if (eepromFd != NULL) {
+-        fprintf(stderr, "[FLASH_Unlock] eepromFd != NULL\n");
+-
+-        // simitl can just restart without closing the fileDesc...
+-        fclose(eepromFd);
+-        //return false;
+-    }
+-
+-    // open or create
+-    eepromFd = fopen(EEPROM_FILENAME, "rb+");
+-    if (eepromFd != NULL) {
+-        // obtain file size:
+-        fseek(eepromFd, 0, SEEK_END);
+-        size_t lSize = ftell(eepromFd);
+-        rewind(eepromFd);
+-
+-        size_t n = fread(eepromData, 1, sizeof(eepromData), eepromFd);
+-        if (n == lSize) {
+-            printf("[FLASH_Unlock] loaded '%s', size = %ld / %ld\n",
+-                   EEPROM_FILENAME,
+-                   lSize,
+-                   sizeof(eepromData));
+-        } else {
+-            fprintf(stderr,
+-                    "[FLASH_Unlock] failed to load '%s, %ld < %ld'\n",
+-                    EEPROM_FILENAME,
+-                    n,
+-                    lSize);
+-            return false;
+-        }
+-    } else {
+-        printf("[FLASH_Unlock] created '%s', size = %ld\n", EEPROM_FILENAME, sizeof(eepromData));
+-        if ((eepromFd = fopen(EEPROM_FILENAME, "wb+")) == NULL) {
+-            fprintf(stderr,  "[FLASH_Unlock] failed to create '%s'\n", EEPROM_FILENAME);
+-            return false;
+-        }
+-        if (fwrite(eepromData, sizeof(eepromData), 1, eepromFd) != 1) {
+-            fprintf(stderr, "[FLASH_Unlock] write failed: %s\n", strerror(errno));
+-              return false;
+-        }
+-    }
+-    return true;
+-}
+-
+-void configUnlock(void)
+-{
+-    loadEEPROMFromFile();
+-}
+-
+-void configLock(void)
+-{
+-    // flush & close
+-    if (eepromFd != NULL) {
+-        fseek(eepromFd, 0, SEEK_SET);
+-        int wrote = fwrite(eepromData, 1, sizeof(eepromData), eepromFd);
+-        fclose(eepromFd);
+-        eepromFd = NULL;
+-        printf("[FLASH_Lock] saved '%s size: %d'\n", EEPROM_FILENAME, wrote);
+-    } else {
+-        fprintf(stderr, "[FLASH_Lock] eeprom is not unlocked\n");
+-    }
+-}
+-
+-configStreamerResult_e configWriteWord(uintptr_t address, config_streamer_buffer_type_t *buffer)
+-{
+-    STATIC_ASSERT(CONFIG_STREAMER_BUFFER_SIZE == sizeof(uint32_t), "CONFIG_STREAMER_BUFFER_SIZE does not match written size");
+-
+-    if ((address >= (uintptr_t)eepromData) && (address + sizeof(uint32_t) <= (uintptr_t)ARRAYEND(eepromData))) {
+-        memcpy((void*)address, buffer, sizeof(config_streamer_buffer_type_t));
+-        printf("[FLASH_ProgramWord]%p = %08x\n", (void*)address, *((uint32_t*)address));
+-    } else {
+-        printf("[FLASH_ProgramWord]%p out of range!\n", (void*)address);
+-    }
+-    return CONFIG_RESULT_SUCCESS;
+-}
+-
+-
+-void IOConfigGPIO(IO_t io, ioConfig_t cfg)
+-{
+-    UNUSED(io);
+-    UNUSED(cfg);
+-    printf("IOConfigGPIO\n");
+-}
+-
+-bool IORead(IO_t io)
+-{
+-    if (!io) {
+-        return false;
+-    }
+-    return (IO_GPIO(io)->IDR & IO_Pin(io));
+-}
+-
+-void IOWrite(IO_t io, bool hi)
+-{
+-    if (!io) {
+-        return;
+-    }
+-    IO_GPIO(io)->BSRR = IO_Pin(io) << (hi ? 0 : 16);
+-}
+-
+-void IOHi(IO_t io)
+-{
+-    if (!io) {
+-        return;
+-    }
+-    IO_GPIO(io)->BSRR = IO_Pin(io);
+-}
+-
+-void IOLo(IO_t io)
+-{
+-    if (!io) {
+-        return;
+-    }
+-    IO_GPIO(io)->BRR = IO_Pin(io);
+-}
+-
+-void IOInitGlobal(void)
+-{
+-    // NOOP
+-}
+-
+-IO_t IOGetByTag(ioTag_t tag)
+-{
+-    UNUSED(tag);
+-    return NULL;
+-}
+-
+-const mcuTypeInfo_t *getMcuTypeInfo(void)
+-{
+-    static const mcuTypeInfo_t info = { .id = MCU_TYPE_SIMULATOR, .name = "SIMULATOR" };
+-    return &info;
+-}
+-
+-void IOToggle(IO_t io)
+-{
+-    if (!io) {
+-        return;
+-    }
+-
+-    uint32_t mask = IO_Pin(io);
+-    if (IO_GPIO(io)->ODR & mask) {
+-        mask <<= 16; // bit is set, shift mask to reset half
+-    }
+-    IO_GPIO(io)->BSRR = mask;
+-}
+-
+-
+-void spektrumBind(rxConfig_t *rxConfig)
+-{
+-    UNUSED(rxConfig);
+-    printf("spektrumBind\n");
+-}
+-
+-void debugInit(void)
+-{
+-    printf("debugInit\n");
+-}
+-
+-void unusedPinsInit(void)
+-{
+-    printf("unusedPinsInit\n");
+-}
+-
+-
+-void systemInit(void) {
+-  printf("[system] Init...\n");
+-  SystemCoreClock = 500 * 1000000;  // fake 500MHz
+-  // The clock starts at 0 once and is not reset by an in-process reboot
+-  // (systemReset): Betaflight's statics survive it, and timestamps they
+-  // hold would lie in the future (the virtual GPS stayed silent for as
+-  // long as the uptime before the reboot).
+-  sleep_timer = 0;
+-  cliMode = false;
+-}
+-
+-void systemReset(void) {
+-  printf("[system] Reset!\n");
+-
+-  //reinits BF
+-  init();
+-  // exit(0);
+-}
+-
+-void systemResetToBootloader(bootloaderRequestType_e requestType){
+-  printf("[system] ResetToBootloader!\n");
+-  // exit(1);
+-}
+-
+-uint64_t micros64(void)
+-{
+-  return micros_passed;
+-}
+-
+-uint32_t micros(void) {
+-  return micros_passed & 0xFFFFFFFF;
+-}
+-
+-uint32_t millis(void) {
+-  return (micros_passed / 1000) & 0xFFFFFFFF;
+-}
+-
+-void microsleep(uint32_t usec) {
+-  sleep_timer = usec;
+-}
+-
+-void delayMicroseconds(uint32_t usec) {
+-  microsleep(usec);
+-}
+-
+-void delayMicroseconds_real(uint32_t us)
+-{
+-    microsleep(us);
+-}
+-
+-void delay(uint32_t ms) {
+-  microsleep(ms * 1000);
+-}
+-
+-#ifdef _WIN32
+-#include <string.h>
+-
+-char *strsep(char **stringp, const char *delim) {
+-    char *rv = *stringp;
+-    if (rv) {
+-        *stringp += strcspn(*stringp, delim);
+-        if (**stringp)
+-            *(*stringp)++ = '\0';
+-        else
+-            *stringp = 0; }
+-    return rv;
+-}
+-#endif
+-
+-int IO_GPIOPortIdx(IO_t io)
+-{
+-    if (!io) {
+-        return -1;
+-    }
+-    return (((size_t)IO_GPIO(io) - GPIOA_BASE) >> 10);
+-}
+-
+-bool useDshotTelemetry = false;
+\ No newline at end of file
++/*
++ * This file is part of Cleanflight and Betaflight.
++ *
++ * Cleanflight and Betaflight are free software. You can redistribute
++ * this software and/or modify this software under the terms of the
++ * GNU General Public License as published by the Free Software
++ * Foundation, either version 3 of the License, or (at your option)
++ * any later version.
++ *
++ * Cleanflight and Betaflight are distributed in the hope that they
++ * will be useful, but WITHOUT ANY WARRANTY; without even the implied
++ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
++ * See the GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this software.
++ *
++ * If not, see <http://www.gnu.org/licenses/>.
++ */
++
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <math.h>
++#include <string.h>
++
++#include <errno.h>
++#include <time.h>
++
++#include "common/maths.h"
++
++#include "drivers/adc.h"
++#include "drivers/io.h"
++#include "drivers/dma.h"
++#include "drivers/dshot.h"
++#include "drivers/motor_impl.h"
++#include "drivers/serial.h"
++#include "drivers/serial_tcp.h"
++#include "drivers/system.h"
++#include "drivers/time.h"
++#include "drivers/pwm_output.h"
++#include "drivers/pwm_output_impl.h"
++#include "drivers/light_led.h"
++
++#include "drivers/timer.h"
++#include "timer_def.h"
++
++const timerHardware_t timerHardware[1]; // unused
++
++#include "drivers/accgyro/accgyro_virtual.h"
++#include "drivers/barometer/barometer_virtual.h"
++#include "flight/imu.h"
++
++#include "config/feature.h"
++#include "config/config.h"
++#include "config/config_streamer.h"
++#include "config/config_streamer_impl.h"
++#include "config/config_eeprom_impl.h"
++#include "scheduler/scheduler.h"
++
++#include "pg/rx.h"
++#include "pg/motor.h"
++
++#include "rx/rx.h"
++#include "cli/cli.h"
++#include "fc/init.h"
++
++#include "dyad.h"
++
++uint32_t SystemCoreClock;
++uint64_t micros_passed;
++int64_t sleep_timer;
++
++static struct timespec start_time;
++static double simRate = 1.0;
++static bool workerRunning = true;
++
++
++int timeval_sub(struct timespec *result, struct timespec *x, struct timespec *y);
++
++int lockMainPID(void)
++{
++    return 0;
++}
++
++void timerInit(void)
++{
++    printf("[timer]Init...\n");
++}
++
++void timerStart(TIM_TypeDef *tim)
++{
++}
++
++void failureMode(failureMode_e mode)
++{
++    printf("[failureMode]!!! %d\n", mode);
++    //while (1);
++}
++
++void indicateFailure(failureMode_e mode, int repeatCount)
++{
++    UNUSED(repeatCount);
++    printf("Failure LED flash for: [failureMode]!!! %d\n", mode);
++}
++
++int32_t clockCyclesToMicros(int32_t clockCycles)
++{
++    return clockCycles;
++}
++
++int32_t clockCyclesTo10thMicros(int32_t clockCycles)
++{
++    return clockCycles;
++}
++
++int32_t clockCyclesTo100thMicros(int32_t clockCycles)
++{
++    return clockCycles;
++}
++
++uint32_t clockMicrosToCycles(uint32_t micros)
++{
++    return micros;
++}
++uint32_t getCycleCounter(void)
++{
++    return (uint32_t) (micros64() & 0xFFFFFFFF);
++}
++
++
++// Subtract the ‘struct timespec’ values X and Y,  storing the result in RESULT.
++// Return 1 if the difference is negative, otherwise 0.
++// result = x - y
++// from: http://www.gnu.org/software/libc/manual/html_node/Elapsed-Time.html
++int timeval_sub(struct timespec *result, struct timespec *x, struct timespec *y)
++{
++    unsigned int s_carry = 0;
++    unsigned int ns_carry = 0;
++    // Perform the carry for the later subtraction by updating y.
++    if (x->tv_nsec < y->tv_nsec) {
++        int nsec = (y->tv_nsec - x->tv_nsec) / 1000000000 + 1;
++        ns_carry += 1000000000 * nsec;
++        s_carry += nsec;
++    }
++
++    // Compute the time remaining to wait. tv_usec is certainly positive.
++    result->tv_sec = x->tv_sec - y->tv_sec - s_carry;
++    result->tv_nsec = x->tv_nsec - y->tv_nsec + ns_carry;
++
++    // Return 1 if result is negative.
++    return x->tv_sec < y->tv_sec;
++}
++
++
++// PWM part
++pwmOutputPort_t motors[MAX_SUPPORTED_MOTORS];
++static pwmOutputPort_t servos[MAX_SUPPORTED_SERVOS];
++
++// real value to send
++int16_t motorsPwm[MAX_SUPPORTED_MOTORS];
++static int16_t servosPwm[MAX_SUPPORTED_SERVOS];
++static int16_t idlePulse;
++
++void servoDevInit(const servoDevConfig_t *servoConfig)
++{
++    UNUSED(servoConfig);
++    for (uint8_t servoIndex = 0; servoIndex < MAX_SUPPORTED_SERVOS; servoIndex++) {
++        servos[servoIndex].enabled = true;
++    }
++}
++
++static motorDevice_t motorPwmDevice; // Forward
++
++pwmOutputPort_t *pwmGetMotors(void)
++{
++    return pwmMotors;
++}
++
++static float pwmConvertFromExternal(uint16_t externalValue)
++{
++    return (float)externalValue;
++}
++
++static uint16_t pwmConvertToExternal(float motorValue)
++{
++    return (uint16_t)motorValue;
++}
++
++static void pwmDisableMotors(void)
++{
++    // NOOP
++}
++
++static void pwmWriteMotor(uint8_t index, float value)
++{
++    if (index < MAX_SUPPORTED_MOTORS) {
++        motorsPwm[index] = value - idlePulse;
++    }
++}
++
++static void pwmWriteMotorInt(uint8_t index, uint16_t value)
++{
++    pwmWriteMotor(index, (float)value);
++}
++
++static void pwmShutdownPulsesForAllMotors(void)
++{
++    // NOOP
++}
++
++static void pwmCompleteMotorUpdate(void)
++{
++    double outScale = 1000.0;
++    if (featureIsEnabled(FEATURE_3D)) {
++        outScale = 500.0;
++    }
++}
++
++void pwmWriteServo(uint8_t index, float value)
++{
++    servosPwm[index] = value;
++}
++
++static const motorVTable_t vTable = {
++  .postInit = motorPostInitNull,
++  .convertExternalToMotor = pwmConvertFromExternal,
++  .convertMotorToExternal = pwmConvertToExternal,
++  .enable = pwmEnableMotors,
++  .disable = pwmDisableMotors,
++  .isMotorEnabled = pwmIsMotorEnabled,
++  .decodeTelemetry = motorDecodeTelemetryNull,
++  .write = pwmWriteMotor,
++  .writeInt = pwmWriteMotorInt,
++  .updateComplete = pwmCompleteMotorUpdate,
++  .shutdown = pwmShutdownPulsesForAllMotors,
++  .requestTelemetry = NULL,
++  .isMotorIdle = NULL,
++  .getMotorIO = NULL,
++};
++
++bool motorPwmDevInit(motorDevice_t *device, const motorDevConfig_t *motorConfig, uint16_t _idlePulse)
++{
++  UNUSED(motorConfig);
++
++  if (!device) {
++      return false;
++  }
++  device->vTable = &vTable;
++  const uint8_t motorCount = device->count;
++  pwmMotorCount = device->count;
++#ifdef USE_DSHOT_TELEMETRY
++  dshotMotorCount = device->count;  // libfpv: rpm telemetry for each
++#endif
++  printf("Initialized motor count %d\n", motorCount);
++
++  idlePulse = _idlePulse;
++
++  for (int motorIndex = 0; motorIndex < MAX_SUPPORTED_MOTORS && motorIndex < motorCount; motorIndex++) {
++      pwmMotors[motorIndex].enabled = true;
++  }
++
++  return true;
++}
++
++// ADC part
++uint16_t adcGetChannel(uint8_t channel)
++{
++    UNUSED(channel);
++    return 0;
++}
++
++// stack part
++char _estack;
++char _Min_Stack_Size;
++
++// fake EEPROM
++static FILE *eepromFd = NULL;
++
++char * EEPROM_FILENAME = 0;
++
++bool loadEEPROMFromFile(void)
++{
++    if (eepromFd != NULL) {
++        fprintf(stderr, "[FLASH_Unlock] eepromFd != NULL\n");
++
++        // simitl can just restart without closing the fileDesc...
++        fclose(eepromFd);
++        //return false;
++    }
++
++    // open or create
++    eepromFd = fopen(EEPROM_FILENAME, "rb+");
++    if (eepromFd != NULL) {
++        // obtain file size:
++        fseek(eepromFd, 0, SEEK_END);
++        size_t lSize = ftell(eepromFd);
++        rewind(eepromFd);
++
++        size_t n = fread(eepromData, 1, sizeof(eepromData), eepromFd);
++        if (n == lSize) {
++            printf("[FLASH_Unlock] loaded '%s', size = %ld / %ld\n",
++                   EEPROM_FILENAME,
++                   lSize,
++                   sizeof(eepromData));
++        } else {
++            fprintf(stderr,
++                    "[FLASH_Unlock] failed to load '%s, %ld < %ld'\n",
++                    EEPROM_FILENAME,
++                    n,
++                    lSize);
++            return false;
++        }
++    } else {
++        printf("[FLASH_Unlock] created '%s', size = %ld\n", EEPROM_FILENAME, sizeof(eepromData));
++        if ((eepromFd = fopen(EEPROM_FILENAME, "wb+")) == NULL) {
++            fprintf(stderr,  "[FLASH_Unlock] failed to create '%s'\n", EEPROM_FILENAME);
++            return false;
++        }
++        if (fwrite(eepromData, sizeof(eepromData), 1, eepromFd) != 1) {
++            fprintf(stderr, "[FLASH_Unlock] write failed: %s\n", strerror(errno));
++              return false;
++        }
++    }
++    return true;
++}
++
++void configUnlock(void)
++{
++    loadEEPROMFromFile();
++}
++
++void configLock(void)
++{
++    // flush & close
++    if (eepromFd != NULL) {
++        fseek(eepromFd, 0, SEEK_SET);
++        int wrote = fwrite(eepromData, 1, sizeof(eepromData), eepromFd);
++        fclose(eepromFd);
++        eepromFd = NULL;
++        printf("[FLASH_Lock] saved '%s size: %d'\n", EEPROM_FILENAME, wrote);
++    } else {
++        fprintf(stderr, "[FLASH_Lock] eeprom is not unlocked\n");
++    }
++}
++
++configStreamerResult_e configWriteWord(uintptr_t address, config_streamer_buffer_type_t *buffer)
++{
++    STATIC_ASSERT(CONFIG_STREAMER_BUFFER_SIZE == sizeof(uint32_t), "CONFIG_STREAMER_BUFFER_SIZE does not match written size");
++
++    if ((address >= (uintptr_t)eepromData) && (address + sizeof(uint32_t) <= (uintptr_t)ARRAYEND(eepromData))) {
++        memcpy((void*)address, buffer, sizeof(config_streamer_buffer_type_t));
++        printf("[FLASH_ProgramWord]%p = %08x\n", (void*)address, *((uint32_t*)address));
++    } else {
++        printf("[FLASH_ProgramWord]%p out of range!\n", (void*)address);
++    }
++    return CONFIG_RESULT_SUCCESS;
++}
++
++
++void IOConfigGPIO(IO_t io, ioConfig_t cfg)
++{
++    UNUSED(io);
++    UNUSED(cfg);
++    printf("IOConfigGPIO\n");
++}
++
++bool IORead(IO_t io)
++{
++    if (!io) {
++        return false;
++    }
++    return (IO_GPIO(io)->IDR & IO_Pin(io));
++}
++
++void IOWrite(IO_t io, bool hi)
++{
++    if (!io) {
++        return;
++    }
++    IO_GPIO(io)->BSRR = IO_Pin(io) << (hi ? 0 : 16);
++}
++
++void IOHi(IO_t io)
++{
++    if (!io) {
++        return;
++    }
++    IO_GPIO(io)->BSRR = IO_Pin(io);
++}
++
++void IOLo(IO_t io)
++{
++    if (!io) {
++        return;
++    }
++    IO_GPIO(io)->BRR = IO_Pin(io);
++}
++
++void IOInitGlobal(void)
++{
++    // NOOP
++}
++
++IO_t IOGetByTag(ioTag_t tag)
++{
++    UNUSED(tag);
++    return NULL;
++}
++
++const mcuTypeInfo_t *getMcuTypeInfo(void)
++{
++    static const mcuTypeInfo_t info = { .id = MCU_TYPE_SIMULATOR, .name = "SIMULATOR" };
++    return &info;
++}
++
++void IOToggle(IO_t io)
++{
++    if (!io) {
++        return;
++    }
++
++    uint32_t mask = IO_Pin(io);
++    if (IO_GPIO(io)->ODR & mask) {
++        mask <<= 16; // bit is set, shift mask to reset half
++    }
++    IO_GPIO(io)->BSRR = mask;
++}
++
++
++void spektrumBind(rxConfig_t *rxConfig)
++{
++    UNUSED(rxConfig);
++    printf("spektrumBind\n");
++}
++
++void debugInit(void)
++{
++    printf("debugInit\n");
++}
++
++void unusedPinsInit(void)
++{
++    printf("unusedPinsInit\n");
++}
++
++
++void systemInit(void) {
++  printf("[system] Init...\n");
++  SystemCoreClock = 500 * 1000000;  // fake 500MHz
++  // The clock starts at 0 once and is not reset by an in-process reboot
++  // (systemReset): Betaflight's statics survive it, and timestamps they
++  // hold would lie in the future (the virtual GPS stayed silent for as
++  // long as the uptime before the reboot).
++  sleep_timer = 0;
++  cliMode = false;
++}
++
++void systemReset(void) {
++  printf("[system] Reset!\n");
++
++  //reinits BF
++  init();
++  // exit(0);
++}
++
++void systemResetToBootloader(bootloaderRequestType_e requestType){
++  printf("[system] ResetToBootloader!\n");
++  // exit(1);
++}
++
++uint64_t micros64(void)
++{
++  return micros_passed;
++}
++
++uint32_t micros(void) {
++  return micros_passed & 0xFFFFFFFF;
++}
++
++uint32_t millis(void) {
++  return (micros_passed / 1000) & 0xFFFFFFFF;
++}
++
++void microsleep(uint32_t usec) {
++  sleep_timer = usec;
++}
++
++void delayMicroseconds(uint32_t usec) {
++  microsleep(usec);
++}
++
++void delayMicroseconds_real(uint32_t us)
++{
++    microsleep(us);
++}
++
++void delay(uint32_t ms) {
++  microsleep(ms * 1000);
++}
++
++#ifdef _WIN32
++#include <string.h>
++
++char *strsep(char **stringp, const char *delim) {
++    char *rv = *stringp;
++    if (rv) {
++        *stringp += strcspn(*stringp, delim);
++        if (**stringp)
++            *(*stringp)++ = '\0';
++        else
++            *stringp = 0; }
++    return rv;
++}
++#endif
++
++int IO_GPIOPortIdx(IO_t io)
++{
++    if (!io) {
++        return -1;
++    }
++    return (((size_t)IO_GPIO(io) - GPIOA_BASE) >> 10);
++}
++
++// libfpv: every simulated ESC sends its rpm back, like bidirectional DShot
++// (simSetMotorRpm), whatever the motor protocol
++bool useDshotTelemetry = true;
++
++#ifdef USE_DSHOT_TELEMETRY
++// The telemetry frame an ESC would send for a motor at `rpm`: the
++// electrical period in microseconds as GCR "eeem mmmm mmmm" (0x0fff when
++// stopped). Betaflight decodes it with the pole count it is configured with.
++static uint16_t erpmTelemetryValue(float rpm)
++{
++    const float erpm = fabsf(rpm) * motorConfig()->motorPoleCount / 2.0f;
++    if (erpm < 100.0f) {
++        return 0x0fff;
++    }
++    uint32_t period = (uint32_t)lrintf(60e6f / erpm);
++    uint32_t e = 0;
++    while (period > 0x1ff && e < 7) {
++        period >>= 1;
++        e++;
++    }
++    if (period > 0x1ff) {
++        return 0x0fff;
++    }
++    return (uint16_t)((e << 9) | period);
++}
++
++// DShot itself has no simulated driver: the motors run on PWM (libfpv's
++// default protocol) and only the telemetry is DShot's.
++dshotTelemetryCycleCounters_t dshotDMAHandlerCycleCounters;
++
++bool dshotPwmDevInit(motorDevice_t *device, const motorDevConfig_t *motorConfig)
++{
++    UNUSED(device);
++    UNUSED(motorConfig);
++    return false;
++}
++
++void simSetMotorRpm(const float *rpm, int count)
++{
++    for (int i = 0; i < count && i < MAX_SUPPORTED_MOTORS; i++) {
++        dshotTelemetryState.motorState[i].rawValue = erpmTelemetryValue(rpm[i]);
++    }
++    dshotTelemetryState.rawValueState = DSHOT_RAW_VALUE_STATE_NOT_PROCESSED;
++}
++#else
++void simSetMotorRpm(const float *rpm, int count)
++{
++    UNUSED(rpm);
++    UNUSED(count);
++}
++#endif
+\ No newline at end of file
+diff --git a/extern/betaflightext/src/main/target/simITL/target.h b/extern/betaflightext/src/main/target/simITL/target.h
+index 60fa470..01a1be3 100644
+--- a/extern/betaflightext/src/main/target/simITL/target.h
++++ b/extern/betaflightext/src/main/target/simITL/target.h
+@@ -1,327 +1,335 @@
+-/*
+- * This file is part of Cleanflight and Betaflight.
+- *
+- * Cleanflight and Betaflight are free software. You can redistribute
+- * this software and/or modify this software under the terms of the
+- * GNU General Public License as published by the Free Software
+- * Foundation, either version 3 of the License, or (at your option)
+- * any later version.
+- *
+- * Cleanflight and Betaflight are distributed in the hope that they
+- * will be useful, but WITHOUT ANY WARRANTY; without even the implied
+- * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+- * See the GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this software.
+- *
+- * If not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-// SITL (software in the loop) simulator
+-
+-#pragma once
+-
+-#include <stdint.h>
+-#include <stddef.h>
+-
+-#include "common/utils.h"
+-
+-#define TARGET_BOARD_IDENTIFIER "SITL"
+-
+-#ifdef __MINGW32__
+-  #define ffs __builtin_ffs
+-#endif
+-
+-//#define SIMULATOR_MULTITHREAD
+-
+-#define SYSTEM_HSE_MHZ 0
+-#define DEFAULT_CPU_OVERCLOCK 1
+-#define DMA_RAM
+-#define DMA_RW_AXI
+-#define DMA_RAM_R
+-#define DMA_RAM_W
+-#define DMA_RAM_RW
+-
+-#define DMA_DATA_ZERO_INIT
+-#define DMA_DATA
+-#define STATIC_DMA_DATA_AUTO
+-
+-// use simulatior's attitude directly
+-// disable this if wants to test AHRS algorithm
+-#undef USE_IMU_CALC
+-
+-// file name to save config
+-//#define EEPROM_FILENAME "eeprom.bin"
+-
+-// set by sim.cpp depending on initial state packet
+-extern char* EEPROM_FILENAME;
+-
+-#define CONFIG_IN_FILE
+-#define EEPROM_SIZE     32768
+-
+-#define U_ID_0 0
+-#define U_ID_1 1
+-#define U_ID_2 2
+-
+-#undef TASK_GYROPID_DESIRED_PERIOD
+-#define TASK_GYROPID_DESIRED_PERIOD     250 //4k
+-
+-#undef SCHEDULER_DELAY_LIMIT
+-#define SCHEDULER_DELAY_LIMIT           1
+-
+-#define USE_LATE_TASK_STATISTICS
+-
+-#define USE_VIRTUAL_LED
+-//#define USE_VIRTUAL_CURRENT_METER
+-
+-#define USE_ACC
+-#define USE_VIRTUAL_ACC
+-
+-#define USE_GYRO
+-#define USE_VIRTUAL_GYRO
+-
+-#define USE_MAG
+-#define USE_VIRTUAL_MAG
+-
+-#define USE_BARO
+-#define USE_VIRTUAL_BARO
+-
+-#define USE_GPS
+-#define USE_VIRTUAL_GPS
+-#define USE_GPS_NMEA
+-#define USE_GPS_UBLOX
+-#define USE_GPS_RESCUE
+-
+-#define USE_BLACKBOX
+-
+-#define USABLE_TIMER_CHANNEL_COUNT 0
+-
+-#define USE_UART1
+-#define USE_UART2
+-#define USE_UART3
+-#define USE_UART4
+-#define USE_UART5
+-#define USE_UART6
+-#define USE_UART7
+-#define USE_UART8
+-
+-//#define USE_SOFTSERIAL1
+-//#define USE_SOFTSERIAL2
+-
+-//#define SERIAL_PORT_COUNT 8
+-
+-#define DEFAULT_RX_FEATURE      FEATURE_RX_MSP
+-#define DEFAULT_FEATURES        (FEATURE_GPS | FEATURE_TELEMETRY | FEATURE_OSD)
+-
+-#define USE_PARAMETER_GROUPS
+-
+-#define USE_BEEPER
+-#define USE_MAX7456
+-#define USE_PWM_OUTPUT
+-
+-#define USE_RC_SMOOTHING_FILTER
+-#define USE_BATTERY_VOLTAGE_SAG_COMPENSATION
+-
+-#undef USE_STACK_CHECK // I think SITL don't need this
+-#undef USE_DASHBOARD
+-#undef USE_TELEMETRY_LTM
+-#undef USE_ADC
+-#undef USE_VCP
+-// #undef USE_OSD
+-#define USE_OSD
+-#define USE_OSD_SD
+-#define USE_CMS
+-#define USE_MSP_DISPLAYPORT
+-#define USE_OSD_OVER_MSP_DISPLAYPORT
+-#define USE_RC_STATS
+-
+-#undef USE_RX_PPM
+-#undef USE_RX_PWM
+-#undef USE_SERIALRX
+-#undef USE_SERIALRX_CRSF
+-#undef USE_SERIALRX_GHST
+-#undef USE_SERIALRX_IBUS
+-#undef USE_SERIALRX_SBUS
+-#undef USE_SERIALRX_SPEKTRUM
+-#undef USE_SERIALRX_SUMD
+-#undef USE_SERIALRX_SUMH
+-#undef USE_SERIALRX_XBUS
+-#undef USE_LED_STRIP
+-//#undef USE_PWM_OUTPUT
+-#undef USE_TELEMETRY_FRSKY_HUB
+-#undef USE_TELEMETRY_HOTT
+-#undef USE_TELEMETRY_SMARTPORT
+-#undef USE_TELEMETRY_MAVLINK
+-#undef USE_RESOURCE_MGMT
+-//#undef USE_CMS
+-#undef USE_TELEMETRY_CRSF
+-#undef USE_TELEMETRY_GHST
+-#undef USE_TELEMETRY_IBUS
+-#undef USE_TELEMETRY_JETIEXBUS
+-#undef USE_TELEMETRY_SRXL
+-#undef USE_SERIALRX_JETIEXBUS
+-#undef USE_VTX_COMMON
+-#undef USE_VTX_CONTROL
+-#undef USE_VTX_SMARTAUDIO
+-#undef USE_VTX_TRAMP
+-#undef USE_VTX_MSP
+-#undef USE_CAMERA_CONTROL
+-#undef USE_BRUSHED_ESC_AUTODETECT
+-//#undef USE_GPS_RESCUE
+-#undef USE_SERIAL_4WAY_BLHELI_BOOTLOADER
+-#undef USE_SERIAL_4WAY_SK_BOOTLOADER
+-
+-#define USE_GPS_RESCUE
+-//#define USE_CLI_DEBUG_PRINT
+-
+-// cli register dump ?
+-#undef USE_GYRO_REGISTER_DUMP
+-
+-#undef USE_I2C
+-#undef USE_SPI
+-
+-#define TARGET_FLASH_SIZE 2048
+-
+-
+-#define LED_STRIP_TIMER 1
+-#define SOFTSERIAL_1_TIMER 2
+-#define SOFTSERIAL_2_TIMER 3
+-
+-#define DEFIO_NO_PORTS   // suppress 'no pins defined' warning
+-
+-#define FLASH_PAGE_SIZE (0x400)
+-
+-// belows are internal stuff
+-extern uint32_t SystemCoreClock;
+-
+-typedef enum
+-{
+-    Mode_TEST = 0x0,
+-    Mode_Out_PP = 0x10
+-} GPIO_Mode;
+-
+-typedef enum {RESET = 0, SET = !RESET} FlagStatus, ITStatus;
+-typedef enum {DISABLE = 0, ENABLE = !DISABLE} FunctionalState;
+-typedef enum {TEST_IRQ = 0 } IRQn_Type;
+-typedef enum {
+-    EXTI_Trigger_Rising = 0x08,
+-    EXTI_Trigger_Falling = 0x0C,
+-    EXTI_Trigger_Rising_Falling = 0x10
+-} EXTITrigger_TypeDef;
+-
+-typedef struct
+-{
+-  uint32_t IDR;
+-  uint32_t ODR;
+-  uint32_t BSRR;
+-  uint32_t BRR;
+-} GPIO_TypeDef;
+-
+-#define GPIOA_BASE ((intptr_t)0x0001)
+-
+-typedef struct
+-{
+-    void* test;
+-} TIM_TypeDef;
+-
+-typedef struct
+-{
+-    void* test;
+-} TIM_OCInitTypeDef;
+-
+-typedef struct {
+-    void* test;
+-} DMA_TypeDef;
+-
+-typedef struct {
+-    void* test;
+-} DMA_Channel_TypeDef;
+-
+-typedef struct {
+-    void* test;
+-} DMA_InitTypeDef;
+-
+-uint8_t DMA_GetFlagStatus(void *);
+-void DMA_Cmd(DMA_Channel_TypeDef*, FunctionalState );
+-void DMA_ClearFlag(uint32_t);
+-
+-typedef struct
+-{
+-    void* test;
+-} SPI_TypeDef;
+-
+-typedef struct
+-{
+-    void* test;
+-} USART_TypeDef;
+-
+-#define USART1 ((USART_TypeDef *)0x0001)
+-#define USART2 ((USART_TypeDef *)0x0002)
+-#define USART3 ((USART_TypeDef *)0x0003)
+-#define USART4 ((USART_TypeDef *)0x0004)
+-#define USART5 ((USART_TypeDef *)0x0005)
+-#define USART6 ((USART_TypeDef *)0x0006)
+-#define USART7 ((USART_TypeDef *)0x0007)
+-#define USART8 ((USART_TypeDef *)0x0008)
+-
+-#define UART4 ((USART_TypeDef *)0x0004)
+-#define UART5 ((USART_TypeDef *)0x0005)
+-#define UART7 ((USART_TypeDef *)0x0007)
+-#define UART8 ((USART_TypeDef *)0x0008)
+-
+-#define SIMULATOR_MAX_RC_CHANNELS   16
+-#define SIMULATOR_MAX_PWM_CHANNELS  16
+-
+-typedef struct
+-{
+-
+-  uint16_t TIM_Channel;      /*!< Specifies the TIM channel.
+-                                  This parameter can be a value of @ref TIM_Channel */
+-
+-  uint16_t TIM_ICPolarity;   /*!< Specifies the active edge of the input signal.
+-                                  This parameter can be a value of @ref TIM_Input_Capture_Polarity */
+-
+-  uint16_t TIM_ICSelection;  /*!< Specifies the input.
+-                                  This parameter can be a value of @ref TIM_Input_Capture_Selection */
+-
+-  uint16_t TIM_ICPrescaler;  /*!< Specifies the Input Capture Prescaler.
+-                                  This parameter can be a value of @ref TIM_Input_Capture_Prescaler */
+-
+-  uint16_t TIM_ICFilter;     /*!< Specifies the input capture filter.
+-                                  This parameter can be a number between 0x0 and 0xF */
+-} TIM_ICInitTypeDef;
+-
+-typedef struct
+-{
+-    void* test;
+-} I2C_TypeDef;
+-
+-typedef enum
+-{
+-  FLASH_BUSY = 1,
+-  FLASH_ERROR_PG,
+-  FLASH_ERROR_WRP,
+-  FLASH_COMPLETE,
+-  FLASH_TIMEOUT
+-} FLASH_Status;
+-
+-void FLASH_Unlock(void);
+-void FLASH_Lock(void);
+-FLASH_Status FLASH_ErasePage(uintptr_t Page_Address);
+-FLASH_Status FLASH_ProgramWord(uintptr_t addr, uint32_t Data);
+-
+-// simulated time
+-extern uint64_t micros_passed;
+-extern int64_t sleep_timer;
+-
+-uint64_t nanos64_real(void);
+-uint64_t micros64_real(void);
+-uint64_t millis64_real(void);
+-void delayMicroseconds_real(uint32_t us);
+-uint64_t micros64(void);
+-uint64_t millis64(void);
+-
+-int lockMainPID(void);
+-
+-
++/*
++ * This file is part of Cleanflight and Betaflight.
++ *
++ * Cleanflight and Betaflight are free software. You can redistribute
++ * this software and/or modify this software under the terms of the
++ * GNU General Public License as published by the Free Software
++ * Foundation, either version 3 of the License, or (at your option)
++ * any later version.
++ *
++ * Cleanflight and Betaflight are distributed in the hope that they
++ * will be useful, but WITHOUT ANY WARRANTY; without even the implied
++ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
++ * See the GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this software.
++ *
++ * If not, see <http://www.gnu.org/licenses/>.
++ */
++
++// SITL (software in the loop) simulator
++
++#pragma once
++
++#include <stdint.h>
++#include <stddef.h>
++
++#include "common/utils.h"
++
++#define TARGET_BOARD_IDENTIFIER "SITL"
++
++#ifdef __MINGW32__
++  #define ffs __builtin_ffs
++#endif
++
++//#define SIMULATOR_MULTITHREAD
++
++#define SYSTEM_HSE_MHZ 0
++#define DEFAULT_CPU_OVERCLOCK 1
++#define DMA_RAM
++#define DMA_RW_AXI
++#define DMA_RAM_R
++#define DMA_RAM_W
++#define DMA_RAM_RW
++
++#define DMA_DATA_ZERO_INIT
++#define DMA_DATA
++#define STATIC_DMA_DATA_AUTO
++
++// use simulatior's attitude directly
++// disable this if wants to test AHRS algorithm
++#undef USE_IMU_CALC
++
++// file name to save config
++//#define EEPROM_FILENAME "eeprom.bin"
++
++// set by sim.cpp depending on initial state packet
++extern char* EEPROM_FILENAME;
++
++#define CONFIG_IN_FILE
++#define EEPROM_SIZE     32768
++
++#define U_ID_0 0
++#define U_ID_1 1
++#define U_ID_2 2
++
++#undef TASK_GYROPID_DESIRED_PERIOD
++#define TASK_GYROPID_DESIRED_PERIOD     250 //4k
++
++#undef SCHEDULER_DELAY_LIMIT
++#define SCHEDULER_DELAY_LIMIT           1
++
++#define USE_LATE_TASK_STATISTICS
++
++#define USE_VIRTUAL_LED
++//#define USE_VIRTUAL_CURRENT_METER
++
++#define USE_ACC
++#define USE_VIRTUAL_ACC
++
++#define USE_GYRO
++#define USE_VIRTUAL_GYRO
++
++#define USE_MAG
++#define USE_VIRTUAL_MAG
++
++#define USE_BARO
++#define USE_VIRTUAL_BARO
++
++#define USE_GPS
++#define USE_VIRTUAL_GPS
++#define USE_GPS_NMEA
++#define USE_GPS_UBLOX
++#define USE_GPS_RESCUE
++
++#define USE_BLACKBOX
++
++#define USABLE_TIMER_CHANNEL_COUNT 0
++
++#define USE_UART1
++#define USE_UART2
++#define USE_UART3
++#define USE_UART4
++#define USE_UART5
++#define USE_UART6
++#define USE_UART7
++#define USE_UART8
++
++//#define USE_SOFTSERIAL1
++//#define USE_SOFTSERIAL2
++
++//#define SERIAL_PORT_COUNT 8
++
++#define DEFAULT_RX_FEATURE      FEATURE_RX_MSP
++#define DEFAULT_FEATURES        (FEATURE_GPS | FEATURE_TELEMETRY | FEATURE_OSD)
++
++#define USE_PARAMETER_GROUPS
++
++#define USE_BEEPER
++#define USE_MAX7456
++#define USE_PWM_OUTPUT
++// libfpv: the simulated ESCs report rpm (bidirectional DShot), so dynamic
++// idle and the RPM filter work as on a real quad
++#define USE_DSHOT
++#define USE_DSHOT_TELEMETRY
++#undef USE_DSHOT_BITBANG
++#undef USE_DSHOT_TELEMETRY_STATS
++#define USE_DYN_IDLE
++#define USE_RPM_FILTER
++
++#define USE_RC_SMOOTHING_FILTER
++#define USE_BATTERY_VOLTAGE_SAG_COMPENSATION
++
++#undef USE_STACK_CHECK // I think SITL don't need this
++#undef USE_DASHBOARD
++#undef USE_TELEMETRY_LTM
++#undef USE_ADC
++#undef USE_VCP
++// #undef USE_OSD
++#define USE_OSD
++#define USE_OSD_SD
++#define USE_CMS
++#define USE_MSP_DISPLAYPORT
++#define USE_OSD_OVER_MSP_DISPLAYPORT
++#define USE_RC_STATS
++
++#undef USE_RX_PPM
++#undef USE_RX_PWM
++#undef USE_SERIALRX
++#undef USE_SERIALRX_CRSF
++#undef USE_SERIALRX_GHST
++#undef USE_SERIALRX_IBUS
++#undef USE_SERIALRX_SBUS
++#undef USE_SERIALRX_SPEKTRUM
++#undef USE_SERIALRX_SUMD
++#undef USE_SERIALRX_SUMH
++#undef USE_SERIALRX_XBUS
++#undef USE_LED_STRIP
++//#undef USE_PWM_OUTPUT
++#undef USE_TELEMETRY_FRSKY_HUB
++#undef USE_TELEMETRY_HOTT
++#undef USE_TELEMETRY_SMARTPORT
++#undef USE_TELEMETRY_MAVLINK
++#undef USE_RESOURCE_MGMT
++//#undef USE_CMS
++#undef USE_TELEMETRY_CRSF
++#undef USE_TELEMETRY_GHST
++#undef USE_TELEMETRY_IBUS
++#undef USE_TELEMETRY_JETIEXBUS
++#undef USE_TELEMETRY_SRXL
++#undef USE_SERIALRX_JETIEXBUS
++#undef USE_VTX_COMMON
++#undef USE_VTX_CONTROL
++#undef USE_VTX_SMARTAUDIO
++#undef USE_VTX_TRAMP
++#undef USE_VTX_MSP
++#undef USE_CAMERA_CONTROL
++#undef USE_BRUSHED_ESC_AUTODETECT
++//#undef USE_GPS_RESCUE
++#undef USE_SERIAL_4WAY_BLHELI_BOOTLOADER
++#undef USE_SERIAL_4WAY_SK_BOOTLOADER
++
++#define USE_GPS_RESCUE
++//#define USE_CLI_DEBUG_PRINT
++
++// cli register dump ?
++#undef USE_GYRO_REGISTER_DUMP
++
++#undef USE_I2C
++#undef USE_SPI
++
++#define TARGET_FLASH_SIZE 2048
++
++
++#define LED_STRIP_TIMER 1
++#define SOFTSERIAL_1_TIMER 2
++#define SOFTSERIAL_2_TIMER 3
++
++#define DEFIO_NO_PORTS   // suppress 'no pins defined' warning
++
++#define FLASH_PAGE_SIZE (0x400)
++
++// belows are internal stuff
++extern uint32_t SystemCoreClock;
++
++typedef enum
++{
++    Mode_TEST = 0x0,
++    Mode_Out_PP = 0x10
++} GPIO_Mode;
++
++typedef enum {RESET = 0, SET = !RESET} FlagStatus, ITStatus;
++typedef enum {DISABLE = 0, ENABLE = !DISABLE} FunctionalState;
++typedef enum {TEST_IRQ = 0 } IRQn_Type;
++typedef enum {
++    EXTI_Trigger_Rising = 0x08,
++    EXTI_Trigger_Falling = 0x0C,
++    EXTI_Trigger_Rising_Falling = 0x10
++} EXTITrigger_TypeDef;
++
++typedef struct
++{
++  uint32_t IDR;
++  uint32_t ODR;
++  uint32_t BSRR;
++  uint32_t BRR;
++} GPIO_TypeDef;
++
++#define GPIOA_BASE ((intptr_t)0x0001)
++
++typedef struct
++{
++    void* test;
++} TIM_TypeDef;
++
++typedef struct
++{
++    void* test;
++} TIM_OCInitTypeDef;
++
++typedef struct {
++    void* test;
++} DMA_TypeDef;
++
++typedef struct {
++    void* test;
++} DMA_Channel_TypeDef;
++
++typedef struct {
++    void* test;
++} DMA_InitTypeDef;
++
++uint8_t DMA_GetFlagStatus(void *);
++void DMA_Cmd(DMA_Channel_TypeDef*, FunctionalState );
++void DMA_ClearFlag(uint32_t);
++
++typedef struct
++{
++    void* test;
++} SPI_TypeDef;
++
++typedef struct
++{
++    void* test;
++} USART_TypeDef;
++
++#define USART1 ((USART_TypeDef *)0x0001)
++#define USART2 ((USART_TypeDef *)0x0002)
++#define USART3 ((USART_TypeDef *)0x0003)
++#define USART4 ((USART_TypeDef *)0x0004)
++#define USART5 ((USART_TypeDef *)0x0005)
++#define USART6 ((USART_TypeDef *)0x0006)
++#define USART7 ((USART_TypeDef *)0x0007)
++#define USART8 ((USART_TypeDef *)0x0008)
++
++#define UART4 ((USART_TypeDef *)0x0004)
++#define UART5 ((USART_TypeDef *)0x0005)
++#define UART7 ((USART_TypeDef *)0x0007)
++#define UART8 ((USART_TypeDef *)0x0008)
++
++#define SIMULATOR_MAX_RC_CHANNELS   16
++#define SIMULATOR_MAX_PWM_CHANNELS  16
++
++typedef struct
++{
++
++  uint16_t TIM_Channel;      /*!< Specifies the TIM channel.
++                                  This parameter can be a value of @ref TIM_Channel */
++
++  uint16_t TIM_ICPolarity;   /*!< Specifies the active edge of the input signal.
++                                  This parameter can be a value of @ref TIM_Input_Capture_Polarity */
++
++  uint16_t TIM_ICSelection;  /*!< Specifies the input.
++                                  This parameter can be a value of @ref TIM_Input_Capture_Selection */
++
++  uint16_t TIM_ICPrescaler;  /*!< Specifies the Input Capture Prescaler.
++                                  This parameter can be a value of @ref TIM_Input_Capture_Prescaler */
++
++  uint16_t TIM_ICFilter;     /*!< Specifies the input capture filter.
++                                  This parameter can be a number between 0x0 and 0xF */
++} TIM_ICInitTypeDef;
++
++typedef struct
++{
++    void* test;
++} I2C_TypeDef;
++
++typedef enum
++{
++  FLASH_BUSY = 1,
++  FLASH_ERROR_PG,
++  FLASH_ERROR_WRP,
++  FLASH_COMPLETE,
++  FLASH_TIMEOUT
++} FLASH_Status;
++
++void FLASH_Unlock(void);
++void FLASH_Lock(void);
++FLASH_Status FLASH_ErasePage(uintptr_t Page_Address);
++FLASH_Status FLASH_ProgramWord(uintptr_t addr, uint32_t Data);
++
++// simulated time
++extern uint64_t micros_passed;
++extern int64_t sleep_timer;
++
++uint64_t nanos64_real(void);
++uint64_t micros64_real(void);
++uint64_t millis64_real(void);
++void delayMicroseconds_real(uint32_t us);
++uint64_t micros64(void);
++uint64_t millis64(void);
++
++int lockMainPID(void);
++
++
+diff --git a/extern/sitl.h b/extern/sitl.h
+index 9969d4b..d3a8e52 100644
+--- a/extern/sitl.h
++++ b/extern/sitl.h
+@@ -1,113 +1,115 @@
+-// provides access to betaflight internals
+-// used by SimITL
+-
+-#ifndef SITL_BF
+-#define SITL_BF
+-
+-namespace SimITL{
+-  namespace BF {
+-    extern "C" {
+-      #include "common/maths.h"
+-
+-      #include "fc/init.h"
+-      #include "fc/runtime_config.h"
+-      #include "fc/tasks.h"
+-
+-      #include "flight/imu.h"
+-
+-      #include "scheduler/scheduler.h"
+-      #include "sensors/sensors.h"
+-
+-      #include "drivers/accgyro/accgyro_virtual.h"
+-      #include "drivers/pwm_output.h"
+-      #include "drivers/pwm_output_fake.h"
+-      #include "drivers/sound_beeper.h"
+-
+-      #include "sensors/current.h"
+-
+-      //added, not sure if needed
+-      #include "rx/rx.h"
+-      #include "rx/msp.h"
+-
+-      #include "io/displayport_fake.h"
+-
+-      #include "target.h"
+-
+-      #include "io/gps.h"
+-
+-      #include "sensors/battery_fake.h"
+-
+-      #include "build/debug.h"
+-
+-      #include "drivers/serial_ws.h"
+-
+-      #undef ENABLE_STATE
+-
+-      //custom macro with bf namespaces
+-      #define BF_DEBUG_SET(mode, index, value) do { if (BF::debugMode == (mode)) { BF::debug[(index)] = (value); } } while (0)
+-
+-      void EnableState(stateFlags_t mask) {
+-        stateFlags |= mask;
+-      }
+-
+-      // rc data
+-      uint16_t rcDataCache[16] {};
+-      uint32_t rcDataReceptionTimeUs = 0U;
+-
+-      static float rxRcReadData(const BF::rxRuntimeState_t *rxRuntimeState, uint8_t channel)
+-      {
+-        UNUSED(rxRuntimeState);
+-        return rcDataCache[channel];
+-      }
+-
+-      static uint32_t rxRcFrameTimeUs(void)
+-      {
+-        return rcDataReceptionTimeUs;
+-      }
+-
+-      // set when the radio link is lost, so Betaflight enters failsafe
+-      static bool rcFrameFailsafe = false;
+-
+-      // RC packets arrive at the radio link's packet rate, not on every
+-      // scheduler pass: reporting a new frame on every check kept
+-      // Betaflight's RX task running ~6000 times a second, starving the OSD
+-      // and MSP (serial) tasks. Each packet is reported once.
+-      static uint32_t rcPacketIntervalUs = 2000;  // 500 Hz, ELRS freestyle
+-      static uint64_t rcLastPacketUs = 0;
+-      static bool rcFrameReady = false;
+-      static bool rcFrameDropped = false;  // the packet was lost on the way
+-      // the host decides whether each packet gets through (link simulation)
+-      static bool (*rcPacketLossHook)(void) = nullptr;
+-
+-      static uint8_t rxRcFrameStatus(BF::rxRuntimeState_t *rxRuntimeState)
+-      {
+-        UNUSED(rxRuntimeState);
+-        if (rcFrameDropped) {
+-          rcFrameDropped = false;
+-          return BF::RX_FRAME_DROPPED;
+-        }
+-        if (rcFrameReady) {
+-          rcFrameReady = false;
+-          return BF::RX_FRAME_COMPLETE;
+-        }
+-        return BF::RX_FRAME_PENDING;
+-      }
+-
+-      static void updateSerialWs(){
+-        BF::wsUpdate();
+-      }
+-
+-      static void stopSerialWs()
+-      {
+-        BF::wsStop();
+-      }
+-
+-      extern uint64_t micros_passed;
+-      extern int64_t sleep_timer;
+-
+-      extern int16_t motorsPwm[MAX_SUPPORTED_MOTORS];
+-
+-    } // end extern "C"
+-  }
+-}
+-#endif
+\ No newline at end of file
++// provides access to betaflight internals
++// used by SimITL
++
++#ifndef SITL_BF
++#define SITL_BF
++
++namespace SimITL{
++  namespace BF {
++    extern "C" {
++      #include "common/maths.h"
++
++      #include "fc/init.h"
++      #include "fc/runtime_config.h"
++      #include "fc/tasks.h"
++
++      #include "flight/imu.h"
++
++      #include "scheduler/scheduler.h"
++      #include "sensors/sensors.h"
++
++      #include "drivers/accgyro/accgyro_virtual.h"
++      #include "drivers/pwm_output.h"
++      #include "drivers/pwm_output_fake.h"
++      #include "drivers/sound_beeper.h"
++
++      #include "sensors/current.h"
++
++      //added, not sure if needed
++      #include "rx/rx.h"
++      #include "rx/msp.h"
++
++      #include "io/displayport_fake.h"
++
++      #include "target.h"
++
++      #include "io/gps.h"
++
++      #include "sensors/battery_fake.h"
++
++      #include "build/debug.h"
++
++      #include "drivers/serial_ws.h"
++
++      #undef ENABLE_STATE
++
++      //custom macro with bf namespaces
++      #define BF_DEBUG_SET(mode, index, value) do { if (BF::debugMode == (mode)) { BF::debug[(index)] = (value); } } while (0)
++
++      void EnableState(stateFlags_t mask) {
++        stateFlags |= mask;
++      }
++
++      // rc data
++      uint16_t rcDataCache[16] {};
++      uint32_t rcDataReceptionTimeUs = 0U;
++
++      static float rxRcReadData(const BF::rxRuntimeState_t *rxRuntimeState, uint8_t channel)
++      {
++        UNUSED(rxRuntimeState);
++        return rcDataCache[channel];
++      }
++
++      static uint32_t rxRcFrameTimeUs(void)
++      {
++        return rcDataReceptionTimeUs;
++      }
++
++      // set when the radio link is lost, so Betaflight enters failsafe
++      static bool rcFrameFailsafe = false;
++
++      // RC packets arrive at the radio link's packet rate, not on every
++      // scheduler pass: reporting a new frame on every check kept
++      // Betaflight's RX task running ~6000 times a second, starving the OSD
++      // and MSP (serial) tasks. Each packet is reported once.
++      static uint32_t rcPacketIntervalUs = 2000;  // 500 Hz, ELRS freestyle
++      static uint64_t rcLastPacketUs = 0;
++      static bool rcFrameReady = false;
++      static bool rcFrameDropped = false;  // the packet was lost on the way
++      // the host decides whether each packet gets through (link simulation)
++      static bool (*rcPacketLossHook)(void) = nullptr;
++
++      static uint8_t rxRcFrameStatus(BF::rxRuntimeState_t *rxRuntimeState)
++      {
++        UNUSED(rxRuntimeState);
++        if (rcFrameDropped) {
++          rcFrameDropped = false;
++          return BF::RX_FRAME_DROPPED;
++        }
++        if (rcFrameReady) {
++          rcFrameReady = false;
++          return BF::RX_FRAME_COMPLETE;
++        }
++        return BF::RX_FRAME_PENDING;
++      }
++
++      static void updateSerialWs(){
++        BF::wsUpdate();
++      }
++
++      static void stopSerialWs()
++      {
++        BF::wsStop();
++      }
++
++      extern uint64_t micros_passed;
++      extern int64_t sleep_timer;
++
++      extern int16_t motorsPwm[MAX_SUPPORTED_MOTORS];
++      // libfpv: each motor's rpm, as its ESC reports it (bidirectional DShot)
++      void simSetMotorRpm(const float *rpm, int count);
++
++    } // end extern "C"
++  }
++}
++#endif
+diff --git a/src/sim/bf.cpp b/src/sim/bf.cpp
+index cdaa083..37d81ba 100644
+--- a/src/sim/bf.cpp
++++ b/src/sim/bf.cpp
+@@ -1,229 +1,233 @@
+-#include "util/simitl_log.h"
+-#include "bf.h"
+-#include "sitl.h" // access to bf internals
+-#include <array>
+-
+-namespace SimITL{
+-  #define USE_QUAT_ORIENTATION
+-
+-  #ifndef M_PI
+-  #define M_PI 3.14159265358979
+-  #endif
+-
+-  const static auto GYRO_SCALE = 16.4f;
+-  const static auto RAD2DEG = (180.0f / float(M_PI));
+-  const static auto ACC_SCALE = (256 / 9.80665f);
+-
+-  namespace BF {
+-    
+-    void resetRcData(){
+-      //reset rc data to valid data...
+-      for(int i = 0; i < SIMULATOR_MAX_RC_CHANNELS; i++){
+-        rcDataCache[i] = 1000U;
+-      }
+-    }
+-
+-    void setRcData(const float (&data)[16])
+-    {
+-      uint32_t timeUs = BF::micros_passed & 0xFFFFFFFF;
+-
+-      // only at the link's packet rate: between packets Betaflight keeps
+-      // the last sticks it received, like a real receiver
+-      if (rcLastPacketUs != 0 && BF::micros_passed - rcLastPacketUs < rcPacketIntervalUs &&
+-          BF::micros_passed >= rcLastPacketUs) {
+-        return;
+-      }
+-      rcLastPacketUs = BF::micros_passed;
+-      // radio lost (failsafe) or this packet lost by the link simulation
+-      if (rcFrameFailsafe || (rcPacketLossHook && rcPacketLossHook())) {
+-        rcFrameDropped = true;  // lost: Betaflight keeps the old sticks
+-        rcFrameReady = false;
+-        return;
+-      }
+-      rcFrameReady = true;
+-
+-      for (int i = 0; i < 16; i++)
+-      {
+-        rcDataCache[i] = uint16_t(1500 + data[i] * 500);
+-      }
+-      rcDataReceptionTimeUs = timeUs;
+-      // BF::rxMspFrameReceive(&rcData[0], 8);
+-      // hack to trick bf into using sim data...
+-      BF::rxRuntimeState.channelCount = SIMULATOR_MAX_RC_CHANNELS; // SimITL target.h
+-      BF::rxRuntimeState.rcReadRawFn = BF::rxRcReadData;
+-      BF::rxRuntimeState.rcFrameStatusFn = BF::rxRcFrameStatus;
+-      BF::rxRuntimeState.rxProvider = BF::RX_PROVIDER_UDP;
+-      //BF::rxRuntimeState.rcFrameTimeUsFn = BF::rxRcFrameTimeUs;
+-      BF::rxRuntimeState.lastRcFrameTimeUs = timeUs;
+-    }
+-
+-    void setEepromFileName(const char* filename){
+-      simitl_log("BF::setEepromFileName {}\n", filename);
+-      const size_t maxFileSize = 512;
+-      EEPROM_FILENAME = new char[maxFileSize];
+-      std::fill(EEPROM_FILENAME, EEPROM_FILENAME + maxFileSize, 0);
+-      EEPROM_FILENAME[maxFileSize - 1] = '\0';
+-      memcpy(EEPROM_FILENAME, filename, strnlen(filename, maxFileSize));
+-    }
+-
+-    void updateBattery(const SimState& simState){
+-      // voltage
+-      BF::voltageMeter_t* vMeter = BF::getVoltageMeter();
+-      vMeter->unfiltered      = static_cast<uint16_t>(simState.batteryState.batVoltageSag * 1e2);
+-      vMeter->displayFiltered = static_cast<uint16_t>(simState.batteryState.batVoltageSag * 1e2);
+-      vMeter->sagFiltered     = static_cast<uint16_t>(simState.batteryState.batVoltage    * 1e2);
+-      // after the voltage: it decides whether the pack is present
+-      BF::setCellCount(simState.stateInit.quadBatCellCount);
+-      // ampere
+-      BF::currentMeter_t* cMeter = BF::getCurrentMeter();
+-      cMeter->amperage        = static_cast<int32_t>(simState.batteryState.amperage * 1e2);
+-      cMeter->amperageLatest  = static_cast<int32_t>(simState.batteryState.amperage * 1e2);
+-      cMeter->mAhDrawn        = static_cast<int32_t>(simState.batteryState.mAhDrawn);
+-    }
+-
+-    void updateGyroAcc(const SimState& simState){
+-      int16_t x, y, z;
+-
+-      x = int16_t(BF::constrain(int(-simState.acc[2] * ACC_SCALE), -32767, 32767));
+-      y = int16_t(BF::constrain(int(simState.acc[0] * ACC_SCALE), -32767, 32767));
+-      z = int16_t(BF::constrain(int(simState.acc[1] * ACC_SCALE), -32767, 32767));
+-      BF::virtualAccSet(BF::virtualAccDev, x, y, z);
+-
+-      x = int16_t(BF::constrain(int(-simState.gyro[2] * GYRO_SCALE * RAD2DEG), -32767, 32767));
+-      y = int16_t(BF::constrain(int( simState.gyro[0] * GYRO_SCALE * RAD2DEG), -32767, 32767));
+-      z = int16_t(BF::constrain(int(-simState.gyro[1] * GYRO_SCALE * RAD2DEG), -32767, 32767));
+-      BF::virtualGyroSet(BF::virtualGyroDev, x, y, z);
+-
+-      BF::imuSetAttitudeQuat(
+-          simState.rotation[3],
+-          -simState.rotation[2],
+-          -simState.rotation[0],
+-          simState.rotation[1]);
+-    }
+-
+-    void updateGps(const SimState& simState){
+-      const auto DISTANCE_BETWEEN_TWO_LONGITUDE_POINTS_AT_EQUATOR_IN_HUNDREDS_OF_KILOMETERS = 1.113195f;
+-      const auto cosLon0 = 0.63141842418f;
+-
+-      // set gps:
+-      static int64_t last_millis = 0;
+-      int64_t millis = BF::micros_passed / 1000;
+-
+-      //if (millis - last_millis > 100) {
+-      {
+-        vec3 pos;
+-        copy(pos, simState.stateInput.position);
+-
+-        BF::EnableState(BF::GPS_FIX);
+-        BF::gpsSol.numSat = 10;
+-        BF::gpsSol.llh.lat =
+-            int32_t(
+-                pos[2] * 100 /
+-                DISTANCE_BETWEEN_TWO_LONGITUDE_POINTS_AT_EQUATOR_IN_HUNDREDS_OF_KILOMETERS) +
+-            simState.stateInit.gps.lat;
+-        BF::gpsSol.llh.lon =
+-            int32_t(
+-                pos[0] * 100 /
+-                (cosLon0 *
+-                 DISTANCE_BETWEEN_TWO_LONGITUDE_POINTS_AT_EQUATOR_IN_HUNDREDS_OF_KILOMETERS)) +
+-            simState.stateInit.gps.lon;
+-        BF::gpsSol.llh.altCm = int32_t(pos[1] * 100) + simState.stateInit.gps.alt;
+-        vec3 linearVelocity;
+-        copy(linearVelocity, simState.stateInput.linearVelocity);
+-        BF::gpsSol.groundSpeed = uint16_t(length(linearVelocity) * 100);
+-        BF::GPS_update |= BF::GPS_MSP_UPDATE;
+-
+-        last_millis = millis;
+-      }
+-    }
+-
+-    void updateOsd(SimState& simState){
+-      bool osdChanged = false;
+-      for (int y = 0; y < VIDEO_LINES; y++) {
+-        for (int x = 0; x < CHARS_PER_LINE; x++) {
+-          simState.stateOutput.osd[y * CHARS_PER_LINE + x] = BF::osdScreen[y][x];
+-        }
+-      }
+-    }
+-
+-    bool update(uint64_t dt, SimState& simState){
+-      bool schedulerExecuted = false;
+-
+-      BF::micros_passed += dt;
+-      
+-      updateBattery(simState);
+-      updateGyroAcc(simState);
+-      // GPS comes from libfpv through Betaflight's virtual GPS provider
+-      // (bfb_gps_update); writing gpsSol here would fight it.
+-
+-      if (BF::sleep_timer > 0) {
+-        BF::sleep_timer -= dt;
+-        BF::sleep_timer = std::max(int64_t(0), BF::sleep_timer);
+-      } else {
+-        BF::scheduler();
+-        schedulerExecuted = true;
+-      }
+-
+-      updateOsd(simState);
+-
+-      simState.armed = (BF::armingFlags & BF::ARMED) == BF::ARMED;
+-      simState.armingDisabledFlags = (int)BF::getArmingDisableFlags();
+-      simState.microsPassed = BF::micros_passed;
+-      simState.motorsState[0].pwm = BF::motorsPwm[0] / 1000.0f;
+-      simState.motorsState[1].pwm = BF::motorsPwm[1] / 1000.0f;
+-      simState.motorsState[2].pwm = BF::motorsPwm[2] / 1000.0f;
+-      simState.motorsState[3].pwm = BF::motorsPwm[3] / 1000.0f;
+-
+-      simState.beep = BF::getBeeper() ? 1U : 0U;
+-      simState.stateOutput.beep = simState.beep;
+-
+-      return schedulerExecuted;
+-    }
+-
+-    void setDebugValue(uint8_t mode, uint8_t index, int16_t value){
+-      BF_DEBUG_SET(mode, index, value);
+-    }
+-
+-    void updateSerial(){
+-      BF::updateSerialWs();
+-    }
+-
+-    int activeSerialPorts()
+-    {
+-      return BF::wsActivePortCount();
+-    }
+-
+-    void cancelSerial()
+-    {
+-      BF::wsCancel();
+-    }
+-
+-    void stopSerial()
+-    {
+-      BF::stopSerialWs();
+-    }
+-
+-    void restartSerial()
+-    {
+-      BF::wsRestart();
+-    }
+-
+-    void setRcFailsafe(bool failsafe)
+-    {
+-      BF::rcFrameFailsafe = failsafe;
+-    }
+-
+-    void setRcPacketRate(float hz)
+-    {
+-      if (hz < 1.0f) {
+-        hz = 1.0f;
+-      }
+-      BF::rcPacketIntervalUs = (uint32_t)(1e6f / hz);
+-    }
+-
+-    void setRcPacketLossHook(bool (*lost)(void))
+-    {
+-      BF::rcPacketLossHook = lost;
+-    }
+-  } // namespace bf
+-} // namespace SimITL
+\ No newline at end of file
++#include "util/simitl_log.h"
++#include "bf.h"
++#include "sitl.h" // access to bf internals
++#include <array>
++
++namespace SimITL{
++  #define USE_QUAT_ORIENTATION
++
++  #ifndef M_PI
++  #define M_PI 3.14159265358979
++  #endif
++
++  const static auto GYRO_SCALE = 16.4f;
++  const static auto RAD2DEG = (180.0f / float(M_PI));
++  const static auto ACC_SCALE = (256 / 9.80665f);
++
++  namespace BF {
++    
++    void resetRcData(){
++      //reset rc data to valid data...
++      for(int i = 0; i < SIMULATOR_MAX_RC_CHANNELS; i++){
++        rcDataCache[i] = 1000U;
++      }
++    }
++
++    void setRcData(const float (&data)[16])
++    {
++      uint32_t timeUs = BF::micros_passed & 0xFFFFFFFF;
++
++      // only at the link's packet rate: between packets Betaflight keeps
++      // the last sticks it received, like a real receiver
++      if (rcLastPacketUs != 0 && BF::micros_passed - rcLastPacketUs < rcPacketIntervalUs &&
++          BF::micros_passed >= rcLastPacketUs) {
++        return;
++      }
++      rcLastPacketUs = BF::micros_passed;
++      // radio lost (failsafe) or this packet lost by the link simulation
++      if (rcFrameFailsafe || (rcPacketLossHook && rcPacketLossHook())) {
++        rcFrameDropped = true;  // lost: Betaflight keeps the old sticks
++        rcFrameReady = false;
++        return;
++      }
++      rcFrameReady = true;
++
++      for (int i = 0; i < 16; i++)
++      {
++        rcDataCache[i] = uint16_t(1500 + data[i] * 500);
++      }
++      rcDataReceptionTimeUs = timeUs;
++      // BF::rxMspFrameReceive(&rcData[0], 8);
++      // hack to trick bf into using sim data...
++      BF::rxRuntimeState.channelCount = SIMULATOR_MAX_RC_CHANNELS; // SimITL target.h
++      BF::rxRuntimeState.rcReadRawFn = BF::rxRcReadData;
++      BF::rxRuntimeState.rcFrameStatusFn = BF::rxRcFrameStatus;
++      BF::rxRuntimeState.rxProvider = BF::RX_PROVIDER_UDP;
++      //BF::rxRuntimeState.rcFrameTimeUsFn = BF::rxRcFrameTimeUs;
++      BF::rxRuntimeState.lastRcFrameTimeUs = timeUs;
++    }
++
++    void setEepromFileName(const char* filename){
++      simitl_log("BF::setEepromFileName {}\n", filename);
++      const size_t maxFileSize = 512;
++      EEPROM_FILENAME = new char[maxFileSize];
++      std::fill(EEPROM_FILENAME, EEPROM_FILENAME + maxFileSize, 0);
++      EEPROM_FILENAME[maxFileSize - 1] = '\0';
++      memcpy(EEPROM_FILENAME, filename, strnlen(filename, maxFileSize));
++    }
++
++    void updateBattery(const SimState& simState){
++      // voltage
++      BF::voltageMeter_t* vMeter = BF::getVoltageMeter();
++      vMeter->unfiltered      = static_cast<uint16_t>(simState.batteryState.batVoltageSag * 1e2);
++      vMeter->displayFiltered = static_cast<uint16_t>(simState.batteryState.batVoltageSag * 1e2);
++      vMeter->sagFiltered     = static_cast<uint16_t>(simState.batteryState.batVoltage    * 1e2);
++      // after the voltage: it decides whether the pack is present
++      BF::setCellCount(simState.stateInit.quadBatCellCount);
++      // ampere
++      BF::currentMeter_t* cMeter = BF::getCurrentMeter();
++      cMeter->amperage        = static_cast<int32_t>(simState.batteryState.amperage * 1e2);
++      cMeter->amperageLatest  = static_cast<int32_t>(simState.batteryState.amperage * 1e2);
++      cMeter->mAhDrawn        = static_cast<int32_t>(simState.batteryState.mAhDrawn);
++    }
++
++    void updateGyroAcc(const SimState& simState){
++      int16_t x, y, z;
++
++      x = int16_t(BF::constrain(int(-simState.acc[2] * ACC_SCALE), -32767, 32767));
++      y = int16_t(BF::constrain(int(simState.acc[0] * ACC_SCALE), -32767, 32767));
++      z = int16_t(BF::constrain(int(simState.acc[1] * ACC_SCALE), -32767, 32767));
++      BF::virtualAccSet(BF::virtualAccDev, x, y, z);
++
++      x = int16_t(BF::constrain(int(-simState.gyro[2] * GYRO_SCALE * RAD2DEG), -32767, 32767));
++      y = int16_t(BF::constrain(int( simState.gyro[0] * GYRO_SCALE * RAD2DEG), -32767, 32767));
++      z = int16_t(BF::constrain(int(-simState.gyro[1] * GYRO_SCALE * RAD2DEG), -32767, 32767));
++      BF::virtualGyroSet(BF::virtualGyroDev, x, y, z);
++
++      BF::imuSetAttitudeQuat(
++          simState.rotation[3],
++          -simState.rotation[2],
++          -simState.rotation[0],
++          simState.rotation[1]);
++    }
++
++    void updateGps(const SimState& simState){
++      const auto DISTANCE_BETWEEN_TWO_LONGITUDE_POINTS_AT_EQUATOR_IN_HUNDREDS_OF_KILOMETERS = 1.113195f;
++      const auto cosLon0 = 0.63141842418f;
++
++      // set gps:
++      static int64_t last_millis = 0;
++      int64_t millis = BF::micros_passed / 1000;
++
++      //if (millis - last_millis > 100) {
++      {
++        vec3 pos;
++        copy(pos, simState.stateInput.position);
++
++        BF::EnableState(BF::GPS_FIX);
++        BF::gpsSol.numSat = 10;
++        BF::gpsSol.llh.lat =
++            int32_t(
++                pos[2] * 100 /
++                DISTANCE_BETWEEN_TWO_LONGITUDE_POINTS_AT_EQUATOR_IN_HUNDREDS_OF_KILOMETERS) +
++            simState.stateInit.gps.lat;
++        BF::gpsSol.llh.lon =
++            int32_t(
++                pos[0] * 100 /
++                (cosLon0 *
++                 DISTANCE_BETWEEN_TWO_LONGITUDE_POINTS_AT_EQUATOR_IN_HUNDREDS_OF_KILOMETERS)) +
++            simState.stateInit.gps.lon;
++        BF::gpsSol.llh.altCm = int32_t(pos[1] * 100) + simState.stateInit.gps.alt;
++        vec3 linearVelocity;
++        copy(linearVelocity, simState.stateInput.linearVelocity);
++        BF::gpsSol.groundSpeed = uint16_t(length(linearVelocity) * 100);
++        BF::GPS_update |= BF::GPS_MSP_UPDATE;
++
++        last_millis = millis;
++      }
++    }
++
++    void updateOsd(SimState& simState){
++      bool osdChanged = false;
++      for (int y = 0; y < VIDEO_LINES; y++) {
++        for (int x = 0; x < CHARS_PER_LINE; x++) {
++          simState.stateOutput.osd[y * CHARS_PER_LINE + x] = BF::osdScreen[y][x];
++        }
++      }
++    }
++
++    bool update(uint64_t dt, SimState& simState){
++      bool schedulerExecuted = false;
++
++      BF::micros_passed += dt;
++      
++      updateBattery(simState);
++      updateGyroAcc(simState);
++      // libfpv: the ESCs' rpm telemetry, for dynamic idle and the RPM filter
++      const float rpm[4] = {simState.motorsState[0].rpm, simState.motorsState[1].rpm,
++                            simState.motorsState[2].rpm, simState.motorsState[3].rpm};
++      BF::simSetMotorRpm(rpm, 4);
++      // GPS comes from libfpv through Betaflight's virtual GPS provider
++      // (bfb_gps_update); writing gpsSol here would fight it.
++
++      if (BF::sleep_timer > 0) {
++        BF::sleep_timer -= dt;
++        BF::sleep_timer = std::max(int64_t(0), BF::sleep_timer);
++      } else {
++        BF::scheduler();
++        schedulerExecuted = true;
++      }
++
++      updateOsd(simState);
++
++      simState.armed = (BF::armingFlags & BF::ARMED) == BF::ARMED;
++      simState.armingDisabledFlags = (int)BF::getArmingDisableFlags();
++      simState.microsPassed = BF::micros_passed;
++      simState.motorsState[0].pwm = BF::motorsPwm[0] / 1000.0f;
++      simState.motorsState[1].pwm = BF::motorsPwm[1] / 1000.0f;
++      simState.motorsState[2].pwm = BF::motorsPwm[2] / 1000.0f;
++      simState.motorsState[3].pwm = BF::motorsPwm[3] / 1000.0f;
++
++      simState.beep = BF::getBeeper() ? 1U : 0U;
++      simState.stateOutput.beep = simState.beep;
++
++      return schedulerExecuted;
++    }
++
++    void setDebugValue(uint8_t mode, uint8_t index, int16_t value){
++      BF_DEBUG_SET(mode, index, value);
++    }
++
++    void updateSerial(){
++      BF::updateSerialWs();
++    }
++
++    int activeSerialPorts()
++    {
++      return BF::wsActivePortCount();
++    }
++
++    void cancelSerial()
++    {
++      BF::wsCancel();
++    }
++
++    void stopSerial()
++    {
++      BF::stopSerialWs();
++    }
++
++    void restartSerial()
++    {
++      BF::wsRestart();
++    }
++
++    void setRcFailsafe(bool failsafe)
++    {
++      BF::rcFrameFailsafe = failsafe;
++    }
++
++    void setRcPacketRate(float hz)
++    {
++      if (hz < 1.0f) {
++        hz = 1.0f;
++      }
++      BF::rcPacketIntervalUs = (uint32_t)(1e6f / hz);
++    }
++
++    void setRcPacketLossHook(bool (*lost)(void))
++    {
++      BF::rcPacketLossHook = lost;
++    }
++  } // namespace bf
++} // namespace SimITL
