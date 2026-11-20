@@ -217,12 +217,19 @@ void Runner::threadMain() {
 void Runner::stepManual(float seconds) {
     runJobs();
     float dt = 1.0f / m_cfg.simRateHz;
-    int steps = (int)std::lround(seconds / dt);
+    // what doesn't make a whole step is carried to the next call, so the
+    // simulation's clock keeps to the host's (frame times of 16.7 ms)
+    m_manualCarry += seconds;
+    int steps = (int)std::lround(m_manualCarry / dt);
+    m_manualCarry -= steps * (double)dt;
     double wall = wallSeconds();
     for (int i = 0; i < steps; i++) {
         // manual mode has no auto-pause: the host drives time explicitly
         const FlightSnapshot &s = m_flight.snapshot();
-        if (m_paused && m_flight.active() && (s.armed || !s.onGround)) break;
+        if (m_paused && m_flight.active() && (s.armed || !s.onGround)) {
+            m_manualCarry = 0;
+            break;
+        }
         stepOnce(wall);
     }
 }

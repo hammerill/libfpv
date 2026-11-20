@@ -85,8 +85,18 @@ public:
     // `id` 0 takes the next free id; a mirror (the simulation server's copy)
     // passes the id the client's world gave.
     uint32_t createObject(std::vector<Triangle> localTris, const RigidTransform &t, double simTime, uint32_t id = 0);
-    bool moveObject(uint32_t id, const RigidTransform &t, double simTime);
+    // The pose is the host's for `lead` s past simTime, or, if the host
+    // calls things the other way round, for `leadAlt`: a host that moves its
+    // surfaces before it steps or ticks gives the poses for the end of that
+    // step or frame (lead), one that moves them after, for the time already
+    // reached (leadAlt). Each object finds out which from how smoothly its
+    // moves line up with either (D39).
+    bool moveObject(uint32_t id, const RigidTransform &t, double simTime, double lead = 0, double leadAlt = 0);
     bool deleteObject(uint32_t id);
+    bool hasObject(uint32_t id) const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_objects.count(id) > 0;
+    }
     // Planes from the host raycast callback: (point, normal, material).
     void setProxyPlanes(std::vector<Contact> planes);
 
@@ -101,15 +111,48 @@ public:
     size_t staticTriangleCount() const { return m_static ? m_static->size() : 0; }
 
 private:
+    // The host's moves, newest last: when each came and the pose it gave.
+    struct MoveSample {
+        double t, tAlt;  // when it is for: by `lead`, by `leadAlt`
+        Vec3 pos;
+        Quat rot;
+        double at(bool alt) const { return alt ? tAlt : t; }
+    };
+    // Where an object is at a time, and how fast it moves there.
+    struct ObjectMotion {
+        RigidTransform pose;
+        Vec3 rel;  // pose.pos from the object's anchor, before rounding
+        Vec3 linVel, angVel;  // world, at pose.pos
+        bool moving = false;
+    };
     struct Object {
         TriangleBVH bvh;
         Vec3 localLo, localHi;
-        float boundRadius = 0;   // around local origin
-        RigidTransform from, to; // interpolated between moves
-        double t0 = 0, duration = 0;
-        Vec3 linVel, angVel;     // estimated from the last move
+        float boundRadius = 0;  // around local origin
+        // The surface follows a smooth path through the host's moves (D39):
+        // the motion fitted to the recent moves (fitPos/fitRot at t0, moving
+        // at fitVel/fitAngVel until holdAt), plus what was left of the
+        // previous path when the last move came (errPos/errVel,
+        // errRot/errAngVel at blendFrom), faded out over kBlendTime with a
+        // velocity that stays continuous.
+        // Positions are kept from the anchor (a recent pose): far from the
+        // origin a float has 0.24 mm steps at 2.5 km, and rounding the path
+        // there at every move made a slow deck carry a quad a third too far.
+        Vec3 anchor;
+        std::vector<MoveSample> moves;  // the last kOrderMoves, positions from the anchor
+        bool alt = false;               // the moves' times are by leadAlt
+        double t0 = 0, holdAt = 0;  // the fitted line's time; it stops there
+        double blendFrom = 0;       // when the blend began (the last move's arrival)
+        Vec3 fitPos, fitVel, fitAngVel;
+        Quat fitRot;
+        Vec3 errPos, errVel, errRot, errAngVel;
+        // the motion at the last time asked (every sphere of a substep asks
+        // for the same); under the world's mutex
+        mutable double cacheTime = -1e300;
+        mutable ObjectMotion cache;
     };
-    RigidTransform objectPose(const Object &o, double simTime) const;
+    ObjectMotion objectMotion(const Object &o, double simTime) const;
+    RigidTransform objectPose(const Object &o, double simTime) const { return objectMotion(o, simTime).pose; }
 
     mutable std::mutex m_mutex;
     Material m_materials[256];
@@ -117,6 +160,10 @@ private:
     std::unordered_map<uint32_t, std::unique_ptr<Object>> m_objects;
     uint32_t m_nextId = 1;
     std::vector<Contact> m_proxyPlanes;
+    // the host moves its surfaces after it steps or ticks (moveObject's
+    // leadAlt), and the tally that says so
+    bool m_alt = false;
+    float m_altEvidence = 0;
 };
 
 // Closest point on triangle abc to p (Ericson, Real-Time Collision Detection).

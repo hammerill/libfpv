@@ -185,8 +185,10 @@ uint32_t CollisionWorld::createObject(std::vector<Triangle> localTris, const Rig
         }
     }
     obj->bvh.build(std::move(localTris));
-    obj->from = obj->to = t;
-    obj->t0 = simTime;
+    obj->anchor = t.pos;
+    obj->moves.assign(1, MoveSample{simTime, simTime, Vec3{}, t.rot});
+    obj->t0 = obj->holdAt = obj->blendFrom = simTime;
+    obj->fitRot = t.rot;
     std::lock_guard<std::mutex> lock(m_mutex);
     if (id == 0) {
         id = m_nextId++;
@@ -196,36 +198,243 @@ uint32_t CollisionWorld::createObject(std::vector<Triangle> localTris, const Rig
     return id;
 }
 
-RigidTransform CollisionWorld::objectPose(const Object &o, double simTime) const {
-    if (o.duration <= 0) return o.to;
-    float a = (float)std::clamp((simTime - o.t0) / o.duration, 0.0, 1.0);
-    return {lerp(o.from.pos, o.to.pos, a), slerp(o.from.rot, o.to.rot, a)};
+namespace {
+// The host's moves come once a frame of its own, read against the simulation's
+// clock a few milliseconds early or late: at 36 m/s, 3 ms is 11 cm. A
+// surface going from one move to the next in its interval (the first
+// approach) stopped dead whenever the next move came late, then jumped, and
+// its velocity was off by the jitter over the interval: a quad sitting on a
+// car roof was kicked off at 20 km/h. The surface now follows the line fitted
+// through the last kFitWindow of moves, moved on at the fitted velocity, and
+// each new move bends the path over to its new line within kBlendTime, the
+// velocity continuous (D39).
+constexpr double kFitWindow = 0.06;    // s of moves the velocity is fitted to
+constexpr float kReanchorDistance = 50.0f;  // m from the anchor
+constexpr size_t kOrderMoves = 12;
+constexpr float kAltEvidenceSwitch = 6.0f, kAltEvidenceMax = 30.0f;  // log residual ratios, summed    // moves kept: to tell which times they are for
+constexpr double kBlendTime = 0.05;    // s to take up a new move
+constexpr double kTeleportGap = 0.5;   // s without moves: the next one starts afresh
+constexpr double kSameTime = 1e-4;     // s: moves closer than this replace each other
+// with no new move, it goes on at its velocity for a few of the host's intervals, then stops
+constexpr double kCoastIntervals = 4.0, kCoastMin = 0.1, kCoastMax = 0.3;
+constexpr float kTeleportDistance = 1.0f;  // m off the path (plus 0.2 s of its speed): a teleport
+constexpr float kTeleportAngle = 0.5f;     // rad off the path
+
+// rotation vector of q (shortest way), and back
+Vec3 rotationVector(Quat q) {
+    if (q.w < 0) q = {-q.x, -q.y, -q.z, -q.w};
+    Vec3 v{q.x, q.y, q.z};
+    float s = length(v);
+    if (s < 1e-9f) return v * 2.0f;
+    return v * (2.0f * std::atan2(s, q.w) / s);
+}
+Quat fromRotationVector(Vec3 r) {
+    float a = length(r);
+    if (a < 1e-9f) return normalize(Quat{r.x * 0.5f, r.y * 0.5f, r.z * 0.5f, 1.0f});
+    return axisAngle(r / a, a);
+}
+}  // namespace
+
+CollisionWorld::ObjectMotion CollisionWorld::objectMotion(const Object &o, double simTime) const {
+    if (simTime == o.cacheTime) return o.cache;
+    ObjectMotion m;
+    m.moving = simTime < o.holdAt;
+    float tm = (float)(std::min(simTime, o.holdAt) - o.t0);  // < 0 before a manual host's stamp: fine, a line
+    Vec3 pos = o.fitPos + o.fitVel * tm;
+    Quat rot = fromRotationVector(o.fitAngVel * tm) * o.fitRot;
+    if (m.moving) {
+        m.linVel = o.fitVel;
+        m.angVel = o.fitAngVel;
+    }
+    double tau = simTime - o.blendFrom;
+    if (tau >= 0 && tau < kBlendTime) {
+        // cubic Hermite from the old path's offset and rate to none
+        float s = (float)(tau / kBlendTime), T = (float)kBlendTime;
+        float h00 = (2 * s - 3) * s * s + 1, h10 = ((s - 2) * s + 1) * s * T;
+        float d00 = (6 * s - 6) * s / T, d10 = (3 * s - 4) * s + 1;
+        pos += o.errPos * h00 + o.errVel * h10;
+        m.linVel += o.errPos * d00 + o.errVel * d10;
+        rot = fromRotationVector(o.errRot * h00 + o.errAngVel * h10) * rot;
+        m.angVel += o.errRot * d00 + o.errAngVel * d10;
+    }
+    m.rel = pos;
+    m.pose = {o.anchor + pos, normalize(rot)};
+    o.cacheTime = simTime;
+    o.cache = m;
+    return m;
 }
 
-bool CollisionWorld::moveObject(uint32_t id, const RigidTransform &t, double simTime) {
+namespace {
+// Sum of squared residuals of the least squares parabola through (t, y),
+// t relative to the newest: how far the moves are from a smooth path.
+float parabolaResidual(const double *t, const Vec3 *y, size_t n) {
+    double S[5] = {0, 0, 0, 0, 0};
+    double Y[3][3] = {};
+    for (size_t i = 0; i < n; i++) {
+        double p = 1;
+        for (int k = 0; k < 5; k++, p *= t[i]) S[k] += p;
+        for (int c = 0; c < 3; c++) {
+            double v = y[i][c];
+            Y[c][0] += v;
+            Y[c][1] += v * t[i];
+            Y[c][2] += v * t[i] * t[i];
+        }
+    }
+    // normal equations [S0 S1 S2; S1 S2 S3; S2 S3 S4] x = Y, by Cramer
+    auto det3 = [](double a, double b, double c, double d, double e, double f, double g, double h, double k) {
+        return a * (e * k - f * h) - b * (d * k - f * g) + c * (d * h - e * g);
+    };
+    double D = det3(S[0], S[1], S[2], S[1], S[2], S[3], S[2], S[3], S[4]);
+    if (std::fabs(D) < 1e-30) return 0;
+    double res = 0;
+    for (int c = 0; c < 3; c++) {
+        double y0 = Y[c][0], y1 = Y[c][1], y2 = Y[c][2];
+        double a0 = det3(y0, S[1], S[2], y1, S[2], S[3], y2, S[3], S[4]) / D;
+        double a1 = det3(S[0], y0, S[2], S[1], y1, S[3], S[2], y2, S[4]) / D;
+        double a2 = det3(S[0], S[1], y0, S[1], S[2], y1, S[2], S[3], y2) / D;
+        for (size_t i = 0; i < n; i++) {
+            double e = y[i][c] - (a0 + a1 * t[i] + a2 * t[i] * t[i]);
+            res += e * e;
+        }
+    }
+    return (float)res;
+}
+}  // namespace
+
+bool CollisionWorld::moveObject(uint32_t id, const RigidTransform &t, double simTime, double lead, double leadAlt) {
     std::lock_guard<std::mutex> lock(m_mutex);
     auto it = m_objects.find(id);
     if (it == m_objects.end()) return false;
     Object &o = *it->second;
-    RigidTransform cur = objectPose(o, simTime);
-    // The next move is expected about as far in the future as this one was
-    // after the previous; interpolate over that interval.
-    double interval = simTime - o.t0;
-    o.from = cur;
-    o.to = t;
-    o.t0 = simTime;
-    o.duration = (interval > 1e-4 && interval < 0.25) ? interval : 0.0;
-    if (o.duration > 0) {
-        o.linVel = (t.pos - cur.pos) / (float)o.duration;
-        Quat dq = normalize(t.rot * conj(cur.rot));
-        if (dq.w < 0) dq = {-dq.x, -dq.y, -dq.z, -dq.w};
-        float s = std::sqrt(dq.x * dq.x + dq.y * dq.y + dq.z * dq.z);
-        float angle = 2.0f * std::atan2(s, dq.w);
-        o.angVel = s > 1e-9f ? Vec3{dq.x, dq.y, dq.z} / s * (angle / (float)o.duration) : Vec3{};
-    } else {
-        o.linVel = {};
-        o.angVel = {};
+    struct Uncache {  // the path changes below
+        const Object &o;
+        ~Uncache() { o.cacheTime = -1e300; }
+    } uncache{o};
+    const double arrived = simTime;
+    // the times the pose may be for
+    const double tA = simTime + std::clamp(lead, -0.1, 0.25), tB = simTime + std::clamp(leadAlt, -0.1, 0.25);
+    auto restart = [&] {
+        o.anchor = t.pos;
+        o.moves.assign(1, MoveSample{tA, tB, Vec3{}, t.rot});
+        o.t0 = o.holdAt = o.blendFrom = arrived;
+        o.fitPos = Vec3{};
+        o.fitRot = t.rot;
+        o.fitVel = o.fitAngVel = o.errPos = o.errVel = o.errRot = o.errAngVel = Vec3{};
+    };
+    if (o.moves.empty() || tA - o.moves.back().t > kTeleportGap || tA < o.moves.back().t ||
+        tB < o.moves.back().tAlt) {
+        restart();
+        return true;
     }
+    // where the path is now, and where it would be when the pose is for
+    ObjectMotion now = objectMotion(o, arrived), then = objectMotion(o, o.alt ? tB : tA);
+    float speed = length(now.linVel);
+    if (length(t.pos - then.pose.pos) > kTeleportDistance + 0.2f * speed ||
+        length(rotationVector(t.rot * conj(then.pose.rot))) > kTeleportAngle + 0.2f * length(now.angVel)) {
+        restart();
+        return true;
+    }
+    // a new anchor once the object went far from it, the path moved with it
+    if (length(t.pos - o.anchor) > kReanchorDistance) {
+        Vec3 shift = t.pos - o.anchor;
+        o.anchor = t.pos;
+        for (MoveSample &mv : o.moves) mv.pos -= shift;
+        o.fitPos -= shift;
+        now.rel -= shift;
+    }
+    Vec3 rel = t.pos - o.anchor;
+    if (tA - o.moves.back().t < kSameTime) {
+        // the same instant (a paused simulation, two moves in a frame): the later wins
+        o.moves.back().pos = rel;
+        o.moves.back().rot = t.rot;
+    } else {
+        o.moves.push_back({tA, tB, rel, t.rot});
+        if (o.moves.size() > kOrderMoves) o.moves.erase(o.moves.begin());
+    }
+
+    // Which times the moves are for: the ones they line up smoothly with.
+    // With even frames both do (and it matters little which); with uneven
+    // ones, the wrong frame's times put each move off its path by its speed
+    // times the difference. The order is the host's, the same for every
+    // object, so every moving object adds to one tally (m_altEvidence, how
+    // much smoother the other times were), and it changes only when that is
+    // clear.
+    if (o.moves.size() >= 4) {
+        size_t n = o.moves.size();
+        double ta[kOrderMoves], tb[kOrderMoves];
+        Vec3 y[kOrderMoves];
+        const MoveSample &last = o.moves.back();
+        float lever = std::max(0.1f, o.boundRadius);
+        float resA = 0, resB = 0;
+        for (int part = 0; part < 2; part++) {  // positions, then turns (at the object's size)
+            for (size_t i = 0; i < n; i++) {
+                const MoveSample &mv = o.moves[i];
+                ta[i] = mv.t - last.t;
+                tb[i] = mv.tAlt - last.tAlt;
+                y[i] = part == 0 ? mv.pos - last.pos : rotationVector(mv.rot * conj(last.rot)) * lever;
+            }
+            resA += parabolaResidual(ta, y, n);
+            resB += parabolaResidual(tb, y, n);
+        }
+        if (std::max(resA, resB) > 1e-10f) {
+            float r = std::log((resA + 1e-12f) / (resB + 1e-12f));
+            m_altEvidence = std::clamp(m_altEvidence + std::clamp(r, -2.0f, 2.0f), -kAltEvidenceMax, kAltEvidenceMax);
+            if (m_altEvidence > kAltEvidenceSwitch) m_alt = true;
+            if (m_altEvidence < -kAltEvidenceSwitch) m_alt = false;
+        }
+    }
+    o.alt = m_alt;
+
+    // least squares line through the moves of the last kFitWindow (at least
+    // two), relative to the newest (positions far from the origin keep their
+    // precision in the differences)
+    const bool alt = o.alt;
+    const MoveSample &last = o.moves.back();
+    const double tLast = last.at(alt);
+    size_t first = o.moves.size() - std::min<size_t>(o.moves.size(), 2);
+    while (first > 0 && tLast - o.moves[first - 1].at(alt) <= kFitWindow) first--;
+    size_t n = o.moves.size() - first;
+    double st = 0, stt = 0;
+    Vec3 sp{}, stp{}, sr{}, str{};
+    for (size_t i = first; i < o.moves.size(); i++) {
+        const MoveSample &mv = o.moves[i];
+        double dt = mv.at(alt) - tLast;
+        Vec3 dp = mv.pos - last.pos;
+        Vec3 dr = rotationVector(mv.rot * conj(last.rot));
+        st += dt;
+        stt += dt * dt;
+        sp += dp;
+        sr += dr;
+        stp += dp * (float)dt;
+        str += dr * (float)dt;
+    }
+    double den = (double)n * stt - st * st;
+    Vec3 vel{}, angVel{}, offP = sp / (float)n, offR = sr / (float)n;
+    if (den > 1e-12) {
+        vel = (stp * (float)n - sp * (float)st) / (float)den;
+        angVel = (str * (float)n - sr * (float)st) / (float)den;
+        offP = (sp - vel * (float)st) / (float)n;
+        offR = (sr - angVel * (float)st) / (float)n;
+    }
+    o.t0 = tLast;
+    o.fitPos = last.pos + offP;
+    o.fitRot = normalize(fromRotationVector(offR) * last.rot);
+    o.fitVel = vel;
+    o.fitAngVel = angVel;
+    // the line where the blend begins
+    o.blendFrom = arrived;
+    float back = (float)(arrived - o.t0);
+    Vec3 linePos = o.fitPos + vel * back;
+    Quat lineRot = fromRotationVector(angVel * back) * o.fitRot;
+    o.errPos = now.rel - linePos;
+    o.errVel = now.linVel - vel;
+    o.errRot = rotationVector(now.pose.rot * conj(lineRot));
+    o.errAngVel = now.angVel - angVel;
+    double interval = n > 1 ? (tLast - o.moves[first].at(alt)) / (double)(n - 1) : 0.0;
+    // coasting from when the move came: one made after the tick comes a frame
+    // after its time, and a 40 ms frame then stopped the surface dead
+    o.holdAt = std::max(tLast, arrived) + std::clamp(interval * kCoastIntervals, kCoastMin, kCoastMax);
+    if (den <= 1e-12) o.holdAt = arrived;  // nothing to tell a velocity from yet
     return true;
 }
 
@@ -275,15 +484,15 @@ size_t CollisionWorld::sphereContacts(Vec3 c, float r, double simTime, std::vect
     }
     for (auto &kv : m_objects) {
         const Object &o = *kv.second;
-        RigidTransform pose = objectPose(o, simTime);
+        ObjectMotion om = objectMotion(o, simTime);
+        const RigidTransform &pose = om.pose;
         if (length(c - pose.pos) > o.boundRadius + r) continue;
         Quat inv = conj(pose.rot);
         Vec3 lc = rotate(inv, c - pose.pos);
         auto toWorldP = [&](Vec3 v) { return pose.pos + rotate(pose.rot, v); };
         auto toWorldD = [&](Vec3 v) { return rotate(pose.rot, v); };
-        bool moving = o.duration > 0 && simTime < o.t0 + o.duration;
-        auto vel = [&](Vec3 p) { return moving ? o.linVel + cross(o.angVel, p - pose.pos) : Vec3{}; };
-        o.bvh.queryAabb(lc - rr, lc + rr, [&](const Triangle &t) { addTri(t, lc, toWorldP, toWorldD, vel, moving ? o.angVel : Vec3{}, kv.first); });
+        auto vel = [&](Vec3 p) { return om.linVel + cross(om.angVel, p - pose.pos); };
+        o.bvh.queryAabb(lc - rr, lc + rr, [&](const Triangle &t) { addTri(t, lc, toWorldP, toWorldD, vel, om.angVel, kv.first); });
     }
     for (const Contact &p : m_proxyPlanes) {
         // A proxy plane is a disc of 0.75 m around the host's hit point.

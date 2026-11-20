@@ -864,6 +864,71 @@ Not changed:
 The `air65_blackbox` test checks the hover rpm and drive, the idle rpm and
 the ESC start against the logs.
 
+### D39. Perching on moving surfaces
+
+A quad sitting on a surface object (a car roof, a lift, a deck) bounced
+and fell off in almost every case. The `perch_moving` tests now put a
+disarmed quad on a deck moved like a car (20, 50 and 130 km/h, speeding
+up and braking, a 25 m bend, a bumpy road), a lift, the standalone's
+platform, a turntable and a rocking boat deck. The host's frames are 12-24
+ms with 40 ms hitches. `perch_moving_threaded` runs the same in real time.
+Four causes, four fixes:
+
+* **The path between moves.** A surface went from where it was to the new
+  pose over the last move's interval, then stood still until the next
+  one. Frames are uneven, so it kept stopping dead and jumping, and its
+  velocity (distance over interval) was off by the jitter. At 36 m/s, 3 ms
+  is 11 cm. It also always lagged one frame behind. Now each object keeps
+  its last moves. The surface follows the least squares line through the
+  last 60 ms of them (pose and turn), moved on at its velocity. Each new
+  move bends the path over to its new line within 50 ms, as a cubic
+  Hermite with no jump in velocity. Contacts get that path's own velocity.
+  Without new moves it goes on for four of the host's intervals after the
+  last one came (0.1-0.3 s), then stops; a gap of 0.5 s or a jump of 1 m
+  (0.5 rad) off the path starts afresh.
+  Positions are kept from an anchor near the object: rounding the path to
+  float steps at 2.5 km made a slow deck carry the quad a third too far.
+* **When a move is for.** The simulation's clock, read when the move
+  comes, is a few ms early or late against the game's (and in whole
+  `sim_rate_hz` steps). Smoothing that noise out needed a long fit and a
+  slow blend, and the surface lagged the drawn car by 50-75 ms (2 cm on a
+  bumpy road). Moves now wait for the host's own clock. Threaded, they wait
+  for the next `fpv_drone_tick`: the frame's time is the sum of its
+  `frame_dt`, mapped to the simulation's clock at the rate the simulation
+  runs against it (the last second) and pulled to it over 0.5 s. Manual,
+  they wait for the next `fpv_step`, stamped with the sum of the steps.
+  `fpv_step` carries the remainder of a whole step to the next call, so
+  the simulation's clock keeps to the host's. A host that moves its
+  surfaces after it ticks or steps gives poses for the time already
+  reached, not the coming one. Each move carries both times. On uneven
+  frames only the right one lines the moves up on a smooth path (the
+  residual of a parabola through the last 12), so one world-wide tally
+  picks it. Moving after the tick costs one frame of latency, nothing else.
+* **Substeps.** All the substeps of a step met the surfaces where they
+  are at the step's end. Each now meets them at its own time.
+* **Resting contact.** Penetration was pushed out all the way, so a
+  sphere sat exactly on the surface and every other substep found no
+  contact. In those, the pull down a slope or the deck's acceleration
+  went unchecked. The quad crept down a 15 degree slope that friction 0.3
+  holds, and off a roof that held it. The push now leaves 0.5 mm
+  (`kContactSlop`, as Box2D's slop) and the contact persists.
+
+What decides whether a quad stays on is then physics: friction × weight
+against the deck's acceleration and the drag of the air it moves through.
+On the tests' car paint (friction 0.5) the 580 g 5" stays at 50 km/h,
+speeding up and braking at 2 m/s². At 130 km/h its frame drag (about 9 N)
+blows it off. The 29 g Air65 II holds at 20 km/h; at 40-50 km/h its drag
+beats its grip. That agrees with the research. Borowczyk et al. (2017)
+landed a quad on a car roof at up to 50 km/h. The quadrotor perching
+work (the Hitchhiker gripper, 2022; Sherbrooke's friction landing gear)
+needs suction cups, grippers or reverse thrust for faster or steeper
+surfaces. No air moves with the car: the quad feels the full airspeed,
+not the slower air of a roof's boundary layer.
+
+**Reversing it** means going back to interpolating each move over its
+interval in `CollisionWorld::moveObject` and applying moves at once in
+`fpv_surface_object_move`.
+
 ## Presentation
 
 ### D14. Overlay: libfpv is a "legacy" ImGui backend

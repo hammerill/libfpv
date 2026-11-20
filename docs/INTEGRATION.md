@@ -1213,6 +1213,29 @@ answer libfpv's rays with the engine's own line test.
   default, a smooth floor (wood, laminate, tiles). Concrete, asphalt,
   gravel and grass are about 0.6: set it on their materials.
 
+### Moving surfaces: cars, lifts, platforms
+
+A quad can sit on a surface object while it moves (a car roof, a lift, a
+ship's deck) and ride along, as on the real thing.
+
+- **Move it every frame, before the tick.** Call
+  `fpv_surface_object_move` with the pose the game draws this frame, then
+  `fpv_drone_tick` (or `fpv_step` with manual timing). libfpv times the
+  move by the frame's `frame_dt` (or the step's length), not by when the
+  call came, so frame-time jitter doesn't shake the surface. Moving after
+  the tick works too: libfpv notices the order, but the surface is a frame
+  late.
+- **Keep moving it while it moves.** Without new moves an object goes on
+  at its last velocity for a few frames, then stops. A jump of more than
+  about 1 m (or 30°) off its path is a teleport: the object is put there
+  with no velocity, and nothing riding on it is thrown.
+- **Give vehicles their friction.** A car's paint under a quad's frame is
+  about 0.5. On the default 0.3 a quad slides about on a car that only
+  speeds up a little.
+- **Expect the airspeed to win.** The quad feels the air it moves through:
+  a 5" stays on a roof at 50 km/h and blows off at 130, a 30 g whoop goes
+  at 40 km/h.
+
 ### Impacts and game effects
 
 `frame.impacts` holds the speed, impulse, position and `object_id` of each

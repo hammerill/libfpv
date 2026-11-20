@@ -58,7 +58,7 @@
 /* The one place the version is set: CMakeLists.txt reads these three. */
 #define LIBFPV_VERSION_MAJOR 1
 #define LIBFPV_VERSION_MINOR 0
-#define LIBFPV_VERSION_PATCH 7
+#define LIBFPV_VERSION_PATCH 8
 #define LIBFPV_STRINGIFY_(x) #x
 #define LIBFPV_STRINGIFY(x) LIBFPV_STRINGIFY_(x)
 #define LIBFPV_VERSION_STRING                                                  \
@@ -311,9 +311,11 @@ typedef struct fpv_transform {
 FPV_API fpv_result fpv_static_surfaces_load(const fpv_mesh *meshes, uint32_t mesh_count);
 FPV_API fpv_result fpv_static_surfaces_clear(void);
 
-/* Dynamic objects. Geometry is in object space; moves are interpolated over
- * the simulation steps until the next move so fast platforms stay solid,
- * and the object's velocity carries a landed drone along. */
+/* Dynamic objects. Geometry is in object space. Move them every frame with
+ * the pose the game draws, before fpv_drone_tick (or fpv_step): the move is
+ * timed by that frame's frame_dt, and the object follows a smooth path
+ * through its moves, so fast platforms stay solid and a landed drone rides
+ * along (see the guide, "Moving surfaces"). Scale is taken at creation only. */
 FPV_API fpv_result fpv_surface_object_create(const fpv_mesh *mesh, const fpv_transform *transform,
                                              uint32_t *out_object_id);
 FPV_API fpv_result fpv_surface_object_move(uint32_t object_id, const fpv_transform *transform);

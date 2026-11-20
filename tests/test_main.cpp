@@ -1842,6 +1842,341 @@ void testRestingYaw() {
 }
 
 
+// Perching on moving and rotating surfaces: a disarmed quad sits on a deck
+// the host moves like a car roof, an elevator or a turntable. The host
+// sends a pose every frame of its own, with uneven frame times (12-24 ms,
+// now and then a 40 ms hitch) and the pose for the game's clock, while the
+// simulation's clock reads the move a little early or late. The quad must
+// ride along as it would on the real thing: no bouncing, no creeping, no
+// jumping off, until the air or the cornering is more than friction holds
+// (a 5" quad on a roof at 130 km/h slides off backwards).
+// LIBFPV_PERCH_ONLY=<part of a case name>, LIBFPV_PERCH_VERBOSE=1 (the quad
+// over the deck frame by frame), LIBFPV_PERCH_TICK_FIRST=1 (the game moves
+// its surfaces after the tick), LIBFPV_PERCH_FULL=1 (every case in real time).
+struct DeckPose {
+    float r = 0, u = 0, f = 0;          // host right/up/forward metres
+    float yaw = 0, pitch = 0, roll = 0;  // radians about up, right, forward
+};
+
+struct PerchResult {
+    float slip = 0;      // largest horizontal move over the deck, m
+    float lift = 0;      // highest above where it sat, m
+    float airborne = 0;  // share of frames off the deck
+    float maxRelSpeed = 0;  // largest speed relative to the deck surface under it, m/s
+    bool fell = false;
+    float fellAt = -1;
+};
+
+static void hq(const float axis[3], float a, float q[4]) {
+    float s = std::sin(a * 0.5f);
+    q[0] = axis[0] * s;
+    q[1] = axis[1] * s;
+    q[2] = axis[2] * s;
+    q[3] = std::cos(a * 0.5f);
+}
+static void hqmul(const float a[4], const float b[4], float o[4]) {
+    float r[4] = {a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+                  a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+                  a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+                  a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2]};
+    std::memcpy(o, r, sizeof r);
+}
+static void hqrot(const float q[4], const float v[3], float o[3]) {
+    float p[4] = {v[0], v[1], v[2], 0}, c[4] = {-q[0], -q[1], -q[2], q[3]}, t[4];
+    hqmul(q, p, t);
+    hqmul(t, c, t);
+    o[0] = t[0];
+    o[1] = t[1];
+    o[2] = t[2];
+}
+
+// threaded: the simulation runs on its own thread in real time and the
+// "game" sleeps through its frames (the game's clock is the wall clock);
+// otherwise FPV_TIMING_MANUAL, the frame times uneven.
+static PerchResult perchRun(const Host &h, const char *preset, const std::function<DeckPose(double)> &motion,
+                            float seconds, uint32_t seed, bool threaded, float sitFwd = 0.0f, float sitRight = 0.0f,
+                            bool verbose = false, float windKmh = 0, float dropAt = -1, float deckLen = 2.4f,
+                            float deckWide = 1.5f) {
+    World deck;
+    float a[3], b[3], c[3], d[3];
+    h.pos(-deckWide / 2, 0, -deckLen / 2, a);
+    h.pos(deckWide / 2, 0, -deckLen / 2, b);
+    h.pos(deckWide / 2, 0, deckLen / 2, c);
+    h.pos(-deckWide / 2, 0, deckLen / 2, d);
+    deck.quad(a, b, c, d);
+    fpv_mesh m = deck.mesh();
+    // a car's paint under a quad's frame: grippier than the default floor
+    fpv_material paint{0.2f, 0.5f, 0};
+    fpv_material_set(7, &paint);
+    m.material = 7;
+
+    auto toTransform = [&](const DeckPose &p, fpv_transform &t) {
+        t = fpv_transform{};
+        h.pos(p.r, p.u, p.f, t.position);
+        float qy[4], qp[4], qr[4], q[4];
+        hq(h.U, p.yaw, qy);
+        hq(h.R, p.pitch, qp);
+        hq(h.F, p.roll, qr);
+        hqmul(qy, qp, q);
+        hqmul(q, qr, q);
+        std::memcpy(t.rotation, q, sizeof q);
+    };
+    // the quad's position over the deck, in the deck's (right, up, forward)
+    auto local = [&](const fpv_transform &t, const float pos[3], float out[3]) {
+        float rel[3] = {pos[0] - t.position[0], pos[1] - t.position[1], pos[2] - t.position[2]};
+        float inv[4] = {-t.rotation[0], -t.rotation[1], -t.rotation[2], t.rotation[3]};
+        float l[3];
+        hqrot(inv, rel, l);
+        out[0] = h.right(l);
+        out[1] = h.up(l);
+        out[2] = h.fwd(l);
+    };
+
+    fpv_transform t;
+    toTransform(motion(0), t);
+    uint32_t id = 0;
+    CHECK(fpv_surface_object_create(&m, &t, &id) == FPV_OK, "deck: %s", fpv_last_error());
+    Session s;
+    float sit[3] = {0, 0, 0}, world[3];
+    h.pos(sitRight, 0.01f, sitFwd, sit);
+    hqrot(t.rotation, sit, world);
+    float p[3] = {t.position[0] + world[0], t.position[1] + world[1], t.position[2] + world[2]};
+    fpv_drone_desc dd;
+    fpv_drone_desc_defaults(&dd);
+    std::memcpy(dd.position, p, sizeof p);
+    std::memcpy(dd.rotation, t.rotation, sizeof t.rotation);
+    dd.preset = preset;
+    CHECK(fpv_drone_create(&dd, &s.drone) == FPV_OK, "drone_create: %s", fpv_last_error());
+    s.rc.ch[4] = -1;
+    // a steady wind from ahead (no gusts), as the air over a cruising car
+    fpv_wind w{};
+    w.struct_size = sizeof w;
+    h.pos(0, 0, -windKmh / 3.6f, w.velocity);
+    w.reference_height = 1.5f;
+    w.turbulence = 0;
+    fpv_wind_set(&w);
+
+    uint32_t rng = seed * 2654435761u + 1;
+    auto rnd = [&] {
+        rng = rng * 1664525u + 1013904223u;
+        return (rng >> 8) / 16777216.0f;
+    };
+    using clock = std::chrono::steady_clock;
+    auto wall0 = clock::now();
+    auto wall = [&] { return std::chrono::duration<double>(clock::now() - wall0).count(); };
+    // settle on the still deck
+    for (int i = 0; i < 100; i++) {
+        fpv_surface_object_move(id, &t);
+        s.rc.send();
+        if (threaded) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        else fpv_step(0.01f);
+        fpv_drone_tick(s.drone, 0.01f, &s.f);
+    }
+    float l0[3];
+    local(t, s.f.position, l0);
+    PerchResult res;
+    double game = 0, lastWall = wall();
+    int frames = 0, off = 0;
+    float prevL[3] = {l0[0], l0[1], l0[2]};
+    while (game < seconds) {
+        // a frame of 12-24 ms, now and then a 40 ms hitch
+        float frame = 0.012f + 0.012f * rnd();
+        if (rnd() < 0.02f) frame = 0.04f;
+        float dt = frame;
+        if (threaded) {
+            // the game's work, then the pose at the time it reads its clock
+            std::this_thread::sleep_for(std::chrono::duration<double>(frame));
+            double now = wall();
+            dt = (float)(now - lastWall);
+            lastWall = now;
+        }
+        game += dt;
+        toTransform(motion(game), t);
+        if (dropAt >= 0 && game >= dropAt && game - dt < dropAt) {
+            // dropped from 0.4 m over the deck, moving with it (landing on a moving car)
+            fpv_transform t2;
+            toTransform(motion(game + 0.01), t2);
+            float up[3], v[3];
+            h.pos(0, 0.4f, 0, up);
+            float p2[3] = {t.position[0] + world[0] + up[0], t.position[1] + world[1] + up[1],
+                           t.position[2] + world[2] + up[2]};
+            for (int k = 0; k < 3; k++) v[k] = (t2.position[k] - t.position[k]) / 0.01f;
+            fpv_drone_reset(s.drone, p2, t.rotation);
+            fpv_drone_push(s.drone, v, 1);
+        }
+        // LIBFPV_PERCH_TICK_FIRST: a game that ticks the drone before it
+        // moves the surfaces (each move then waits for the next frame)
+        static const bool tickFirst = std::getenv("LIBFPV_PERCH_TICK_FIRST") && *std::getenv("LIBFPV_PERCH_TICK_FIRST");
+        if (!tickFirst) fpv_surface_object_move(id, &t);
+        s.rc.send();
+        if (!threaded) fpv_step(dt);
+        fpv_drone_tick(s.drone, dt, &s.f);
+        if (tickFirst) fpv_surface_object_move(id, &t);
+        float l[3];
+        local(t, s.f.position, l);
+        if (dropAt >= 0 && game < dropAt + 1.0) {
+            // falling and landing: measured from where it came to rest
+            std::memcpy(l0, l, sizeof l);
+            std::memcpy(prevL, l, sizeof l);
+            continue;
+        }
+        float dx = l[0] - l0[0], dz = l[2] - l0[2];
+        float slip = std::sqrt(dx * dx + dz * dz), lift = l[1] - l0[1];
+        float rs = std::sqrt((l[0] - prevL[0]) * (l[0] - prevL[0]) + (l[1] - prevL[1]) * (l[1] - prevL[1]) +
+                             (l[2] - prevL[2]) * (l[2] - prevL[2])) / dt;
+        std::memcpy(prevL, l, sizeof l);
+        frames++;
+        if (!(s.f.flags & FPV_DRONE_ON_GROUND)) off++;
+        if (!res.fell) {
+            res.slip = std::max(res.slip, slip);
+            res.lift = std::max(res.lift, lift);
+            res.maxRelSpeed = std::max(res.maxRelSpeed, rs);
+            if (lift < -0.3f || std::fabs(l[0]) > deckWide / 2 + 0.1f || std::fabs(l[2]) > deckLen / 2 + 0.1f) {
+                res.fell = true;
+                res.fellAt = (float)game;
+            }
+        }
+        if (verbose && (frames % 10 == 0 || !(s.f.flags & FPV_DRONE_ON_GROUND) || std::fabs(l[1] - l0[1]) > 0.01f))
+            std::printf("      t %.2f local %.3f %.3f %.3f  ground %d  air %.2f  vel %.2f\n", game, l[0], l[1], l[2],
+                        (s.f.flags & FPV_DRONE_ON_GROUND) ? 1 : 0, h.fwd(s.f.wind), h.fwd(s.f.velocity));
+    }
+    res.airborne = frames ? (float)off / frames : 0;
+    w.velocity[0] = w.velocity[1] = w.velocity[2] = 0;
+    fpv_wind_set(&w);
+    s.destroy();
+    fpv_surface_object_delete(id);
+    return res;
+}
+
+void perchMoving(bool threaded) {
+    Host h(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1));
+    const bool verbose = std::getenv("LIBFPV_PERCH_VERBOSE") != nullptr;
+    const float kmh = 1 / 3.6f;
+    // a car: speeds up at `acc` to `v`, then cruises
+    // distance after t s, speeding up at `acc` to `v`
+    auto dist = [](double t, float v, float acc) {
+        float tAcc = v / acc, tt = (float)t;
+        return tt < tAcc ? 0.5f * acc * tt * tt : 0.5f * acc * tAcc * tAcc + v * (tt - tAcc);
+    };
+    auto car = [=](float v, float acc) {
+        return [=](double t) {
+            DeckPose p;
+            p.u = 1.5f;
+            p.f = dist(t, v, acc);
+            return p;
+        };
+    };
+    struct Case {
+        const char *name;
+        std::function<DeckPose(double)> motion;
+        float seconds;
+        bool stays;         // the 580 g 5"
+        bool whoopStays;    // the 29 g Air65: its drag beats its grip at 40 km/h
+        float sitFwd = 0, sitRight = 0, windKmh = 0, dropAt = -1;
+    };
+    std::vector<Case> cases = {
+        {"still deck", [](double) { DeckPose p; p.u = 1.5f; return p; }, 4, true, true},
+        {"still deck in a 50 km/h wind", [](double) { DeckPose p; p.u = 1.5f; return p; }, 8, true, false, 0, 0, 50},
+        {"still deck tilted 11 deg", [](double) { DeckPose p; p.u = 1.5f; p.pitch = 0.19f; return p; }, 4, true, true},
+        {"still deck tilted 24 deg", [](double) { DeckPose p; p.u = 1.5f; p.pitch = 0.42f; return p; }, 4, true, true},
+        {"elevator 2..6 m (standalone)", [](double t) { DeckPose p; p.u = 4 - 2 * (float)std::cos(t * 0.6); return p; }, 12, true, true},
+        {"lift 3 m up at 1 m/s, waits, down", [=](double t) {
+             // speeds up and slows down at 0.8 m/s2: 4.25 s each way, 1 s waits
+             auto leg = [=](float x) { return x < 2.125f ? dist(x, 1.0f, 0.8f) : 3.0f - dist(4.25f - x, 1.0f, 0.8f); };
+             DeckPose p;
+             float tt = (float)std::fmod(t, 10.5);
+             p.u = 1.5f + (tt < 4.25f ? leg(tt) : tt < 5.25f ? 3 : tt < 9.5f ? 3 - leg(tt - 5.25f) : 0);
+             return p; }, 14, true, true},
+        {"car 20 km/h", car(20 * kmh, 2.0f), 10, true, true},
+        {"car 50 km/h", car(50 * kmh, 2.0f), 12, true, false},
+        {"car 0-50 km/h, brakes", [=](double t) {
+             DeckPose p;
+             p.u = 1.5f;
+             float v = 50 * kmh, acc = 2.0f, dec = 2.0f, tt = (float)t, tA = v / acc, tC = tA + 2, tB = tC + v / dec;
+             float xA = 0.5f * acc * tA * tA, xC = xA + v * 2;
+             p.f = tt < tA ? 0.5f * acc * tt * tt : tt < tC ? xA + v * (tt - tA) : tt < tB ? xC + v * (tt - tC) - 0.5f * dec * (tt - tC) * (tt - tC) : xC + v * v / (2 * dec);
+             return p; }, 14, true, false},
+        {"car 20 km/h round a 25 m bend", [=](double t) {
+             DeckPose p;
+             p.u = 1.5f;
+             float v = 20 * kmh, R = 25.0f, a = dist(t, v, 2.0f) / R;
+             // counterclockwise seen from above, heading along the path
+             p.r = -R + R * std::cos(a);
+             p.f = R * std::sin(a);
+             p.yaw = a;
+             return p; }, 12, true, true},
+        {"car on a bumpy road 40 km/h", [=](double t) {
+             DeckPose p;
+             float tt = (float)t;
+             p.f = dist(t, 40 * kmh, 2.5f);
+             p.u = 1.5f + 0.03f * std::sin(tt * 9.0f) + 0.02f * std::sin(tt * 5.3f + 1);
+             p.pitch = 0.015f * std::sin(tt * 7.0f);
+             p.roll = 0.02f * std::sin(tt * 4.1f);
+             return p; }, 10, true, false},
+        {"turntable 30 deg/s, 0.6 m off centre", [](double t) {
+             DeckPose p; p.u = 1.5f; p.yaw = 0.5236f * (float)t; return p; }, 12, true, true, 0.6f, 0.0f},
+        {"turntable 90 deg/s, centre", [](double t) {
+             DeckPose p; p.u = 1.5f; p.yaw = 1.5708f * (float)t; return p; }, 8, true, true},
+        {"rocking boat deck", [](double t) {
+             DeckPose p; float tt = (float)t;
+             p.u = 1.5f + 0.3f * std::sin(tt * 1.1f);
+             p.roll = 0.08f * std::sin(tt * 0.9f);
+             p.pitch = 0.05f * std::sin(tt * 1.3f + 0.5f);
+             return p; }, 12, true, true},
+        {"dropped onto a car at 20 km/h", car(20 * kmh, 2.0f), 9, true, true, 0, 0, 0, 5},
+        {"car 130 km/h (drag wins)", car(130 * kmh, 4.0f), 14, false, false},
+    };
+    // in real time it takes as long as it says: by default a few cases on the
+    // 5", all of them with LIBFPV_PERCH_FULL=1 (5.5 minutes)
+    const bool full = !threaded || std::getenv("LIBFPV_PERCH_FULL");
+    const char *quick[] = {"elevator 2..6 m (standalone)", "car 0-50 km/h, brakes", "car 20 km/h round a 25 m bend",
+                           "turntable 30 deg/s, 0.6 m off centre", "rocking boat deck"};
+    const char *presets[] = {"freestyler-5", "betafpv-air65-ii"};
+    for (const char *preset : presets) {
+        if (!full && preset != presets[0]) continue;
+        std::printf("  %s\n", preset);
+        for (size_t i = 0; i < cases.size(); i++) {
+            const Case &cs = cases[i];
+            const char *only = std::getenv("LIBFPV_PERCH_ONLY");
+            if (only && !std::strstr(cs.name, only)) continue;
+            if (!full && !only && std::none_of(std::begin(quick), std::end(quick),
+                                               [&](const char *q) { return std::strcmp(q, cs.name) == 0; }))
+                continue;
+            PerchResult r = perchRun(h, preset, cs.motion, cs.seconds, (uint32_t)i + 1, threaded, cs.sitFwd,
+                                     cs.sitRight, verbose, cs.windKmh, cs.dropAt);
+            std::printf("    %-36s slip %.3f m  lift %.3f m  off deck %3.0f %%  rel %.2f m/s  %s",
+                        cs.name, r.slip, r.lift, r.airborne * 100, r.maxRelSpeed, r.fell ? "FELL" : "stayed");
+            if (r.fell) std::printf(" at %.1f s", r.fellAt);
+            std::printf("\n");
+            bool stays = std::strcmp(preset, "freestyler-5") == 0 ? cs.stays : cs.whoopStays;
+            if (stays) {
+                CHECK(!r.fell, "%s: %s stays on", preset, cs.name);
+                CHECK(r.lift < 0.02f, "%s: %s: no bounce (lift %.3f m)", preset, cs.name, r.lift);
+                CHECK(r.airborne < 0.02f, "%s: %s: on the deck (%.0f %% off)", preset, cs.name, r.airborne * 100);
+                CHECK(r.slip < 0.15f, "%s: %s: doesn't creep (%.3f m)", preset, cs.name, r.slip);
+            } else {
+                CHECK(r.fell, "%s: %s slides off", preset, cs.name);
+            }
+        }
+    }
+}
+
+void testPerchMoving() { perchMoving(false); }
+
+// The same in real time, the simulation on its thread reading each move a
+// little early or late, as in a game.
+void testPerchMovingThreaded() {
+    fpv_global_terminate();
+    fpv_global_config cfg;
+    fpv_global_config_defaults(&cfg);
+    cfg.data_dir = g_dataDir.c_str();
+    cfg.flags = FPV_INIT_NO_DEVICE_INPUT | FPV_INIT_NO_CONFIGURATOR;
+    cfg.log = logCb;
+    CHECK(fpv_global_init(&cfg) == FPV_OK, "threaded init: %s", fpv_last_error());
+    loadWorld(makeLevel(Host(cfg.coords), 100, 0));
+    perchMoving(true);
+}
+
 // Far from the origin (GTA SA's map: 2500 m) a float position only has
 // 0.24 mm steps, finer than one 1 ms step below about 0.12 m/s: a quad
 // carried slowly by a moving platform must move with it, not stick or jump
@@ -3590,6 +3925,8 @@ int main(int argc, char **argv) {
         {"wind_sources", testWindSources},
         {"resting_yaw", testRestingYaw},
         {"slow_far_from_origin", testSlowFarFromOrigin},
+        {"perch_moving", testPerchMoving},
+        {"perch_moving_threaded", testPerchMovingThreaded},
         {"gps", testGps},
         {"gps_elements_after_reboot", testGpsElementsAfterReboot},
         {"osd_audio_overlay", testOsdAudioOverlay},
@@ -3627,7 +3964,7 @@ int main(int argc, char **argv) {
         // ran before or in what order a platform lists the diff corpus.
         fpv_global_terminate();
         g_dataDir = (fs::path(dataRoot) / t.name).string();
-        if (std::string(t.name) != "threaded") init(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1));
+        if (std::string(t.name) != "threaded" && std::string(t.name) != "perch_moving_threaded") init(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1));
         if (fpv_is_initialized()) {
             // a plain 200 m ground in the default convention
             loadWorld(makeLevel(Host(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1)), 100, 0));

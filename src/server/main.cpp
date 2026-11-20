@@ -306,8 +306,8 @@ bool dispatch(SimServer &server, LoopbackSocket &s, uint16_t op, const std::stri
     case wire::kWorldMoveObject: {
         uint32_t id = 0;
         RigidTransform t;
-        double simTime = 0;
-        if (wire::unpack(r, id, t, simTime)) server.worldMoveObject(id, t, simTime);
+        double simTime = 0, lead = 0, leadAlt = 0;
+        if (wire::unpack(r, id, t, simTime, lead, leadAlt)) server.worldMoveObject(id, t, simTime, lead, leadAlt);
         return true;
     }
     case wire::kWorldDeleteObject: {

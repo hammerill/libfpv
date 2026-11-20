@@ -408,6 +408,46 @@ static void shutdownForExit() {
     L.initialized = false;
 }
 
+// Threaded: the moves since the last tick are for this frame. The frame's
+// time on the simulation's clock follows the host's frame_dt (scaled by the
+// rate the simulation runs at against it), pulled slowly to the simulation's
+// clock so they never drift apart.
+void applySurfaceMoves(double frameDt, bool frame) {
+    Lib &L = lib();
+    double now = L.server->simTime();
+    Lib::FrameClock &c = L.frameClock;
+    bool paused = L.server->paused() || L.server->autoPaused();
+    double before = c.stamp;  // the last frame's time: for moves made after its tick
+    bool had = c.set && frame && !paused;
+    if (!frame || !c.set || paused) {
+        c.set = frame && !paused;
+        c.stamp = now;
+        c.history.clear();
+    } else {
+        c.host += frameDt;
+        c.history.emplace_back(c.host, now);
+        size_t drop = 0;
+        while (c.history.size() - drop > 2 && c.host - c.history[drop].first > 1.0) drop++;
+        c.history.erase(c.history.begin(), c.history.begin() + (std::ptrdiff_t)drop);
+        double dh = c.host - c.history.front().first, ds = now - c.history.front().second;
+        if (dh > 0.3) c.rate = std::clamp(ds / dh, 0.05, 20.0);
+        c.stamp += c.rate * frameDt;
+        double e = now - c.stamp;
+        if (std::fabs(e) > 0.1) {
+            c.stamp = now;
+        } else {
+            c.stamp += e * std::min(1.0, frameDt / 0.5);
+        }
+    }
+    if (L.pendingMoves.empty()) return;
+    double lead = c.stamp - now, leadAlt = had ? before - now : lead;
+    for (const auto &pm : L.pendingMoves) {
+        L.world.moveObject(pm.first, pm.second, now, lead, leadAlt);
+        L.server->worldMoveObject(pm.first, pm.second, now, lead, leadAlt);
+    }
+    L.pendingMoves.clear();
+}
+
 }  // namespace fpv
 
 using namespace fpv;
@@ -601,6 +641,9 @@ FPV_API fpv_result fpv_global_init(const fpv_global_config *cfgIn) {
 
     if (!g_exitHandlerInstalled.exchange(true)) installExitHandler(&shutdownForExit);
 
+    L.pendingMoves.clear();
+    L.frameClock = {};
+    L.manualClockSet = false;
     L.initialized = true;
     L.everInitialized = true;
     FPV_LOGI("libfpv %s ready (preset \"%s\", %s timing, configurator %s)", LIBFPV_VERSION_STRING,
@@ -727,15 +770,30 @@ FPV_API fpv_result fpv_surface_object_move(uint32_t id, const fpv_transform *t) 
     REQUIRE_INIT();
     if (!t) return setError(FPV_ERROR_INVALID_ARGUMENT, "transform is NULL");
     RigidTransform xf = toInternalTransform(*t);
+    if (!L.server->threaded() || L.droneExists) {
+        // for the end of the coming fpv_step or the frame of the coming
+        // fpv_drone_tick (Lib::pendingMoves)
+        if (!L.world.hasObject(id)) return setError(FPV_ERROR_NOT_FOUND, "no surface object %u", id);
+        for (auto &pm : L.pendingMoves)
+            if (pm.first == id) {
+                pm.second = xf;
+                return FPV_OK;
+            }
+        L.pendingMoves.emplace_back(id, xf);
+        return FPV_OK;
+    }
     double now = L.server->simTime();
     if (!L.world.moveObject(id, xf, now)) return setError(FPV_ERROR_NOT_FOUND, "no surface object %u", id);
-    L.server->worldMoveObject(id, xf, now);
+    L.server->worldMoveObject(id, xf, now, 0.0, 0.0);
     return FPV_OK;
 }
 
 FPV_API fpv_result fpv_surface_object_delete(uint32_t id) {
     REQUIRE_INIT();
     if (!L.world.deleteObject(id)) return setError(FPV_ERROR_NOT_FOUND, "no surface object %u", id);
+    L.pendingMoves.erase(std::remove_if(L.pendingMoves.begin(), L.pendingMoves.end(),
+                                        [&](const auto &pm) { return pm.first == id; }),
+                         L.pendingMoves.end());
     L.server->worldDeleteObject(id);
     return FPV_OK;
 }
@@ -800,6 +858,7 @@ FPV_API fpv_result fpv_drone_create(const fpv_drone_desc *descIn, fpv_drone **ou
 
 FPV_API fpv_result fpv_drone_delete(fpv_drone *d) {
     REQUIRE_DRONE(d);
+    if (L.server->threaded()) applySurfaceMoves(0.0, false);  // no more ticks to wait for
     L.server->despawn();
     L.droneExists = false;
     L.drone.magic = 0;
@@ -1166,6 +1225,24 @@ FPV_API fpv_result fpv_step(float seconds) {
     if (L.server->threaded())
         return setError(FPV_ERROR_INVALID_ARGUMENT, "fpv_step requires timing = FPV_TIMING_MANUAL");
     if (!(seconds >= 0) || seconds > 60) return setError(FPV_ERROR_INVALID_ARGUMENT, "seconds must be 0..60");
+    double now = L.server->simTime();
+    // resynced only when the clocks drift apart (a reinit, a pause), not for
+    // the sub-step remainder
+    if (!L.manualClockSet || std::fabs(L.manualClock + L.manualOffset - now) > 0.002) {
+        L.manualOffset = now - L.manualClock;
+        L.manualClockSet = true;
+    }
+    // the end of this step, or (moved after the last step) its start
+    double leadAlt = L.manualClock + L.manualOffset - now;
+    L.manualClock += seconds;
+    if (!L.pendingMoves.empty()) {
+        double lead = L.manualClock + L.manualOffset - now;
+        for (const auto &pm : L.pendingMoves) {
+            L.world.moveObject(pm.first, pm.second, now, lead, leadAlt);
+            L.server->worldMoveObject(pm.first, pm.second, now, lead, leadAlt);
+        }
+        L.pendingMoves.clear();
+    }
     L.server->stepManual(seconds);
     return FPV_OK;
 }

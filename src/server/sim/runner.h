@@ -90,6 +90,7 @@ private:
     std::atomic<bool> m_stop{false};
     bool m_cooperative = false;
     double m_last = 0, m_acc = 0;  // real-time loop: last pass, unspent time
+    double m_manualCarry = 0;      // stepManual: time short of a whole step, for the next call
     std::mutex m_jobMutex;
     std::condition_variable m_jobCv;
     std::deque<std::function<void()>> m_jobs;

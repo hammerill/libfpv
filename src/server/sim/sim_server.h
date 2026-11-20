@@ -57,7 +57,7 @@ public:
     void worldLoadStatic(const std::vector<Triangle> &tris) override;
     void worldCreateObject(uint32_t id, const std::vector<Triangle> &localTris, const RigidTransform &t,
                            double simTime) override;
-    void worldMoveObject(uint32_t id, const RigidTransform &t, double simTime) override;
+    void worldMoveObject(uint32_t id, const RigidTransform &t, double simTime, double lead, double leadAlt) override;
     void worldDeleteObject(uint32_t id) override;
     void worldSetProxyPlanes(const std::vector<Contact> &planes) override;
 

@@ -460,8 +460,9 @@ void SimServer::worldCreateObject(uint32_t id, const std::vector<Triangle> &loca
     if (!m_worldShared) m_world->createObject(localTris, t, simTime, id);
 }
 
-void SimServer::worldMoveObject(uint32_t id, const RigidTransform &t, double simTime) {
-    if (!m_worldShared) m_world->moveObject(id, t, simTime);
+void SimServer::worldMoveObject(uint32_t id, const RigidTransform &t, double simTime, double lead,
+                                double leadAlt) {
+    if (!m_worldShared) m_world->moveObject(id, t, simTime, lead, leadAlt);
 }
 
 void SimServer::worldDeleteObject(uint32_t id) {

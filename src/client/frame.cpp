@@ -369,6 +369,7 @@ extern "C" FPV_API fpv_result fpv_drone_tick(fpv_drone *d, float frameDt, fpv_fr
     frameDt = std::min(frameDt, 0.25f);
     L.server->pump();  // browsers; before the heartbeat, so a long gap auto-pauses
     L.server->heartbeat();
+    if (L.server->threaded()) applySurfaceMoves(frameDt, true);
 
     const CoordConverter &cv = L.conv;
     FlightSnapshot prev, cur;

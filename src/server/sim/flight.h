@@ -154,6 +154,7 @@ private:
     // 4096 m), finer than a step at 1 kHz below about 0.12 m/s, so slow moves
     // were rounded away or up to whole steps.
     Vec3 m_posCarry;
+    double m_contactTime = 0;  // when resolveContacts meets the world (the substep's end)
     void movePos(Vec3 d);
     Quat m_rot;
     float m_propDamage[4] = {0, 0, 0, 0};

@@ -22,6 +22,7 @@ constexpr float kRestingSpeed = 0.6f;        // m/s, no bounce below this
 // body sphere under the centre of mass takes the whole load, the landing
 // points none, and friction under the centre of mass makes no yaw torque.
 constexpr float kContactPatchRatio = 0.5f;
+constexpr float kContactSlop = 0.0005f;  // m of penetration left, so resting contacts persist
 constexpr float kPropDiscHalfThickness = 0.012f;
 // A prop whose blades touch something stops within a few revolutions
 // (time constant, s), and below this rpm it is stalled for its ESC.
@@ -663,7 +664,7 @@ void Flight::resolveContacts(float dt) {
     for (const Sphere &s : m_shape) {
         m_contacts.clear();
         Vec3 centre = m_pos + rot * s.local;
-        m_world->sphereContacts(centre, s.radius, m_simTime, m_contacts);
+        m_world->sphereContacts(centre, s.radius, m_contactTime, m_contacts);
         dropPortalHoleContacts(0);
         for (const Contact &c : m_contacts) {
             // a detail sphere sits on the outside: a surface can only push
@@ -679,10 +680,15 @@ void Flight::resolveContacts(float dt) {
     m_impactVel = m_vel;
 #endif
 
-    // positional correction: deepest penetration along each normal
+    // positional correction: deepest penetration along each normal, less a
+    // slop that keeps a resting contact touching. Pushed out all the way, the
+    // spheres sat exactly at the surface, every other substep found no
+    // contact, and in those the pull along a slope or the deck's
+    // acceleration went unchecked: the quad crept down a 15 degree deck that
+    // friction 0.3 holds, and off a car roof (D39).
     Vec3 push{};
     for (const Item &it : items) {
-        float need = it.c.depth - dot(push, it.c.normal);
+        float need = it.c.depth - kContactSlop - dot(push, it.c.normal);
         if (need > 0) push += it.c.normal * need;
     }
     movePos(push);
@@ -1153,9 +1159,13 @@ void Flight::step(float dt, const float channels[kChannelCount], bool radioLost)
         float travel = length(m_vel) * dt + length(m_angVel) * dt * 0.15f;
         int sub = std::clamp((int)std::ceil(travel / (0.5f * minRadius)), 1, 64);
         float h = dt / (float)sub;
+        // each substep meets moving surfaces where they are at its end
+        const double stepStart = m_simTime - dt;
+        m_contactTime = stepStart;
         resolveContacts(h);
         for (int k = 0; k < sub; k++) {
             Vec3 before = m_pos;
+            m_contactTime = stepStart + (double)h * (k + 1);
             movePos(m_vel * h);
             if (!m_portals.empty()) passPortals(before);
             resolveContacts(h);

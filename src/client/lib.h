@@ -94,6 +94,25 @@ struct Lib {
     // The client's collision world (the host's meshes, for its own rays);
     // the server mirrors every change.
     CollisionWorld world;
+    // Surface moves wait for the host's clock to say when they are for
+    // (D39): with FPV_TIMING_MANUAL the next fpv_step (a lockstep host moves
+    // its surfaces for the time the coming step ends at), threaded the next
+    // fpv_drone_tick (a game moves them for the frame it then ticks). Read
+    // against the simulation's clock instead, a few ms of jitter at 36 m/s
+    // were centimetres, and the surface had to be smoothed into lagging.
+    std::vector<std::pair<uint32_t, RigidTransform>> pendingMoves;
+    // Manual: the host's clock (the sum of its fpv_step lengths) and its
+    // offset to the simulation's, which steps in whole sim_rate_hz steps.
+    double manualClock = 0, manualOffset = 0;
+    bool manualClockSet = false;
+    // Threaded: the frames' clock (the sum of fpv_drone_tick's frame_dt),
+    // where it puts this frame on the simulation's clock, and how fast the
+    // simulation runs against it (a time scale), from the last second.
+    struct FrameClock {
+        bool set = false;
+        double host = 0, stamp = 0, rate = 1;
+        std::vector<std::pair<double, double>> history;  // (host, sim)
+    } frameClock;
     InputManager input;
     // The simulation: Betaflight, the flight model, the real-time loop
     // (simapi/server.h). Never reached any other way. Split builds run it
@@ -203,6 +222,11 @@ struct Lib {
 };
 
 Lib &lib();
+
+// Threaded timing: applies the surface moves held since the last tick,
+// stamped for the frame (`frame`: from fpv_drone_tick, frameDt its frame_dt;
+// otherwise now, the frame clock restarting).
+void applySurfaceMoves(double frameDt, bool frame);
 
 // Errors
 fpv_result setError(fpv_result r, const char *fmt, ...);
