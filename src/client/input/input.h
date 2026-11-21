@@ -220,6 +220,8 @@ struct InputStatus {
     bool needsSetup = false;
     bool radioDetected = false;  // a mapped or unmapped radio is connected
     int deviceCount = 0;
+    std::string preferredName;   // the device the pilot chose, empty: automatic
+    bool preferredMissing = false;  // chosen but not connected: no other radio or gamepad takes over
 };
 
 class InputManager : public ChannelSource {
@@ -229,6 +231,7 @@ public:
 
     void setDataDir(const std::string &dir);
     bool startDevices(std::string &error) override;  // optional; without it only host/keyboard input
+    void setBackend(std::unique_ptr<DeviceBackend> b);  // a fake one, for tests
     void stopDevices() override;
 
     // --- called from any thread -----------------------------------------
@@ -261,6 +264,10 @@ public:
     void setMapping(const DeviceMapping &m);  // persists to data dir
     void forgetMapping(const std::string &guid);
     void forgetAllMappings();
+    // The device to fly with (persisted); an empty guid picks automatically:
+    // a set-up radio, then an unmapped radio, then a gamepad, then keyboard.
+    void setPreferred(const std::string &guid, const std::string &name);
+    std::string preferredGuid();
     // While the wizard is reading raw sticks, flight input is held at idle.
     void setWizardActive(bool active) { m_wizardActive = active; }
 
@@ -320,6 +327,8 @@ private:
 
     InputStatus m_status;
     std::string m_activeGuid;
+    std::string m_preferredGuid, m_preferredName;
+    bool m_preferredWasMissing = false;
     bool m_radioWasActive = false;
 };
 

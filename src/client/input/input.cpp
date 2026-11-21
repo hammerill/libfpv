@@ -40,6 +40,11 @@ void InputManager::setDataDir(const std::string &dir) {
     loadMappings();
 }
 
+void InputManager::setBackend(std::unique_ptr<DeviceBackend> b) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_backend = std::move(b);
+}
+
 bool InputManager::startDevices(std::string &error) {
 #if defined(__EMSCRIPTEN__)
     auto backend = createWebBackend();
@@ -92,6 +97,8 @@ void InputManager::loadMappings() {
     if (!readTextFile(pathFromUtf8(m_dataDir) / "radio_mappings.json", text)) return;
     try {
         json j = json::parse(text);
+        m_preferredGuid = j.value("preferred", "");
+        m_preferredName = j.value("preferredName", "");
         for (auto &jm : j.at("devices")) {
             DeviceMapping m;
             m.guid = jm.value("guid", "");
@@ -125,6 +132,10 @@ void InputManager::saveMappings() {
     if (m_dataDir.empty()) return;
     json j;
     j["version"] = 1;
+    if (!m_preferredGuid.empty()) {
+        j["preferred"] = m_preferredGuid;
+        j["preferredName"] = m_preferredName;
+    }
     j["devices"] = json::array();
     for (auto &m : m_mappings) {
         json jm;
@@ -144,6 +155,19 @@ void InputManager::saveMappings() {
         j["devices"].push_back(jm);
     }
     writeFileAtomic(pathFromUtf8(m_dataDir) / "radio_mappings.json", j.dump(2));
+}
+
+void InputManager::setPreferred(const std::string &guid, const std::string &name) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_preferredGuid = guid;
+    m_preferredName = guid.empty() ? std::string() : name;
+    m_preferredWasMissing = false;
+    saveMappings();
+}
+
+std::string InputManager::preferredGuid() {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_preferredGuid;
 }
 
 bool InputManager::getMapping(const std::string &guid, DeviceMapping &out) {
@@ -472,16 +496,22 @@ void InputManager::update(double wallTime, float dt, float out[kChannelCount], b
         st.deviceName = "host";
     } else {
         // A mapped radio, then any unmapped radio (needs setup), then a gamepad.
+        // A device the pilot chose is the only candidate: while it is missing,
+        // nothing but the keyboard takes over, so another device's resting
+        // switches never fly (or hide the OSD) unnoticed.
         const RawDevice *radio = nullptr;
         const DeviceMapping *radioMap = nullptr;
         const RawDevice *unmapped = nullptr;
         const RawDevice *pad = nullptr;
+        bool preferredFound = false;
         for (const RawDevice &d : m_devices) {
             const DeviceMapping *m = nullptr;
             for (auto &mm : m_mappings) {
                 if (mm.guid == d.guid && mm.complete) m = &mm;
             }
             if (m || d.looksLikeRadio) st.radioDetected = true;
+            if (!m_preferredGuid.empty() && d.guid != m_preferredGuid) continue;
+            preferredFound = true;
             if (m && !radio) {
                 radio = &d;
                 radioMap = m;
@@ -490,6 +520,15 @@ void InputManager::update(double wallTime, float dt, float out[kChannelCount], b
             } else if (!m && d.isGamepad && !pad) {
                 pad = &d;
             }
+        }
+        if (!m_preferredGuid.empty()) {
+            st.preferredName = m_preferredName;
+            st.preferredMissing = !preferredFound;
+            if (st.preferredMissing && !m_preferredWasMissing)
+                FPV_LOGW("input: %s is not connected", m_preferredName.c_str());
+            else if (!st.preferredMissing && m_preferredWasMissing)
+                FPV_LOGI("input: %s connected again", m_preferredName.c_str());
+            m_preferredWasMissing = st.preferredMissing;
         }
         if (radio) {
             controlRadio = radio;
