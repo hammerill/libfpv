@@ -469,8 +469,8 @@ void SimServer::worldDeleteObject(uint32_t id) {
     if (!m_worldShared) m_world->deleteObject(id);
 }
 
-void SimServer::worldSetProxyPlanes(const std::vector<Contact> &planes) {
-    if (!m_worldShared) m_world->setProxyPlanes(planes);
+void SimServer::worldSetProxyPlanes(const std::vector<Contact> &planes, const std::vector<ProxyMove> &moves) {
+    if (!m_worldShared) m_world->setProxyPlanes(planes, moves);
 }
 
 // --- the warhead ----------------------------------------------------------------------------

@@ -305,7 +305,11 @@ bool CollisionWorld::moveObject(uint32_t id, const RigidTransform &t, double sim
     std::lock_guard<std::mutex> lock(m_mutex);
     auto it = m_objects.find(id);
     if (it == m_objects.end()) return false;
-    Object &o = *it->second;
+    moveLocked(*it->second, t, simTime, lead, leadAlt);
+    return true;
+}
+
+void CollisionWorld::moveLocked(Object &o, const RigidTransform &t, double simTime, double lead, double leadAlt) {
     struct Uncache {  // the path changes below
         const Object &o;
         ~Uncache() { o.cacheTime = -1e300; }
@@ -324,7 +328,7 @@ bool CollisionWorld::moveObject(uint32_t id, const RigidTransform &t, double sim
     if (o.moves.empty() || tA - o.moves.back().t > kTeleportGap || tA < o.moves.back().t ||
         tB < o.moves.back().tAlt) {
         restart();
-        return true;
+        return;
     }
     // where the path is now, and where it would be when the pose is for
     ObjectMotion now = objectMotion(o, arrived), then = objectMotion(o, o.alt ? tB : tA);
@@ -332,7 +336,7 @@ bool CollisionWorld::moveObject(uint32_t id, const RigidTransform &t, double sim
     if (length(t.pos - then.pose.pos) > kTeleportDistance + 0.2f * speed ||
         length(rotationVector(t.rot * conj(then.pose.rot))) > kTeleportAngle + 0.2f * length(now.angVel)) {
         restart();
-        return true;
+        return;
     }
     // a new anchor once the object went far from it, the path moved with it
     if (length(t.pos - o.anchor) > kReanchorDistance) {
@@ -435,7 +439,6 @@ bool CollisionWorld::moveObject(uint32_t id, const RigidTransform &t, double sim
     // after its time, and a 40 ms frame then stopped the surface dead
     o.holdAt = std::max(tLast, arrived) + std::clamp(interval * kCoastIntervals, kCoastMin, kCoastMax);
     if (den <= 1e-12) o.holdAt = arrived;  // nothing to tell a velocity from yet
-    return true;
 }
 
 bool CollisionWorld::deleteObject(uint32_t id) {
@@ -443,9 +446,50 @@ bool CollisionWorld::deleteObject(uint32_t id) {
     return m_objects.erase(id) > 0;
 }
 
-void CollisionWorld::setProxyPlanes(std::vector<Contact> planes) {
+// A mover with no move for this long is dropped (the drone flew away from it).
+constexpr double kMoverExpiry = 2.0;
+
+void CollisionWorld::setProxyPlanes(std::vector<Contact> planes, const std::vector<ProxyMove> &moves) {
     std::lock_guard<std::mutex> lock(m_mutex);
+    double latest = -1e300;
+    for (const ProxyMove &mv : moves) {
+        if (!mv.key) continue;
+        latest = std::max(latest, mv.simTime);
+        std::unique_ptr<Object> &o = m_movers[mv.key];
+        if (!o) {
+            o = std::make_unique<Object>();
+            o->localLo = o->localHi = Vec3{};
+        }
+        // the pose is for the frame the host ray was cast in, before or after
+        // the moves of its surfaces alike (D41)
+        moveLocked(*o, mv.pose, mv.simTime, mv.lead, mv.lead);
+    }
+    if (latest > -1e300) {
+        for (auto it = m_movers.begin(); it != m_movers.end();) {
+            const Object &o = *it->second;
+            if (o.moves.empty() || latest - o.moves.back().t > kMoverExpiry) it = m_movers.erase(it);
+            else ++it;
+        }
+    } else if (moves.empty() && planes.empty()) {
+        m_movers.clear();  // no host raycast any more
+    }
     m_proxyPlanes = std::move(planes);
+}
+
+// Caller holds the mutex.
+bool CollisionWorld::proxyPlaneAt(const Contact &p, double simTime, Contact &out) const {
+    out = p;
+    if (!p.mover) return true;
+    auto it = m_movers.find(p.mover);
+    if (it == m_movers.end()) return false;
+    ObjectMotion om = objectMotion(*it->second, simTime);
+    out.point = om.pose.pos + rotate(om.pose.rot, p.localPoint);
+    out.normal = rotate(om.pose.rot, p.localNormal);
+    for (int i = 0; i < p.cutCount; i++) out.cuts[i] = om.pose.pos + rotate(om.pose.rot, p.cuts[i]);
+    // at the plane's point; elsewhere on it add angVel x (the offset)
+    out.surfaceVel = om.linVel + cross(om.angVel, out.point - om.pose.pos);
+    out.surfaceAngVel = om.angVel;
+    return true;
 }
 
 // Caller must hold mutex().
@@ -524,16 +568,20 @@ size_t CollisionWorld::sphereContacts(Vec3 c, float r, double simTime, std::vect
         auto vel = [&](Vec3 p) { return om.linVel + cross(om.angVel, p - pose.pos); };
         o.bvh.queryAabb(lc - rr, lc + rr, [&](const Triangle &t) { addTri(t, lc, toWorldP, toWorldD, vel, om.angVel, kv.first); });
     }
-    for (const Contact &p : m_proxyPlanes) {
+    for (const Contact &p0 : m_proxyPlanes) {
+        Contact p;
+        if (!proxyPlaneAt(p0, simTime, p)) continue;
         // A proxy plane is a disc of 0.75 m around the host's hit point.
         float h = dot(c - p.point, p.normal);
         if (h >= r || h < -r) continue;
         Vec3 onPlane = c - p.normal * h;
         if (length2(onPlane - p.point) > 0.75f * 0.75f) continue;
+        if (!p.standsAt(onPlane)) continue;
         if (m_materials[p.material].flags & kMatNoCollision) continue;
         Contact ct = p;
         ct.point = onPlane;
         ct.depth = r - h;
+        if (p.mover) ct.surfaceVel = p.surfaceVel + cross(p.surfaceAngVel, onPlane - p.point);
         out.push_back(ct);
     }
     return out.size() - before;
@@ -577,12 +625,15 @@ bool CollisionWorld::raycast(Vec3 o, Vec3 d, float maxDist, double simTime, floa
         }
     }
     if (!forVideo) {
-        for (const Contact &p : m_proxyPlanes) {
+        for (const Contact &p0 : m_proxyPlanes) {
+            Contact p;
+            if (!proxyPlaneAt(p0, simTime, p)) continue;
             float denom = dot(d, p.normal);
             if (denom >= -1e-6f) continue;
             float t = dot(p.point - o, p.normal) / denom;
             if (t < 0 || t >= best) continue;
             if (length2(o + d * t - p.point) > 0.75f * 0.75f) continue;
+            if (!p.standsAt(o + d * t)) continue;
             any = true;
             best = t;
             outN = p.normal;

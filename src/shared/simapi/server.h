@@ -122,7 +122,7 @@ public:
     virtual void worldMoveObject(uint32_t id, const RigidTransform &t, double simTime, double lead,
                                  double leadAlt) = 0;
     virtual void worldDeleteObject(uint32_t id) = 0;
-    virtual void worldSetProxyPlanes(const std::vector<Contact> &planes) = 0;
+    virtual void worldSetProxyPlanes(const std::vector<Contact> &planes, const std::vector<ProxyMove> &moves) = 0;
 
     // --- time ---------------------------------------------------------------------------
     virtual bool threaded() = 0;

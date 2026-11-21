@@ -1890,20 +1890,117 @@ static void hqrot(const float q[4], const float v[3], float o[3]) {
     o[2] = t[2];
 }
 
+// The deck's shape: flat, or a car roof with raised sides (g_perchRoof).
+static int g_perchRoof = 0;  // 1: raised sides, 2: a dome
+static float g_perchSitYaw = 0;  // the quad turned on the deck, radians
+
+// How the deck reaches libfpv: a surface object, or only through the
+// raycast callback (a game like GTA SA, whose world is its own line test),
+// with the deck's pose (fpv_raycast_hit_ex) or without.
+enum class DeckBy { Object, Ray, RayPose };
+
+// The deck for the raycast callback: a quad at the pose the game draws this
+// frame. Its pose noise (a parked car rocking on its springs) is in `jitter`.
+struct RayDeck {
+    Host h{fpv_coord_system{}};
+    fpv_transform t{};
+    std::vector<float> tris;  // deck-local host coords, 9 per triangle
+    bool pose = false;
+    uint32_t rays = 0;
+};
+static RayDeck g_rayDeck;
+static int rayDeckCast(void *, const float o[3], const float d[3], float maxD, fpv_raycast_hit_ex *out) {
+    RayDeck &k = g_rayDeck;
+    k.rays++;
+    float inv[4] = {-k.t.rotation[0], -k.t.rotation[1], -k.t.rotation[2], k.t.rotation[3]};
+    float rel[3] = {o[0] - k.t.position[0], o[1] - k.t.position[1], o[2] - k.t.position[2]}, lo[3], ld[3];
+    hqrot(inv, rel, lo);
+    hqrot(inv, d, ld);
+    // nearest triangle (Moller-Trumbore), two-sided
+    float best = maxD, ln[3] = {0, 0, 0};
+    bool any = false;
+    auto sub = [](const float *a, const float *b, float *o3) { for (int i = 0; i < 3; i++) o3[i] = a[i] - b[i]; };
+    auto crs = [](const float *a, const float *b, float *o3) {
+        o3[0] = a[1] * b[2] - a[2] * b[1], o3[1] = a[2] * b[0] - a[0] * b[2], o3[2] = a[0] * b[1] - a[1] * b[0];
+    };
+    auto dt = [](const float *a, const float *b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; };
+    for (size_t i = 0; i + 9 <= k.tris.size(); i += 9) {
+        const float *a = &k.tris[i], *b = a + 3, *c = a + 6;
+        float e1[3], e2[3], pv[3], tv[3], qv[3];
+        sub(b, a, e1);
+        sub(c, a, e2);
+        crs(ld, e2, pv);
+        float det = dt(e1, pv);
+        if (std::fabs(det) < 1e-9f) continue;
+        sub(lo, a, tv);
+        float u = dt(tv, pv) / det;
+        if (u < 0 || u > 1) continue;
+        crs(tv, e1, qv);
+        float v = dt(ld, qv) / det;
+        if (v < 0 || u + v > 1) continue;
+        float tt = dt(e2, qv) / det;
+        if (tt < 0 || tt >= best) continue;
+        best = tt;
+        any = true;
+        crs(e1, e2, ln);
+    }
+    if (!any) return 0;
+    float tt = best, l = std::sqrt(dt(ln, ln)), n[3];
+    for (float &x : ln) x /= l;
+    hqrot(k.t.rotation, ln, n);
+    if (n[0] * d[0] + n[1] * d[1] + n[2] * d[2] > 0) n[0] = -n[0], n[1] = -n[1], n[2] = -n[2];
+    out->hit.distance = tt;
+    std::memcpy(out->hit.normal, n, sizeof n);
+    out->hit.material = 7;
+    out->hit.object_id = 0x20000005;
+    if (k.pose && out->struct_size >= sizeof *out) {
+        out->flags = FPV_RAYCAST_HIT_POSE;
+        std::memcpy(out->object_position, k.t.position, sizeof k.t.position);
+        std::memcpy(out->object_rotation, k.t.rotation, sizeof k.t.rotation);
+    }
+    return 1;
+}
+
 // threaded: the simulation runs on its own thread in real time and the
 // "game" sleeps through its frames (the game's clock is the wall clock);
 // otherwise FPV_TIMING_MANUAL, the frame times uneven.
 static PerchResult perchRun(const Host &h, const char *preset, const std::function<DeckPose(double)> &motion,
                             float seconds, uint32_t seed, bool threaded, float sitFwd = 0.0f, float sitRight = 0.0f,
                             bool verbose = false, float windKmh = 0, float dropAt = -1, float deckLen = 2.4f,
-                            float deckWide = 1.5f) {
+                            float deckWide = 1.5f, DeckBy by = DeckBy::Object) {
     World deck;
     float a[3], b[3], c[3], d[3];
-    h.pos(-deckWide / 2, 0, -deckLen / 2, a);
-    h.pos(deckWide / 2, 0, -deckLen / 2, b);
-    h.pos(deckWide / 2, 0, deckLen / 2, c);
-    h.pos(-deckWide / 2, 0, deckLen / 2, d);
-    deck.quad(a, b, c, d);
+    if (g_perchRoof == 2) {
+        // a car roof curved both ways (a sphere of 1.5 m), as triangles 5 cm apart
+        const float R = 1.5f, step = 0.05f;
+        auto y = [&](float x, float z) { return -(x * x + z * z) / (2 * R); };
+        for (float x = -deckWide / 2; x < deckWide / 2 - 1e-4f; x += step)
+            for (float z = -deckLen / 2; z < deckLen / 2 - 1e-4f; z += step) {
+                h.pos(x, y(x, z), z, a);
+                h.pos(x + step, y(x + step, z), z, b);
+                h.pos(x + step, y(x + step, z + step), z + step, c);
+                h.pos(x, y(x, z + step), z + step, d);
+                deck.quad(a, b, c, d);
+            }
+    } else if (!g_perchRoof) {
+        h.pos(-deckWide / 2, 0, -deckLen / 2, a);
+        h.pos(deckWide / 2, 0, -deckLen / 2, b);
+        h.pos(deckWide / 2, 0, deckLen / 2, c);
+        h.pos(-deckWide / 2, 0, deckLen / 2, d);
+        deck.quad(a, b, c, d);
+    } else {
+        // GTA SA's Greenwood roof as its line test sees it: a flat strip 0.4 m
+        // wide, the sides rising 30 degrees to a 6 cm higher rim
+        const float xs[] = {-deckWide / 2, -0.3f, -0.2f, 0.2f, 0.3f, deckWide / 2};
+        const float ys[] = {0.058f, 0.058f, 0, 0, 0.058f, 0.058f};
+        for (int i = 0; i < 5; i++) {
+            h.pos(xs[i], ys[i], -deckLen / 2, a);
+            h.pos(xs[i + 1], ys[i + 1], -deckLen / 2, b);
+            h.pos(xs[i + 1], ys[i + 1], deckLen / 2, c);
+            h.pos(xs[i], ys[i], deckLen / 2, d);
+            deck.quad(a, b, c, d);
+        }
+    }
     fpv_mesh m = deck.mesh();
     // a car's paint under a quad's frame: grippier than the default floor
     fpv_material paint{0.2f, 0.5f, 0};
@@ -1935,7 +2032,21 @@ static PerchResult perchRun(const Host &h, const char *preset, const std::functi
     fpv_transform t;
     toTransform(motion(0), t);
     uint32_t id = 0;
-    CHECK(fpv_surface_object_create(&m, &t, &id) == FPV_OK, "deck: %s", fpv_last_error());
+    if (by == DeckBy::Object) {
+        CHECK(fpv_surface_object_create(&m, &t, &id) == FPV_OK, "deck: %s", fpv_last_error());
+    } else {
+        g_rayDeck.h = h;
+        g_rayDeck.t = t;
+        g_rayDeck.tris.clear();
+        for (uint32_t ix : deck.idx) g_rayDeck.tris.insert(g_rayDeck.tris.end(), &deck.v[ix * 3], &deck.v[ix * 3] + 3);
+        g_rayDeck.pose = by == DeckBy::RayPose;
+        fpv_world_set_raycast_callback_ex(&rayDeckCast, nullptr);
+    }
+    // the game: the deck's pose this frame
+    auto place = [&] {
+        if (id) fpv_surface_object_move(id, &t);
+        else g_rayDeck.t = t;
+    };
     Session s;
     float sit[3] = {0, 0, 0}, world[3];
     h.pos(sitRight, 0.01f, sitFwd, sit);
@@ -1945,6 +2056,11 @@ static PerchResult perchRun(const Host &h, const char *preset, const std::functi
     fpv_drone_desc_defaults(&dd);
     std::memcpy(dd.position, p, sizeof p);
     std::memcpy(dd.rotation, t.rotation, sizeof t.rotation);
+    if (g_perchSitYaw != 0) {
+        float qy[4];
+        hq(h.U, g_perchSitYaw, qy);
+        hqmul(t.rotation, qy, dd.rotation);
+    }
     dd.preset = preset;
     CHECK(fpv_drone_create(&dd, &s.drone) == FPV_OK, "drone_create: %s", fpv_last_error());
     s.rc.ch[4] = -1;
@@ -1966,7 +2082,7 @@ static PerchResult perchRun(const Host &h, const char *preset, const std::functi
     auto wall = [&] { return std::chrono::duration<double>(clock::now() - wall0).count(); };
     // settle on the still deck
     for (int i = 0; i < 100; i++) {
-        fpv_surface_object_move(id, &t);
+        place();
         s.rc.send();
         if (threaded) std::this_thread::sleep_for(std::chrono::milliseconds(10));
         else fpv_step(0.01f);
@@ -2007,11 +2123,11 @@ static PerchResult perchRun(const Host &h, const char *preset, const std::functi
         // LIBFPV_PERCH_TICK_FIRST: a game that ticks the drone before it
         // moves the surfaces (each move then waits for the next frame)
         static const bool tickFirst = std::getenv("LIBFPV_PERCH_TICK_FIRST") && *std::getenv("LIBFPV_PERCH_TICK_FIRST");
-        if (!tickFirst) fpv_surface_object_move(id, &t);
+        if (!tickFirst) place();
         s.rc.send();
         if (!threaded) fpv_step(dt);
         fpv_drone_tick(s.drone, dt, &s.f);
-        if (tickFirst) fpv_surface_object_move(id, &t);
+        if (tickFirst) place();
         float l[3];
         local(t, s.f.position, l);
         if (dropAt >= 0 && game < dropAt + 1.0) {
@@ -2044,11 +2160,12 @@ static PerchResult perchRun(const Host &h, const char *preset, const std::functi
     w.velocity[0] = w.velocity[1] = w.velocity[2] = 0;
     fpv_wind_set(&w);
     s.destroy();
-    fpv_surface_object_delete(id);
+    if (id) fpv_surface_object_delete(id);
+    else fpv_world_set_raycast_callback_ex(nullptr, nullptr);
     return res;
 }
 
-void perchMoving(bool threaded) {
+void perchMoving(bool threaded, DeckBy by = DeckBy::Object) {
     Host h(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1));
     const bool verbose = std::getenv("LIBFPV_PERCH_VERBOSE") != nullptr;
     const float kmh = 1 / 3.6f;
@@ -2113,6 +2230,23 @@ void perchMoving(bool threaded) {
              p.pitch = 0.015f * std::sin(tt * 7.0f);
              p.roll = 0.02f * std::sin(tt * 4.1f);
              return p; }, 10, true, false},
+        {"car 0-20 km/h into a 15 deg/s turn (GTA SA)", [=](double t) {
+             DeckPose p;
+             p.u = 1.5f;
+             // heading rate ramps with the speed (both over 3 s): integrate the path
+             const int n = 400;
+             float x = 0, z = 0, yaw = 0, tt = (float)t, h = tt / n;
+             for (int i = 0; i < n; i++) {
+                 float ti = (i + 0.5f) * h, ramp = std::min(1.0f, ti / 3.0f);
+                 float v = 20 * kmh * ramp, w = 0.2618f * ramp;
+                 yaw += w * h;
+                 x += -std::sin(yaw) * v * h;
+                 z += std::cos(yaw) * v * h;
+             }
+             p.r = x;
+             p.f = z;
+             p.yaw = yaw;
+             return p; }, 10, true, true},
         {"turntable 30 deg/s, 0.6 m off centre", [](double t) {
              DeckPose p; p.u = 1.5f; p.yaw = 0.5236f * (float)t; return p; }, 12, true, true, 0.6f, 0.0f},
         {"turntable 90 deg/s, centre", [](double t) {
@@ -2143,7 +2277,7 @@ void perchMoving(bool threaded) {
                                                [&](const char *q) { return std::strcmp(q, cs.name) == 0; }))
                 continue;
             PerchResult r = perchRun(h, preset, cs.motion, cs.seconds, (uint32_t)i + 1, threaded, cs.sitFwd,
-                                     cs.sitRight, verbose, cs.windKmh, cs.dropAt);
+                                     cs.sitRight, verbose, cs.windKmh, cs.dropAt, 2.4f, 1.5f, by);
             std::printf("    %-36s slip %.3f m  lift %.3f m  off deck %3.0f %%  rel %.2f m/s  %s",
                         cs.name, r.slip, r.lift, r.airborne * 100, r.maxRelSpeed, r.fell ? "FELL" : "stayed");
             if (r.fell) std::printf(" at %.1f s", r.fellAt);
@@ -2163,6 +2297,28 @@ void perchMoving(bool threaded) {
 
 void testPerchMoving() { perchMoving(false); }
 
+// LIBFPV_PERCH_EXPLORE=object|ray|raypose: every perch case one way, for exploring, on
+// LIBFPV_PERCH_ROOF=1 (raised sides) or 2 (a dome), the quad turned LIBFPV_PERCH_YAW degrees
+void testPerchExplore() {
+    const char *by = std::getenv("LIBFPV_PERCH_EXPLORE");
+    if (!by) {
+        std::printf("  (set LIBFPV_PERCH_EXPLORE to run)\n");
+        return;
+    }
+    g_perchRoof = std::getenv("LIBFPV_PERCH_ROOF") ? std::atoi(std::getenv("LIBFPV_PERCH_ROOF")) : 0;
+    if (const char *y = std::getenv("LIBFPV_PERCH_YAW")) g_perchSitYaw = (float)std::atof(y) / 57.2957795f;
+    perchMoving(false, !std::strcmp(by, "object") ? DeckBy::Object
+                       : !std::strcmp(by, "ray")         ? DeckBy::Ray
+                                                         : DeckBy::RayPose);
+    g_perchRoof = 0;
+    g_perchSitYaw = 0;
+}
+
+// The same decks only through the raycast callback, as GTA SA's cars: its
+// hits give the deck's pose (fpv_raycast_hit_ex), and the planes ride on it
+// (D41). Without the pose a 20 km/h car leaves the quad behind at once.
+void testPerchMovingRaycast() { perchMoving(false, DeckBy::RayPose); }
+
 // The same in real time, the simulation on its thread reading each move a
 // little early or late, as in a game.
 void testPerchMovingThreaded() {
@@ -2175,6 +2331,10 @@ void testPerchMovingThreaded() {
     CHECK(fpv_global_init(&cfg) == FPV_OK, "threaded init: %s", fpv_last_error());
     loadWorld(makeLevel(Host(cfg.coords), 100, 0));
     perchMoving(true);
+    if (std::getenv("LIBFPV_PERCH_RAYCAST")) {
+        std::printf("  through the raycast callback\n");
+        perchMoving(true, DeckBy::RayPose);
+    }
 }
 
 // Far from the origin (GTA SA's map: 2500 m) a float position only has
@@ -3866,6 +4026,8 @@ int main(int argc, char **argv) {
         {"slow_far_from_origin", testSlowFarFromOrigin},
         {"perch_moving", testPerchMoving},
         {"perch_moving_threaded", testPerchMovingThreaded},
+        {"perch_moving_raycast", testPerchMovingRaycast},
+        {"perch_explore", testPerchExplore},
         {"gps", testGps},
         {"gps_elements_after_reboot", testGpsElementsAfterReboot},
         {"osd_profiles", testOsdProfiles},

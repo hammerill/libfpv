@@ -269,7 +269,9 @@ public:
         post(wire::kWorldMoveObject, id, t, simTime, lead, leadAlt);
     }
     void worldDeleteObject(uint32_t id) override { post(wire::kWorldDeleteObject, id); }
-    void worldSetProxyPlanes(const std::vector<Contact> &planes) override { post(wire::kWorldSetProxyPlanes, planes); }
+    void worldSetProxyPlanes(const std::vector<Contact> &planes, const std::vector<ProxyMove> &moves) override {
+        post(wire::kWorldSetProxyPlanes, planes, moves);
+    }
 
     // --- time -----------------------------------------------------------------------------------
     bool threaded() override { return m_threaded; }

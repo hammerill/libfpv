@@ -59,7 +59,7 @@ public:
                            double simTime) override;
     void worldMoveObject(uint32_t id, const RigidTransform &t, double simTime, double lead, double leadAlt) override;
     void worldDeleteObject(uint32_t id) override;
-    void worldSetProxyPlanes(const std::vector<Contact> &planes) override;
+    void worldSetProxyPlanes(const std::vector<Contact> &planes, const std::vector<ProxyMove> &moves) override;
 
     bool threaded() override { return m_runner.threaded(); }
     float stepSeconds() override { return m_runner.stepSeconds(); }

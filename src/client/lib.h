@@ -136,8 +136,24 @@ struct Lib {
     Vec3 pilotPos;  // where the pilot stands (spawn, fpv_drone_set_pilot_position)
     bool droneExists = false;
 
+    // the host's raycast: one of the two (hostRay calls whichever is set)
     fpv_raycast_fn raycast = nullptr;
+    fpv_raycast_ex_fn raycastEx = nullptr;
     void *raycastUser = nullptr;
+    bool hasHostRaycast() const { return raycast || raycastEx; }
+    // One host ray (host units); false on a miss. out.flags is 0 from the
+    // plain callback.
+    bool hostRay(const float origin[3], const float dir[3], float maxDist, fpv_raycast_hit_ex &out) const {
+        out = fpv_raycast_hit_ex{};
+        out.struct_size = sizeof out;
+        if (raycastEx) return raycastEx(raycastUser, origin, dir, maxDist, &out) != 0;
+        if (raycast) return raycast(raycastUser, origin, dir, maxDist, &out.hit) != 0;
+        return false;
+    }
+    // This tick's frame on the simulation's clock (what the surface moves
+    // made before it are for, D39): the time the host's raycast poses are
+    // for. Set by fpv_drone_tick.
+    double frameStamp = 0;
     // the video link's obstruction probe through the host raycast, one ray
     // per fpv_drone_tick (frame.cpp, D34)
     struct HostVideoProbe {

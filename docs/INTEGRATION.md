@@ -1203,6 +1203,8 @@ engine quirks), not for how to use libfpv.
 
 When the world can't be exported as triangles (streamed, closed engine),
 answer libfpv's rays with the engine's own line test.
+Use `fpv_world_set_raycast_callback_ex` if those rays can hit things that
+move (see "Moving surfaces").
 
 - **Find the engine's general line probe.** A ground-height function
   answers only downward rays, so the drone flies through walls. In GTA IV,
@@ -1255,6 +1257,15 @@ ship's deck) and ride along, as on the real thing.
 - **Expect the airspeed to win.** The quad feels the air it moves through:
   a 5" stays on a roof at 50 km/h and blows off at 130, a 30 g whoop goes
   at 40 km/h.
+- **Raycast worlds: say where the hit thing is.** If your cars are only
+  reachable through your line test, set the callback with
+  `fpv_world_set_raycast_callback_ex` and, for every hit on something
+  that can move (vehicles, peds, physics objects), set
+  `FPV_RAYCAST_HIT_POSE` with its position and rotation as drawn this
+  frame. Parked ones too: a car settling on its springs moves. Give it a
+  stable non-zero `object_id`, the same for every ray that hits it in the
+  tick. Without the pose a quad on a car is left behind as soon as the car
+  moves. Check `hit->struct_size` before writing the pose fields.
 
 ### Impacts and game effects
 

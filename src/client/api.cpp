@@ -439,6 +439,7 @@ void applySurfaceMoves(double frameDt, bool frame) {
             c.stamp += e * std::min(1.0, frameDt / 0.5);
         }
     }
+    L.frameStamp = c.set ? c.stamp : now;
     if (L.pendingMoves.empty()) return;
     double lead = c.stamp - now, leadAlt = had ? before - now : lead;
     for (const auto &pm : L.pendingMoves) {
@@ -798,16 +799,21 @@ FPV_API fpv_result fpv_surface_object_delete(uint32_t id) {
     return FPV_OK;
 }
 
-FPV_API void fpv_world_set_raycast_callback(fpv_raycast_fn cb, void *user) {
+static void setRaycast(fpv_raycast_fn cb, fpv_raycast_ex_fn cbEx, void *user) {
     Lib &L = lib();
     std::lock_guard<std::recursive_mutex> lock(L.mutex);
     L.raycast = cb;
+    L.raycastEx = cbEx;
     L.raycastUser = user;
-    if (!cb) {
+    if (!cb && !cbEx) {
         L.world.setProxyPlanes({});
-        L.server->worldSetProxyPlanes({});
+        if (L.server) L.server->worldSetProxyPlanes({}, {});
     }
 }
+
+FPV_API void fpv_world_set_raycast_callback(fpv_raycast_fn cb, void *user) { setRaycast(cb, nullptr, user); }
+
+FPV_API void fpv_world_set_raycast_callback_ex(fpv_raycast_ex_fn cb, void *user) { setRaycast(nullptr, cb, user); }
 
 // --- drone -----------------------------------------------------------------
 
@@ -884,7 +890,7 @@ FPV_API fpv_result fpv_drone_reset(fpv_drone *d, const float position[3], const 
     L.server->reset(pos, rot);
     // the host's hits around the old spot; the next tick casts anew
     L.world.setProxyPlanes({});
-    L.server->worldSetProxyPlanes({});
+    L.server->worldSetProxyPlanes({}, {});
     L.chaseValid = false;
     L.windProbe.reset();
     return FPV_OK;

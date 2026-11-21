@@ -942,6 +942,61 @@ not the slower air of a roof's boundary layer.
 interval in `CollisionWorld::moveObject` and applying moves at once in
 `fpv_surface_object_move`.
 
+### D41. Perching on what the host's raycast hits
+
+D39 covered surface objects. A game whose world is its own line test (GTA
+SA, through `fpv_world_set_raycast_callback`) gives libfpv only ray hits:
+each became a plane that stood still until the next tick. On a car at
+20 km/h the quad stayed where the roof had been and fell off within a
+second; on a parked car it sat still in some spots and bounced in others.
+Two causes:
+
+* **Planes didn't move.** A hit had no velocity and no frame: the plane
+  froze between ticks and friction had nothing to carry the quad with.
+  `fpv_world_set_raycast_callback_ex` lets a hit say where the thing it
+  hit is (`FPV_RAYCAST_HIT_POSE`, keyed by `object_id`). Each such thing
+  becomes a *mover*, an object with no triangles that follows the same
+  D39 path through the poses, timed for the tick's frame
+  (`Lib::frameStamp`). Its planes are kept in its frame and ride with it;
+  contacts get its velocity and spin. A mover with no pose for 2 s is
+  dropped. The `perch_moving_raycast` test runs every `perch_moving` deck
+  through the callback only; without the pose a 20 km/h car loses the quad
+  at once, with it the results match the surface object's.
+* **Planes stood where the surface isn't.** A plane is the surface's
+  tangent at one hit point, extended 0.75 m. On a curved roof that is
+  centimetres off a few decimetres away: in GTA SA the centre's sideways
+  rays met a Greenwood's raised roof rim 0.3 m out, with normals tilted up
+  to 27°, and those planes stood 4 cm above the roof under the arms. The
+  quad tipped onto them, fell, and kicked up again (2-8 % of frames off
+  the roof in a turn, 6-9 cm up). As the car turned, the world-fixed rays
+  swept the rim and the planes changed every tick. Two fixes:
+  * *Cuts.* A ray that went into a plane's solid side on its way to
+    something further proves the plane wrong there. Each plane keeps up to
+    8 such crossings (`Contact::cuts`, or where a ray starts behind it: a
+    sphere is there) and stands only where it is nearer its own hit point
+    than any of them. That's a Voronoi split between evidence for and
+    against, with nothing to tune. A flat surface gets no cuts (every ray
+    ends on the plane, within 1 cm), and neither does a concave one (its
+    tangents are under it). A convex one is cut back to around each hit.
+  * *Probes from the spheres.* Near a surface (a hit within the drone's
+    size + 15 cm), each sphere but the body's (whose rays are the centre's)
+    casts six short rays (down, up and four level ways, plus its own down
+    when tilted) of its radius + 12 cm. That's about 54 more rays a tick,
+    1-7 µs each in GTA SA. Every support point then has a plane measured
+    right under it, and the rays' free stretches give the cuts.
+
+In GTA SA with the perch autotest (gtasa-fpv), the same 20 km/h turn at
+15°/s went from 59-92 mm of lift, 11-33 cm of slip and 2-8 % of frames off
+the roof to 0 mm, 3.8 cm and none. At 40 km/h the lift went from 126 mm to
+1 mm. Parked, on five car models and near the roof's edges, the quad doesn't
+move. The tests' decks (flat, a channel, a 1.5 m dome) never made phantom
+planes, so they only guard against regressions; the evidence is the
+game's.
+
+**Reversing it** means dropping the probe block and the cut loop in
+`refreshRaycastProxies` (frame.cpp) and the `standsAt` checks in
+`CollisionWorld`; the movers are independent of them.
+
 ## Presentation
 
 ### D14. Overlay: libfpv is a "legacy" ImGui backend

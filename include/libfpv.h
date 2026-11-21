@@ -58,7 +58,7 @@
 /* The one place the version is set: CMakeLists.txt reads these three. */
 #define LIBFPV_VERSION_MAJOR 1
 #define LIBFPV_VERSION_MINOR 1
-#define LIBFPV_VERSION_PATCH 1
+#define LIBFPV_VERSION_PATCH 2
 #define LIBFPV_STRINGIFY_(x) #x
 #define LIBFPV_STRINGIFY(x) LIBFPV_STRINGIFY_(x)
 #define LIBFPV_VERSION_STRING                                                  \
@@ -334,6 +334,30 @@ typedef struct fpv_raycast_hit {
 typedef int (*fpv_raycast_fn)(void *user, const float origin[3], const float direction[3],
                               float max_distance, fpv_raycast_hit *out_hit);
 FPV_API void fpv_world_set_raycast_callback(fpv_raycast_fn callback, void *user);
+
+/* The same, for worlds whose rays can hit moving things (cars, lifts,
+ * trains): a hit can also say where the thing it hit is this frame. Its
+ * planes then ride with it between ticks, on the same smooth path as a
+ * surface object's moves, and carry a drone perched on it along (see the
+ * guide, "Moving surfaces"). Replaces the plain callback, and the other way
+ * round. libfpv sets `struct_size` before each call: write no field past it
+ * (since libfpv 1.1.2). */
+#define FPV_RAYCAST_HIT_POSE 1u /* object_position and object_rotation are set */
+typedef struct fpv_raycast_hit_ex {
+    uint32_t struct_size;      /* set by libfpv */
+    fpv_raycast_hit hit;
+    uint32_t flags;            /* FPV_RAYCAST_HIT_* */
+    /* With FPV_RAYCAST_HIT_POSE: the pose of what was hit as the game draws it
+     * this frame, host coords (any point fixed to it). hit.object_id must
+     * then be non-zero and stay the same for it, and every ray that hits it
+     * in a tick must give the same pose. Set it for parked cars too: a car
+     * settling on its springs moves. */
+    float object_position[3];
+    float object_rotation[4];  /* quaternion x, y, z, w */
+} fpv_raycast_hit_ex;
+typedef int (*fpv_raycast_ex_fn)(void *user, const float origin[3], const float direction[3],
+                                 float max_distance, fpv_raycast_hit_ex *out_hit);
+FPV_API void fpv_world_set_raycast_callback_ex(fpv_raycast_ex_fn callback, void *user);
 
 /* ===========================================================================
  * Drone

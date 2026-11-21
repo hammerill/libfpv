@@ -317,7 +317,8 @@ bool dispatch(SimServer &server, LoopbackSocket &s, uint16_t op, const std::stri
     }
     case wire::kWorldSetProxyPlanes: {
         std::vector<Contact> planes;
-        if (wire::unpack(r, planes)) server.worldSetProxyPlanes(planes);
+        std::vector<ProxyMove> moves;
+        if (wire::unpack(r, planes, moves)) server.worldSetProxyPlanes(planes, moves);
         return true;
     }
     // time

@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "lib.h"
+#include "world/drone_shape.h"
 #include "util/log.h"
 
 namespace fpv {
@@ -84,18 +85,31 @@ static void makeCamera(fpv_camera &c, Vec3 pos, Vec3 fwd, Vec3 up, float fovY, f
 // Host raycast callback -> temporary collision planes around the drone.
 static void refreshRaycastProxies(const FlightSnapshot &s) {
     Lib &L = lib();
-    if (!L.raycast || !s.active) return;
+    if (!L.hasHostRaycast() || !s.active) return;
     const CoordConverter &cv = L.conv;
+    const double now = L.server->simTime(), lead = L.frameStamp - now;
+    std::vector<ProxyMove> moves;
     float reach = std::max(2.0f, length(s.vel) * 0.3f);
     static const Vec3 dirs[] = {{1, 0, 0},  {-1, 0, 0}, {0, 1, 0},   {0, -1, 0},  {0, 0, 1},  {0, 0, -1},
                                 {1, 1, 1},  {1, 1, -1}, {1, -1, 1},  {1, -1, -1}, {-1, 1, 1}, {-1, 1, -1},
                                 {-1, -1, 1}, {-1, -1, -1}};
     std::vector<Contact> planes;
+    // Every ray's free stretch (from its origin to its hit, or its whole
+    // range), for the planes' cuts; and the pose each plane is in.
+    struct Free {
+        Vec3 o, d;
+        float len;
+        int plane;  // the plane it found, or -1
+    };
+    std::vector<Free> free;
+    std::vector<RigidTransform> planePose;  // for planes on movers: the hit pose
     // One ray of the host's; a hit inside a portal's opening goes on from
     // the linked one, and what it finds there is brought back to this side
     // (where it seems to be, seen through the opening).
     auto cast = [&](Vec3 from, float range, Vec3 d) {
         d = normalize(d);
+        size_t freeAt = free.size();
+        free.push_back({from, d, range, -1});
         Vec3 o = from;
         float left = range, travelled = 0;
         PortalTransform back{Quat{}, {}, {}};  // from the far side to the drone's
@@ -104,11 +118,14 @@ static void refreshRaycastProxies(const FlightSnapshot &s) {
             float oh[3], dh[3];
             put3(oh, cv.posToHost(o));
             put3(dh, cv.dirToHost(d));
-            fpv_raycast_hit hit{};
-            if (!L.raycast(L.raycastUser, oh, dh, cv.lenToHost(left), &hit)) return;
+            fpv_raycast_hit_ex hx;
+            if (!L.hostRay(oh, dh, cv.lenToHost(left), hx)) return;
+            const fpv_raycast_hit &hit = hx.hit;
             float t = cv.lenToInternal(hit.distance);
             if (!(t >= 0) || t > left) return;
             Vec3 at = o + d * t;
+            // what it saw past a portal is no free space on this side
+            if (hop == 0) free[freeAt].len = t;
             int hole = L.portals.empty() ? -1 : portalHoleAt(L.portals, at);
             if (hole >= 0) {
                 const PortalLink &link = L.portals[hole / 2];
@@ -140,21 +157,106 @@ static void refreshRaycastProxies(const FlightSnapshot &s) {
             c.material = hit.material;
             c.objectId = hit.object_id;
             c.throughPortal = through;
+            RigidTransform pose{{}, Quat{}};
+            // on something that moves: the plane in its frame, as it is drawn
+            // this frame (seen through a portal, it stays where it seems)
+            if ((hx.flags & FPV_RAYCAST_HIT_POSE) && hit.object_id && !through) {
+                const float *hp = hx.object_position, *hr = hx.object_rotation;
+                pose = {cv.posToInternal({hp[0], hp[1], hp[2]}),
+                        normalize(cv.rotToInternal({hr[0], hr[1], hr[2], hr[3]}))};
+                Quat inv = conj(pose.rot);
+                c.mover = hit.object_id;
+                c.localPoint = rotate(inv, c.point - pose.pos);
+                c.localNormal = rotate(inv, c.normal);
+                if (std::none_of(moves.begin(), moves.end(), [&](const ProxyMove &m) { return m.key == c.mover; }))
+                    moves.push_back({c.mover, pose, now, lead});
+            }
+            if (hop == 0) free[freeAt].plane = (int)planes.size();
             planes.push_back(c);
+            planePose.push_back(pose);
             (void)travelled;
             return;
         }
     };
     for (Vec3 d : dirs) cast(s.pos, reach, d);
     if (length2(s.vel) > 0.25f) cast(s.pos, reach, s.vel);
+    // Near a surface, the drone's own spheres probe it too: down and around
+    // from each, a short way. A plane from the centre's rays stands for the
+    // surface only near where the ray hit; under an arm, on a curved car
+    // roof, it was centimetres off (D41). Their free stretches also cut the
+    // centre's planes back to where they are right.
+    {
+        const DronePreset &preset = currentPreset();
+        thread_local std::vector<ShapeSphere> shape;
+        buildDroneShape(preset, shape);
+        float extent = 0;
+        for (const ShapeSphere &sp : shape)
+            if (!sp.fine) extent = std::max(extent, length(sp.local) + sp.radius);
+        bool close = false;
+        for (const Free &f : free)
+            if (f.plane >= 0 && f.len < extent + 0.15f) close = true;
+        if (close) {
+            Vec3 up = rotate(s.rot, {0, 1, 0});
+            const float range = 0.12f + length(s.vel) * 0.05f;
+            const Vec3 around[] = {{0, -1, 0}, {1, 0, 0}, {-1, 0, 0}, {0, 0, 1}, {0, 0, -1}, {0, 1, 0}};
+            for (const ShapeSphere &sp : shape) {
+                if (sp.fine || length(sp.local) < 0.01f) continue;  // the centre's own rays cover the body
+                Vec3 c = s.pos + rotate(s.rot, sp.local);
+                for (Vec3 d : around) cast(c, sp.radius + range, d);
+                if (up.y < 0.94f) cast(c, sp.radius + range, -up);  // tilted: its own down too
+            }
+        }
+    }
+    // The cuts: where a ray passed through a plane (more than 1 cm before
+    // its own end) into the side the plane calls solid, the nearest few to
+    // the plane's hit point, kept in the plane's frame.
+    for (size_t i = 0; i < planes.size(); i++) {
+        Contact &p = planes[i];
+        if (p.throughPortal) continue;
+        struct Cut {
+            Vec3 at;
+            float d2;
+        };
+        Cut cuts[Contact::kMaxCuts];
+        int n = 0;
+        for (const Free &f : free) {
+            if (f.plane == (int)i) continue;
+            float into = dot(f.d, p.normal);
+            if (into > -1e-4f) continue;
+            float above = dot(f.o - p.point, p.normal);
+            Vec3 at;
+            if (above <= 0) {
+                if (above > -0.002f) continue;
+                at = f.o - p.normal * above;  // the ray starts in what it calls solid: a sphere is there
+            } else {
+                float t = above / -into;
+                if (t >= f.len - 0.01f) continue;
+                at = f.o + f.d * t;
+            }
+            float d2 = length2(at - p.point);
+            if (d2 > 0.75f * 0.75f) continue;
+            if (n < Contact::kMaxCuts) {
+                cuts[n++] = {at, d2};
+            } else {
+                int far = 0;
+                for (int k = 1; k < n; k++)
+                    if (cuts[k].d2 > cuts[far].d2) far = k;
+                if (d2 < cuts[far].d2) cuts[far] = {at, d2};
+            }
+        }
+        p.cutCount = (uint8_t)n;
+        Quat inv = conj(planePose[i].rot);
+        for (int k = 0; k < n; k++)
+            p.cuts[k] = p.mover ? rotate(inv, cuts[k].at - planePose[i].pos) : cuts[k].at;
+    }
     if (s.cargoHanging) {
         // the cargo on its line collides on its own, maybe metres away
         float cargoReach = std::max(1.5f, length(s.cargoVel) * 0.3f);
         for (Vec3 d : dirs) cast(s.cargoPos, cargoReach, d);
         if (length2(s.cargoVel) > 0.25f) cast(s.cargoPos, cargoReach, s.cargoVel);
     }
-    L.server->worldSetProxyPlanes(planes);
-    L.world.setProxyPlanes(std::move(planes));
+    L.server->worldSetProxyPlanes(planes, moves);
+    L.world.setProxyPlanes(std::move(planes), moves);
 }
 
 // The video link's obstruction through the host raycast (D34). The
@@ -166,7 +268,7 @@ static void refreshRaycastProxies(const FlightSnapshot &s) {
 static void refreshVideoProbe(const FlightSnapshot &s) {
     Lib &L = lib();
     Lib::HostVideoProbe &v = L.hostVideoProbe;
-    if (!L.raycast || !s.active) {
+    if (!L.hasHostRaycast() || !s.active) {
         if (v.on) L.server->setHostObstruction({});
         v = Lib::HostVideoProbe{};
         return;
@@ -193,8 +295,9 @@ static void refreshVideoProbe(const FlightSnapshot &s) {
         float oh[3], dh[3];
         put3(oh, cv.posToHost(a + u * skip));
         put3(dh, cv.dirToHost(u));
-        fpv_raycast_hit hit{};
-        if (!L.raycast(L.raycastUser, oh, dh, cv.lenToHost(len - skip - 0.15f), &hit)) return false;
+        fpv_raycast_hit_ex hx;
+        if (!L.hostRay(oh, dh, cv.lenToHost(len - skip - 0.15f), hx)) return false;
+        const fpv_raycast_hit &hit = hx.hit;
         float t = cv.lenToInternal(hit.distance);
         if (!(t >= 0) || t > len - skip) return false;
         if (tHit) *tHit = t + skip;
@@ -244,12 +347,13 @@ static bool worldRay(double simTime, Vec3 o, Vec3 d, float maxDist, float &t, Ve
             maxDist = wt;
         }
     }
-    if (L.raycast) {
+    if (L.hasHostRaycast()) {
         float oh[3], dh[3];
         put3(oh, cv.posToHost(o));
         put3(dh, cv.dirToHost(d));
-        fpv_raycast_hit hit{};
-        if (L.raycast(L.raycastUser, oh, dh, cv.lenToHost(maxDist), &hit)) {
+        fpv_raycast_hit_ex hx;
+        const fpv_raycast_hit &hit = hx.hit;
+        if (L.hostRay(oh, dh, cv.lenToHost(maxDist), hx)) {
             float ht = cv.lenToInternal(hit.distance);
             if (ht >= 0 && ht <= maxDist) {
                 any = true;
@@ -369,7 +473,12 @@ extern "C" FPV_API fpv_result fpv_drone_tick(fpv_drone *d, float frameDt, fpv_fr
     frameDt = std::min(frameDt, 0.25f);
     L.server->pump();  // browsers; before the heartbeat, so a long gap auto-pauses
     L.server->heartbeat();
-    if (L.server->threaded()) applySurfaceMoves(frameDt, true);
+    if (L.server->threaded()) {
+        applySurfaceMoves(frameDt, true);
+    } else {
+        // the end of the last fpv_step, what the host moved its surfaces for
+        L.frameStamp = L.manualClockSet ? L.manualClock + L.manualOffset : L.server->simTime();
+    }
 
     const CoordConverter &cv = L.conv;
     FlightSnapshot prev, cur;

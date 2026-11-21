@@ -68,11 +68,38 @@ struct Contact {
     // A raycast hit seen through a portal, brought back to this side: it is
     // where it seems, even inside a portal's hole.
     bool throughPortal = false;
+    // A raycast plane on something that moves (fpv_raycast_hit_ex's pose):
+    // the key of its mover (the host's object_id), and the plane in the
+    // mover's frame. 0: the plane stays where it is.
+    uint32_t mover = 0;
+    Vec3 localPoint, localNormal;
+    // Where other rays of the same tick went through the plane into the
+    // side it calls solid (in the plane's frame: world, or its mover's): the
+    // surface isn't there, so the plane only stands where it is nearer its
+    // own hit point than any of these (D41).
+    static constexpr int kMaxCuts = 8;
+    uint8_t cutCount = 0;
+    Vec3 cuts[kMaxCuts];
+    // false: `at` (on the plane, as `point` and `cuts` are) is nearer a cut than the hit point
+    bool standsAt(Vec3 at) const {
+        float own = length2(at - point);
+        for (int i = 0; i < cutCount; i++)
+            if (length2(at - cuts[i]) < own) return false;
+        return true;
+    }
 };
 
 struct RigidTransform {
     Vec3 pos;
     Quat rot;
+};
+
+// The pose the host's raycast gave for something its rays hit this tick
+// (fpv_raycast_hit_ex), for `lead` s past simTime (CollisionWorld::moveObject).
+struct ProxyMove {
+    uint32_t key = 0;  // the host's object_id
+    RigidTransform pose;
+    double simTime = 0, lead = 0;
 };
 
 class CollisionWorld {
@@ -97,8 +124,11 @@ public:
         std::lock_guard<std::mutex> lock(m_mutex);
         return m_objects.count(id) > 0;
     }
-    // Planes from the host raycast callback: (point, normal, material).
-    void setProxyPlanes(std::vector<Contact> planes);
+    // Planes from the host raycast callback: (point, normal, material). The
+    // moves first take the movers (what the rays hit that moves) to their
+    // new poses; a plane with a mover rides with it, on the same path as an
+    // object's moves. A mover without moves for a while is dropped.
+    void setProxyPlanes(std::vector<Contact> planes, const std::vector<ProxyMove> &moves = {});
 
     // --- reader side (simulation thread) ------------------------------
     // Collects contacts for a sphere at time simTime. Returns count added.
@@ -165,6 +195,10 @@ private:
         mutable ObjectMotion cache;
     };
     ObjectMotion objectMotion(const Object &o, double simTime) const;
+    void moveLocked(Object &o, const RigidTransform &t, double simTime, double lead, double leadAlt);
+    // a proxy plane where it is at simTime, its surface's velocity set
+    // (false: its mover is gone)
+    bool proxyPlaneAt(const Contact &p, double simTime, Contact &out) const;
     RigidTransform objectPose(const Object &o, double simTime) const { return objectMotion(o, simTime).pose; }
 
     mutable std::mutex m_mutex;
@@ -173,6 +207,9 @@ private:
     std::unordered_map<uint32_t, std::unique_ptr<Object>> m_objects;
     uint32_t m_nextId = 1;
     std::vector<Contact> m_proxyPlanes;
+    // What the raycast planes ride on (ProxyMove), by the host's object_id:
+    // objects with no triangles, only a path.
+    std::unordered_map<uint32_t, std::unique_ptr<Object>> m_movers;
     // the host moves its surfaces after it steps or ticks (moveObject's
     // leadAlt), and the tally that says so
     bool m_alt = false;
