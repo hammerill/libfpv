@@ -1438,6 +1438,12 @@ FPV_API const fpv_draw_data *fpv_osd_draw_data(const fpv_frame *frame, float wid
 FPV_API fpv_result fpv_osd_render_rgba(const fpv_frame *frame, uint8_t *rgba, uint32_t width,
                                        uint32_t height, uint32_t stride_bytes, fpv_osd_style style);
 
+/* The FPV camera's vertical field of view in degrees: the player's setting
+ * (the overlay's Camera page) or the quad preset's. The setter takes 60 to
+ * 150 and saves it in settings.json; 0 goes back to the preset's. Any thread. */
+FPV_API float fpv_camera_get_fov(void);
+FPV_API fpv_result fpv_camera_set_fov(float degrees);
+
 /* ===========================================================================
  * Audio
  * ======================================================================== */
