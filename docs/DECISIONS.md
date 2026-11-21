@@ -1619,6 +1619,74 @@ Network World 2.4 GHz); Mellios et al. (Bristol), 2.4 GHz vs 868 MHz
 off-body channels; SMU UAV ground-link measurements at 900 MHz / 2.5 GHz
 (body effect on K).
 
+### D40. The collision view (F8 > Camera & sound)
+
+Integrators had no way to see what libfpv collides with: a wrong scale,
+an axis flipped in the export, a missing mesh or a material without
+`FPV_MATERIAL_KILLS_PROPS` only showed up as a drone flying through a wall
+or living through lava. F8 > Camera & sound > "Show collision" draws it,
+instead of the game's picture (solid) or over it (x-ray): static triangles
+and surface objects at their pose for the frame, coloured by material
+(red breaks props, green is clear to video, a violet outline is no
+collision but blocks video, blue is a moving object), the raycast
+callback's planes, the drone's collision spheres and prop discs, its
+contacts at the drawn pose, and the impacts of the last 2 s (magenta and
+"VTX" above `kVtxHitSpeed`, the speed that damages the video transmitter).
+VTX damage has no material: it comes from hard hits and from the game's
+`fpv_drone_damage_props`, so the impact colour is all the view can show.
+
+libfpv draws it itself with Dear ImGui triangles in the overlay's
+background draw list, so every game that draws the overlay has it with no
+code of its own. The alternative, a 3D debug API the game draws with its
+depth buffer, would be exact but needs a renderer in every integration.
+The cost of the 2D route:
+
+- No depth buffer. Triangles are sorted back to front (painter's
+  algorithm). Sorted whole, a big triangle went wrong: the standalone's
+  ground is two triangles hundreds of metres across, and facing south one
+  of them had its centroid beside or behind the camera, so it was drawn
+  last, over everything standing on it. Each triangle is now cut at its
+  midpoints, up to 10 levels, until no piece is longer than its distance
+  from the camera (not below 0.25 m), and every piece sorts by the centroid
+  of its part in front of the near plane. Only the triangle's own sides
+  are outlined. Hairline cracks between thin, far pieces showed the
+  background, so opaque fills grow by 0.6 px, and in solid mode each cut
+  triangle is first drawn whole under its pieces. Fog is per corner, by
+  distance: per piece, it drew bands across the ground. Intersecting
+  triangles can still come out in the wrong order.
+- The CPU projects everything. Only triangles within the draw distance
+  (150 m by default) and inside the frustum are drawn, at most the
+  nearest 40 000 (both settings in the tab), and the gathering stops at
+  400 000 near the camera.
+- The camera is libfpv's: the one `fpv_set_view` selects (FPV, chase,
+  LOS; in the pilot view the camera given to `fpv_audio_set_listener`,
+  else the pilot's head). In the FPV view the picture follows the video
+  feed's rectangle (camera aspect with bars) and the fisheye: each vertex
+  goes through the inverse of the lens post-process (Newton on the radial
+  polynomial), and triangles larger on screen are cut into up to 256
+  pieces so their edges bend like the game's. A game that draws its own
+  camera with another FOV will not line up exactly in x-ray.
+
+The overlay now runs an ImGui frame while closed when the view is on (no
+windows, no cursor), and `fpv_overlay_render` returns draw data then.
+`ImDrawIdx` is 32-bit (a compile definition on the `fpv` target): one list
+far exceeds 65 536 vertices, and the public `fpv_draw_cmd` indices were
+32-bit already, so hosts see no change.
+
+The drone's sphere layout moved from `Flight::buildShape` to
+`world/drone_shape.cpp` (`buildDroneShape`), shared by the flight model and
+the view, so the view draws exactly what collides. The flight model adds
+the cargo and, in kamikaze builds, the warhead itself; the view leaves
+those out. The setting is not saved: a player who once turned it on would
+otherwise start every session without the game's picture.
+`LIBFPV_COLLISION_VIEW=solid` (or `xray`) starts with it on. The legend
+shows for 10 s each time a view is chosen in "Show collision", then hides,
+so it doesn't stay over the view.
+
+Verified with `fpv_standalone --screenshot` (FPV with fisheye and bars,
+chase, both modes). No automated test: the overlay reads the variable once,
+when it is created, and `fpv_tests` creates it in an earlier test.
+
 ## Platforms
 
 ### D19. Windows: MinGW-w64 cross build, fully static runtimes

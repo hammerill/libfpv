@@ -449,6 +449,36 @@ void CollisionWorld::setProxyPlanes(std::vector<Contact> planes) {
 }
 
 // Caller must hold mutex().
+bool CollisionWorld::debugTriangles(Vec3 lo, Vec3 hi, double simTime, size_t limit,
+                                    std::vector<DebugTriangle> &out) const {
+    bool complete = true;
+    if (m_static) {
+        m_static->queryAabb(lo, hi, [&](const Triangle &t) {
+            if (out.size() >= limit) {
+                complete = false;
+                return;
+            }
+            out.push_back({t.a, t.b, t.c, t.material, 0});
+        });
+    }
+    Vec3 centre = (lo + hi) * 0.5f;
+    float reach = length(hi - lo) * 0.5f;
+    for (auto &kv : m_objects) {
+        const Object &o = *kv.second;
+        RigidTransform pose = objectPose(o, simTime);
+        if (length(centre - pose.pos) > o.boundRadius + reach) continue;
+        o.bvh.queryAabb(o.localLo, o.localHi, [&](const Triangle &t) {
+            if (out.size() >= limit) {
+                complete = false;
+                return;
+            }
+            out.push_back({pose.pos + rotate(pose.rot, t.a), pose.pos + rotate(pose.rot, t.b),
+                           pose.pos + rotate(pose.rot, t.c), t.material, kv.first});
+        });
+    }
+    return complete;
+}
+
 size_t CollisionWorld::sphereContacts(Vec3 c, float r, double simTime, std::vector<Contact> &out) const {
     size_t before = out.size();
     auto addTri = [&](const Triangle &t, Vec3 centre, const auto &toWorldPoint, const auto &toWorldDir,

@@ -57,8 +57,8 @@
 
 /* The one place the version is set: CMakeLists.txt reads these three. */
 #define LIBFPV_VERSION_MAJOR 1
-#define LIBFPV_VERSION_MINOR 0
-#define LIBFPV_VERSION_PATCH 8
+#define LIBFPV_VERSION_MINOR 1
+#define LIBFPV_VERSION_PATCH 0
 #define LIBFPV_STRINGIFY_(x) #x
 #define LIBFPV_STRINGIFY(x) LIBFPV_STRINGIFY_(x)
 #define LIBFPV_VERSION_STRING                                                  \
@@ -1415,7 +1415,9 @@ FPV_API void fpv_overlay_text(const char *utf8);
 FPV_API void fpv_overlay_set_action(uint32_t id, const char *label);
 FPV_API uint32_t fpv_overlay_poll_action(void);
 
-/* Builds the overlay for this frame. Returns NULL when closed. Valid until
+/* Builds the overlay for this frame. Returns NULL when there is nothing to
+ * draw. Call it every frame, also while the overlay is closed: the
+ * collision view (F8 > Camera & sound) draws with it closed. Valid until
  * the next call. */
 FPV_API const fpv_draw_data *fpv_overlay_render(float frame_dt);
 

@@ -1063,6 +1063,26 @@ What changes for the game:
   same amount per step: the test suite, which steps a lot of simulated
   time, runs about four times slower.
 
+## Seeing the collision
+
+F8 > Camera & sound > "Show collision" shows what libfpv collides the drone
+with, instead of the game's picture or over it (x-ray). It shows the
+triangles you loaded, your surface objects where libfpv thinks they are,
+your raycast callback's planes, materials by colour (red =
+`FPV_MATERIAL_KILLS_PROPS`), and the drone's own spheres, contacts and
+impacts. Use it to check your export: in x-ray the outlines must sit on
+the game's walls and move with its platforms.
+
+- libfpv draws it through `fpv_overlay_render`, **also while the overlay
+  is closed**. Call it and draw what it returns every frame, not only while
+  `fpv_overlay_is_open()`.
+- It uses the camera of the view set with `fpv_set_view`. In
+  `FPV_VIEW_PILOT` that is the camera you pass to `fpv_audio_set_listener`
+  (the pilot's head without one). If your camera uses an FOV of its own,
+  x-ray won't line up exactly.
+- `LIBFPV_COLLISION_VIEW=solid` (or `xray`) in the environment starts the
+  game with it on.
+
 ## Lessons from real integrations
 
 These notes come from integrating libfpv into GTA IV

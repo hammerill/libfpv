@@ -1541,6 +1541,8 @@ void Overlay::tabCamera() {
                 analog ? vf.cnr_db : vf.rssi_dbm - p.vtx.sensitivityDbm);
     ImGui::TextDisabled(analog ? "Sparkles start near 10 dB CNR, sync is lost below about -2 dB."
                                : "The picture breaks up near 0 dB margin.");
+    sectionTitle("Collision view");
+    m_collision.ui();
 }
 
 void Overlay::tabControls() {
@@ -1929,15 +1931,18 @@ const fpv_draw_data *Overlay::render(float dt) {
             if (d.looksLikeRadio && !L.input.getMapping(d.guid, m)) notifyUnmappedRadio(d.guid);
         }
     }
-    if (!m_open) return nullptr;
+    // the collision view is drawn with the overlay closed too
+    if (!m_open && !m_collision.on()) return nullptr;
     WITH_CTX;
     ImGuiIO &io = ImGui::GetIO();
+    io.MouseDrawCursor = m_open;  // games usually hide the OS cursor
     io.DisplaySize = ImVec2(m_w, m_h);
     io.DeltaTime = (dt > 0 && std::isfinite(dt)) ? std::min(dt, 0.25f) : 1.0f / 60.0f;
     ImGui::GetStyle().FontScaleMain = m_scale;
     m_time += io.DeltaTime;
     ImGui::NewFrame();
-    buildUi();
+    if (m_collision.on()) m_collision.draw(ImGui::GetBackgroundDrawList(), m_w, m_h, m_time);
+    if (m_open) buildUi();
     ImGui::Render();
     const fpv_draw_data *out = convert();
     END_CTX;

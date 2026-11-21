@@ -107,6 +107,19 @@ public:
                  uint8_t &outMat, uint32_t &outObject, bool forVideo = false) const;
     Material material(uint8_t id) const { return m_materials[id]; }
 
+    // --- debug view (the overlay's collision view; mutex() held) ------
+    struct DebugTriangle {
+        Vec3 a, b, c;  // world
+        uint8_t material = 0;
+        uint32_t objectId = 0;  // 0 = static
+    };
+    // Appends the triangles that may touch the box lo..hi, objects at their
+    // pose for simTime, up to `limit` of them. Returns false if it stopped
+    // at the limit.
+    bool debugTriangles(Vec3 lo, Vec3 hi, double simTime, size_t limit, std::vector<DebugTriangle> &out) const;
+    // The raycast callback's planes (setProxyPlanes), as they are now.
+    const std::vector<Contact> &proxyPlanes() const { return m_proxyPlanes; }
+
     std::mutex &mutex() const { return m_mutex; }
     size_t staticTriangleCount() const { return m_static ? m_static->size() : 0; }
 

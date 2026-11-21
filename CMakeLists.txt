@@ -114,6 +114,7 @@ add_library(fpv_shared OBJECT
   src/shared/util/log.cpp
   src/shared/video/video_link.cpp
   src/shared/world/collision.cpp
+  src/shared/world/drone_shape.cpp
   src/shared/world/wind.cpp)
 libfpv_part(fpv_shared)
 target_include_directories(fpv_shared PRIVATE ${PROJECT_SOURCE_DIR}/third_party)
@@ -332,8 +333,12 @@ if(LIBFPV_WITH_OVERLAY)
   target_sources(fpv PRIVATE
     ${IMGUI_DIR}/imgui.cpp ${IMGUI_DIR}/imgui_draw.cpp
     ${IMGUI_DIR}/imgui_tables.cpp ${IMGUI_DIR}/imgui_widgets.cpp
-    src/client/overlay/overlay.cpp src/client/overlay/bf_cache.cpp src/client/overlay/radio_wizard.cpp)
+    src/client/overlay/overlay.cpp src/client/overlay/bf_cache.cpp src/client/overlay/radio_wizard.cpp
+    src/client/overlay/collision_view.cpp)
   target_include_directories(fpv PRIVATE ${IMGUI_DIR})
+  # 32-bit indices: the collision view draws far more than 65536 vertices
+  # in one list, and fpv_draw_cmd indices are 32-bit anyway
+  target_compile_definitions(fpv PRIVATE "ImDrawIdx=unsigned int")
 else()
   target_sources(fpv PRIVATE src/client/overlay/overlay_stub.cpp)
 endif()

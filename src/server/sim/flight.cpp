@@ -23,17 +23,10 @@ constexpr float kRestingSpeed = 0.6f;        // m/s, no bounce below this
 // points none, and friction under the centre of mass makes no yaw torque.
 constexpr float kContactPatchRatio = 0.5f;
 constexpr float kContactSlop = 0.0005f;  // m of penetration left, so resting contacts persist
-constexpr float kPropDiscHalfThickness = 0.012f;
 // A prop whose blades touch something stops within a few revolutions
 // (time constant, s), and below this rpm it is stalled for its ESC.
 constexpr float kPropStrikeStopTime = 0.004f;
-// Detail spheres (Sphere::fine): duct rims and prop tips, as rings of small
-// spheres
-constexpr float kRimSphereRadius = 0.004f;
-constexpr int kRimSpheres = 8;
-constexpr int kPropTipSpheres = 12;
 constexpr float kPropStrikeStalledRpm = 300.0f;
-constexpr float kPropNutHeight = 0.006f;     // motor top above the prop disc
 constexpr float kMaxSpeed = 120.0f;          // m/s, sanity clamp
 constexpr float kWinchSpeed = 0.5f;          // m/s, the cargo line reeled in or out
 constexpr float kCargoDragCoef = 1.0f;       // the hanging cargo's drag coefficient (on pi r^2)
@@ -45,10 +38,6 @@ constexpr float kMaxAngularSpeed = 100.0f;   // rad/s, SimITL's own clamp
 // world (a water plane following the drone, its own damage checks) still
 // describes the old spot. Spawned straight into lava, the props still go.
 constexpr double kRespawnDamageGrace = 0.25;
-// A hit this hard (m/s) or harder hurts the video transmitter for good: its
-// antenna bends, the connector cracks. 1/kVtxHitScale of its health per m/s
-// above it (a 10 m/s crash ~12 %, a 45 m/s one the whole of it).
-constexpr float kVtxHitSpeed = 5.0f, kVtxHitScale = 40.0f;
 // What a fully damaged VTX costs the link budget, dB (a tenth of the range).
 constexpr float kVtxDamageLossDb = 20.0f;
 #if defined(LIBFPV_KAMIKAZE)
@@ -147,52 +136,15 @@ void Flight::syncPropDirection() {
     }
 }
 
-// Collision shape: a sphere at the centre of mass and one under each motor
-// bell. Their bottoms are level, so the drone rests on five points and
-// ground friction can stop it from spinning. One more sphere on top of each
-// motor (bell and prop nut, just above the prop disc): upside down the
-// drone rests on those with its props clear of the ground, and in turtle
-// mode it pivots on an arm like a real quad instead of rolling on the body.
-// Then the canopy around the FPV camera: upside down the quad rests on it
-// and the motor tops, and the lens can never get closer to a surface than
-// the camera's near plane (ensureCameraClearance).
+// Collision shape: the preset's spheres (world/drone_shape.cpp), then what
+// the drone carries.
 void Flight::buildShape() {
-    m_shape.clear();
-    const CollisionSettings &c = m_preset.collision;
-    const bool ducted = m_preset.physics.ductThrustGain > 0;
-    m_shape.push_back({{0, 0, 0}, c.bodyRadius, -1});
-    for (int i = 0; i < 4; i++) {
-        const Vec3 &p = m_preset.physics.quadMotorPos[i];
-        float bottom = -c.bodyRadius;  // level with the body's bottom
-        float top = std::max(c.bodyRadius, p.y + kPropDiscHalfThickness + kPropNutHeight);
-        if (ducted) {
-            // A duct is a ring: a flat rim at its bottom and its top with an
-            // edge the quad tips and lands on, round a core that keeps
-            // walls out of it (D38)
-            m_shape.push_back({{p.x, 0.5f * (bottom + top), p.z}, c.motorRadius, i});
-            float ring = c.motorRadius - kRimSphereRadius;
-            for (float y : {bottom + kRimSphereRadius, top - kRimSphereRadius})
-                for (int k = 0; k < kRimSpheres; k++) {
-                    float a = 6.2831853f * k / kRimSpheres;
-                    m_shape.push_back({{p.x + ring * std::cos(a), y, p.z + ring * std::sin(a)}, kRimSphereRadius, i, true});
-                }
-            continue;
-        }
-        m_shape.push_back({{p.x, std::min(p.y, bottom + c.motorRadius), p.z}, c.motorRadius, i});
-        m_shape.push_back({{p.x, top - c.motorRadius, p.z}, c.motorRadius, i});
-        // the prop's tips: a quad landing tilted or tipping over touches
-        // down on them first, as far out as they reach (D38)
-        float ring = c.propRadius - kRimSphereRadius;
-        for (int k = 0; k < kPropTipSpheres; k++) {
-            float a = 6.2831853f * k / kPropTipSpheres;
-            m_shape.push_back({{p.x + ring * std::cos(a), p.y, p.z + ring * std::sin(a)}, kRimSphereRadius, i, true});
-        }
-    }
-    m_shape.push_back({c.canopyOffset, c.canopyRadius, -1});
+    buildDroneShape(m_preset, m_shape);
 #if defined(LIBFPV_KAMIKAZE)
     // the warhead under the frame: flush with the landing points by
     // default, below them (touching first) when it hangs lower
     if (m_payloadMass > 0) {
+        const CollisionSettings &c = m_preset.collision;
         float drop = -m_payloadPos.y;
         float r = drop < c.bodyRadius ? c.bodyRadius - drop : kPayloadRadius;
         m_shape.push_back({m_payloadPos, std::max(0.005f, r), -1});

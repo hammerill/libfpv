@@ -18,6 +18,7 @@
 #include "simapi/portal.h"
 #include "simapi/state.h"
 #include "world/collision.h"
+#include "world/drone_shape.h"
 #include "world/wind.h"
 #include "video/video_link.h"
 #include "rc/rc_link.h"
@@ -110,12 +111,7 @@ public:
     float restHeight() const;
 
 private:
-    struct Sphere {
-        Vec3 local;
-        float radius;
-        int motor;  // -1 body, 0..3 motor bell
-        bool fine = false;  // detail on a larger part: not sized for substeps
-    };
+    using Sphere = ShapeSphere;
 
     void buildShape();
     float shapeBottom() const;

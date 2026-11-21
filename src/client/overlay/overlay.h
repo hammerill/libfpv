@@ -8,6 +8,7 @@
 
 #include "libfpv.h"
 #include "osd/draw_buffer.h"
+#include "overlay/collision_view.h"
 #include "overlay/bf_cache.h"
 #include "overlay/radio_wizard.h"
 
@@ -87,6 +88,7 @@ private:
     using TabFn = void (Overlay::*)();
     TabFn m_requestTab = nullptr;  // the tab to bring to the front
     bool m_showRawAxes = false;
+    CollisionView m_collision;  // F8 > Camera & sound, drawn under the windows
 
     std::string m_importText, m_importReport;
     std::string m_cliInput, m_cliOutput;
