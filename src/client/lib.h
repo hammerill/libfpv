@@ -72,7 +72,7 @@ struct Settings {
     float kamikazeArmingDelay = 0.0f, kamikazeMinImpactSpeed = 0.25f;
     float kamikazePayloadKg = -1.0f, kamikazePayloadDrop = -1.0f;  // < 0 = automatic
     float kamikazeEndingDuration = 2.0f;  // the game's ending view after a detonation, s
-    float kamikazeIgnitionDelay = 0.15f;  // s from the boom command (impact, explode switch) to the blast
+    float kamikazeIgnitionDelay = 0.075f;  // s from the boom command (impact, explode switch) to the blast
     // the player's ending view / then (fpv_kamikaze_ending_*), -1 = the host's default
     int kamikazeEndingView = -1, kamikazeEndingThen = -1;
     bool kamikazeOsd = true;

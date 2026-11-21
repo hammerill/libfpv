@@ -718,7 +718,7 @@ A lit fuse (`FPV_WARHEAD_IGNITING`) is not yet the blast. The motors are
 cut at once (no sound, no last-moment escape; the drone still falls and
 bounces), the OSD is cleared to `!...BOOM...!` in the middle, like
 Betaflight's own `ARMED` screen and also with the OSD disabled, and the
-blast follows after the ignition delay: 150 ms by default, 0 to 1000 ms in
+blast follows after the ignition delay: 75 ms by default, 0 to 1000 ms in
 F8 > Kamikaze (`ignition_delay`, in seconds, in `fpv_kamikaze_config`).
 Nothing stops it, the switches included. The video keeps working during
 that time, so with the video feed's noise on, the impact's jolt shakes the

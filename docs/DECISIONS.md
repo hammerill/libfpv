@@ -2073,7 +2073,7 @@ X (explode, held), the gamepad West (toggle) and the right shoulder.
   edge (an explode switch already on when it goes live does nothing until
   cycled), or on `fpv_kamikaze_detonate`.
 * A contact or the explode switch lights the fuse: IGNITING for
-  `ignition_delay` (default 0.15 s, 0..1, the player's in ms), then the
+  `ignition_delay` (default 0.075 s, 0..1, the player's in ms), then the
   blast. A real initiator does not go off in the same instant either, and
   the fraction of a second is the pilot's last look at the target: the OSD is
   cleared to `!...BOOM...!`, drawn by libfpv over the grid like

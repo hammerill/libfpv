@@ -18,7 +18,7 @@ enum class DetonationCause { Impact = 0, Switch = 1, Host = 2 };
 struct WarheadConfig {
     float armingDelay = 0.0f;    // seconds from switch on (motors armed) to live
     float minImpactSpeed = 0.25f;  // m/s, the contact fuse threshold (0.1..30)
-    float ignitionDelay = 0.15f;   // s from the boom command to the blast (0..1), 0 = at once
+    float ignitionDelay = 0.075f;   // s from the boom command to the blast (0..1), 0 = at once
     bool osd = true;             // the state in Betaflight's custom message 1 element
 };
 

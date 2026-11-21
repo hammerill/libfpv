@@ -1044,7 +1044,7 @@ FPV_API fpv_result fpv_wind_add_blast(const float position[3], float radius);
  *     explodes; the explode switch only shows "NOT ARMED".
  *   - An impact or the explode switch lights the fuse (FPV_WARHEAD_IGNITING):
  *     the motors are cut at once (silent, it falls and bounces) and the
- *     blast comes ignition_delay seconds later (0.15 s by default, 0..1),
+ *     blast comes ignition_delay seconds later (0.075 s by default, 0..1),
  *     where the drone is then. Nothing stops it, the switches included; the
  *     video still works (with the impact's jolt) and the OSD shows only
  *     "!...BOOM...!" in its centre, even with the OSD disable switch on.
@@ -1193,7 +1193,7 @@ typedef struct fpv_kamikaze_config {
     uint32_t ending_view;   /* fpv_kamikaze_ending_view, default SIGNAL_LOST */
     uint32_t ending_then;   /* fpv_kamikaze_ending_then, default RESPAWN */
     /* Seconds from the boom command (an impact or the explode switch) to
-     * the blast, 0..1, default 0.15; 0 = at once. Players set it in the
+     * the blast, 0..1, default 0.075; 0 = at once. Players set it in the
      * overlay (F8 > Kamikaze, in ms). Leave it out (a smaller struct_size)
      * to keep the player's. */
     float ignition_delay;

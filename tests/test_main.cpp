@@ -2919,10 +2919,11 @@ void testKamikazeExplodeSwitch() {
     CHECK(warhead(s.drone).warhead == FPV_WARHEAD_ARMED, "live after the 1 s delay");
     CHECK(osdAimDot(s.f), "aiming dot in the centre while live");
     s.rc.ch[kExplode] = 1;
-    s.run(0.1f);
-    // the fuse is lit: motors cut, "!...BOOM...!" alone on the OSD, the blast 0.15 s later
+    for (int i = 0; i < 10 && warhead(s.drone).warhead != FPV_WARHEAD_IGNITING; i++) s.run(0.01f);
+    s.run(0.01f);
+    // the fuse is lit: motors cut, "!...BOOM...!" alone on the OSD, the blast 0.075 s later
     fpv_kamikaze_state k = warhead(s.drone);
-    CHECK(k.warhead == FPV_WARHEAD_IGNITING && k.ignition_remaining > 0.0f && k.ignition_remaining < 0.1f,
+    CHECK(k.warhead == FPV_WARHEAD_IGNITING && k.ignition_remaining > 0.0f && k.ignition_remaining < 0.075f,
           "igniting, %.3f s left (state %d)", k.ignition_remaining, k.warhead);
     CHECK(drainDetonations() == 0 && !(s.f.flags & FPV_DRONE_DETONATED), "no blast yet");
     CHECK(osdHas(s.f, "!...BOOM...!") && !osdHas(s.f, "!ACTIVE!") && !osdAimDot(s.f), "OSD shows only !...BOOM...!");
@@ -3006,9 +3007,9 @@ void testKamikazeGroundTap() {
     cfg.struct_size = sizeof cfg;
     cfg.ending_duration = 31.0f;
     CHECK(fpv_kamikaze_set_config(&cfg) == FPV_ERROR_INVALID_ARGUMENT, "ending over 30 s refused");
-    // the ignition delay (the overlay's, in ms): 0.15 s by default, 0..1 s, kept by older hosts
+    // the ignition delay (the overlay's, in ms): 0.075 s by default, 0..1 s, kept by older hosts
     fpv_kamikaze_config_defaults(&cfg);
-    CHECK(cfg.ignition_delay == 0.15f, "default ignition delay 0.15 s (%.2f)", cfg.ignition_delay);
+    CHECK(cfg.ignition_delay == 0.075f, "default ignition delay 0.075 s (%.2f)", cfg.ignition_delay);
     cfg.ignition_delay = 1.5f;
     CHECK(fpv_kamikaze_set_config(&cfg) == FPV_ERROR_INVALID_ARGUMENT, "ignition delay over 1 s refused");
     cfg.ignition_delay = 0.6f;
