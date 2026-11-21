@@ -157,7 +157,12 @@ int bfb_cli_run(const char *script, char **output)
     /* a real CLI "save" reboots, which rebuilds the list of OSD elements to
      * draw; "save noreboot" does not, so moved or enabled elements would
      * stay hidden until the next reboot */
+#ifdef USE_OSD_PROFILES
+    /* the same for "set osd_profile": the reboot makes it the shown one */
+    changeOsdProfileIndex(osdConfig()->osdProfileIndex);
+#else
     osdAnalyzeActiveElements();
+#endif
 #endif
 
     if (!port.out) {

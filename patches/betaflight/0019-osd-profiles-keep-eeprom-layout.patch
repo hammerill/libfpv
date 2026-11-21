@@ -1,0 +1,80 @@
+diff --git a/src/main/cli/settings.c b/src/main/cli/settings.c
+index 2701d5129..bde96c3a7 100644
+--- a/src/main/cli/settings.c
++++ b/src/main/cli/settings.c
+@@ -1679,8 +1679,8 @@ const clivalue_t valueTable[] = {
+ #ifdef USE_OSD_PROFILES
+     { "osd_profile",                VAR_UINT8  | MASTER_VALUE, .config.minmaxUnsigned = { 1, OSD_PROFILE_COUNT }, PG_OSD_CONFIG, offsetof(osdConfig_t, osdProfileIndex) },
+     { "osd_profile_1_name",         VAR_UINT8  | MASTER_VALUE | MODE_STRING, .config.string = { 1, OSD_PROFILE_NAME_LENGTH, STRING_FLAGS_NONE }, PG_OSD_CONFIG, offsetof(osdConfig_t, profile[0]) },
+-    { "osd_profile_2_name",         VAR_UINT8  | MASTER_VALUE | MODE_STRING, .config.string = { 1, OSD_PROFILE_NAME_LENGTH, STRING_FLAGS_NONE }, PG_OSD_CONFIG, offsetof(osdConfig_t, profile[1]) },
+-    { "osd_profile_3_name",         VAR_UINT8  | MASTER_VALUE | MODE_STRING, .config.string = { 1, OSD_PROFILE_NAME_LENGTH, STRING_FLAGS_NONE }, PG_OSD_CONFIG, offsetof(osdConfig_t, profile[2]) },
++    { "osd_profile_2_name",         VAR_UINT8  | MASTER_VALUE | MODE_STRING, .config.string = { 1, OSD_PROFILE_NAME_LENGTH, STRING_FLAGS_NONE }, PG_OSD_CONFIG, offsetof(osdConfig_t, profileMore[0]) },
++    { "osd_profile_3_name",         VAR_UINT8  | MASTER_VALUE | MODE_STRING, .config.string = { 1, OSD_PROFILE_NAME_LENGTH, STRING_FLAGS_NONE }, PG_OSD_CONFIG, offsetof(osdConfig_t, profileMore[1]) },
+ #endif
+     { "osd_gps_sats_show_pdop",     VAR_UINT8  | MASTER_VALUE | MODE_LOOKUP, .config.lookup = { TABLE_OFF_ON }, PG_OSD_CONFIG, offsetof(osdConfig_t, gps_sats_show_pdop) },
+     { "osd_displayport_device",     VAR_UINT8  | MASTER_VALUE | MODE_LOOKUP, .config.lookup = { TABLE_OSD_DISPLAYPORT_DEVICE }, PG_OSD_CONFIG, offsetof(osdConfig_t, displayPortDevice) },
+diff --git a/src/main/osd/osd.c b/src/main/osd/osd.c
+index 70faf7d30..4549b07a7 100644
+--- a/src/main/osd/osd.c
++++ b/src/main/osd/osd.c
+@@ -409,7 +409,7 @@ void pgResetFn_osdConfig(osdConfig_t *osdConfig)
+     osdConfig->osdProfileIndex = 1;
+     osdConfig->ahInvert = false;
+     for (int i=0; i < OSD_PROFILE_COUNT; i++) {
+-        osdConfig->profile[i][0] = '\0';
++        OSD_PROFILE_NAME_BUF(osdConfig, i)[0] = '\0';
+     }
+     osdConfig->rssi_dbm_alarm = -60;
+     osdConfig->rsnr_alarm = 4;
+diff --git a/src/main/osd/osd.h b/src/main/osd/osd.h
+index 58d4a8322..f2fe4968b 100644
+--- a/src/main/osd/osd.h
++++ b/src/main/osd/osd.h
+@@ -333,7 +333,10 @@ typedef struct osdConfig_s {
+     uint8_t ahInvert;                         // invert the artificial horizon
+     uint8_t osdProfileIndex;
+     uint8_t overlay_radio_mode;
+-    char profile[OSD_PROFILE_COUNT][OSD_PROFILE_NAME_LENGTH + 1];
++    // libfpv: only OSD profile 1's name stays here; the others are in
++    // profileMore at the end, so EEPROMs saved by builds with one OSD
++    // profile keep their layout. Use OSD_PROFILE_NAME_BUF().
++    char profile[1][OSD_PROFILE_NAME_LENGTH + 1];
+     uint16_t link_quality_alarm;
+     int16_t rssi_dbm_alarm;
+     int16_t rsnr_alarm;
+@@ -363,8 +366,18 @@ typedef struct osdConfig_s {
+     uint8_t osd_show_spec_prearm;
+ #endif // USE_SPEC_PREARM_SCREEN
+     displayPortSeverity_e arming_logo;        // font from which to display logo on arming
++#if OSD_PROFILE_COUNT > 1
++    char profileMore[OSD_PROFILE_COUNT - 1][OSD_PROFILE_NAME_LENGTH + 1]; // names of OSD profiles 2 and up
++#endif
+ } osdConfig_t;
+ 
++// The name buffer of OSD profile index (0-based) i.
++#if OSD_PROFILE_COUNT > 1
++#define OSD_PROFILE_NAME_BUF(cfg, i) ((i) == 0 ? (cfg)->profile[0] : (cfg)->profileMore[(i) - 1])
++#else
++#define OSD_PROFILE_NAME_BUF(cfg, i) ((cfg)->profile[0])
++#endif
++
+ PG_DECLARE(osdConfig_t, osdConfig);
+ 
+ typedef struct osdElementConfig_s {
+diff --git a/src/main/osd/osd_elements.c b/src/main/osd/osd_elements.c
+index ff25d07f4..87a767e3e 100644
+--- a/src/main/osd/osd_elements.c
++++ b/src/main/osd/osd_elements.c
+@@ -1059,10 +1059,10 @@ static void osdElementOsdProfileName(osdElementParms_t *element)
+ {
+     uint8_t profileIndex = getCurrentOsdProfileIndex();
+ 
+-    if (strlen(osdConfig()->profile[profileIndex - 1]) == 0) {
++    if (strlen(OSD_PROFILE_NAME_BUF(osdConfig(), profileIndex - 1)) == 0) {
+         tfp_sprintf(element->buff, "OSD_%u", profileIndex);
+     } else {
+-        toUpperCase(element->buff, osdConfig()->profile[profileIndex - 1], OSD_PROFILE_NAME_LENGTH);
++        toUpperCase(element->buff, OSD_PROFILE_NAME_BUF(osdConfig(), profileIndex - 1), OSD_PROFILE_NAME_LENGTH);
+     }
+ }
+ #endif

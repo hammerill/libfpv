@@ -2290,6 +2290,60 @@ void testGpsElementsAfterReboot() {
     s.destroy();
 }
 
+// Three OSD profiles, like a real quad's Betaflight: an element shows only in
+// the profiles whose visibility bit (11 + profile - 1) it has, and the names
+// of profiles 2 and 3 (kept at the end of osdConfig_t, so EEPROMs saved with
+// one profile keep their layout) are stored next to the other settings.
+void testOsdProfiles() {
+    auto cli = [](const std::string &cmd) {
+        char *o = nullptr;
+        CHECK(fpv_cli_exec(cmd.c_str(), &o) == FPV_OK, "cli %s: %s", cmd.c_str(), fpv_last_error());
+        std::string r = o ? o : "";
+        fpv_free(o);
+        return r;
+    };
+    auto sats = [](const fpv_frame &f) {
+        const uint8_t *row = &f.osd[3 * FPV_OSD_COLS];
+        return row[1] == 0x1E && row[2] == 0x1F;  // SYM_SAT_L, SYM_SAT_R
+    };
+    CHECK(cli("get osd_profile").find("Allowed range: 1 - 3") != std::string::npos, "three OSD profiles: %s",
+          cli("get osd_profile").c_str());
+    Session s;
+    float p[3] = {0, 0.1f, 0};
+    s.spawn(p, "freestyler-5");
+    std::string cmd;
+    for (const char *e : {"home_dist", "home_dir", "nheading", "altitude", "gps_speed", "flight_dist", "nvario"})
+        cmd += "set osd_" + std::string(e) + "_pos = 0\n";
+    const int inProfile2 = 1 | (3 << 5) | (1 << 12);  // column 1, row 3, profile 2 only
+    cmd += "set osd_gps_sats_pos = " + std::to_string(inProfile2) +
+           "\nset osd_profile = 1\nset osd_profile_2_name = RACE\nset osd_profile_3_name = CINE\n"
+           "set osd_link_quality_alarm = 77\nsave";
+    cli(cmd);
+    s.run(4.0f);  // the boot logo shows for 4 s after the reboot
+    CHECK(!sats(s.f), "profile 1: the profile 2 element is hidden");
+    cli("set osd_profile = 2\nsave");
+    s.run(4.0f);
+    if (!sats(s.f)) {
+        std::printf("    %s", cli("get osd_profile").c_str());
+        std::printf("    %s", cli("get osd_gps_sats_pos").c_str());
+        for (int r = 0; r < 16; r++) {
+            std::string row((const char *)&s.f.osd[r * FPV_OSD_COLS], FPV_OSD_COLS);
+            for (char &c : row) if ((unsigned char)c < 32 || (unsigned char)c > 126) c = '.';
+            std::printf("    |%s|\n", row.c_str());
+        }
+    }
+    CHECK(sats(s.f), "profile 2: the element is shown");
+    std::string names = cli("get osd_profile_");
+    CHECK(names.find("osd_profile_2_name = RACE") != std::string::npos &&
+              names.find("osd_profile_3_name = CINE") != std::string::npos,
+          "profile names stored: %s", names.c_str());
+    CHECK(cli("get osd_link_quality_alarm").find("= 77") != std::string::npos, "settings around the names kept");
+    // back to profile 1 with the element there, as other tests expect
+    cli("set osd_profile = 1\nset osd_profile_2_name = -\nset osd_profile_3_name = -\nset osd_gps_sats_pos = " +
+        std::to_string(1 | (3 << 5) | (1 << 11)) + "\nsave");
+    s.run(0.5f);
+    s.destroy();
+}
 
 // The OSD redraws like a real quad's (Betaflight's osd_framerate_hz, 12 Hz
 // by default), not a few times a second: the SITL receiver once reported a
@@ -3814,6 +3868,7 @@ int main(int argc, char **argv) {
         {"perch_moving_threaded", testPerchMovingThreaded},
         {"gps", testGps},
         {"gps_elements_after_reboot", testGpsElementsAfterReboot},
+        {"osd_profiles", testOsdProfiles},
         {"osd_audio_overlay", testOsdAudioOverlay},
         {"osd_refresh", testOsdRefresh},
         {"sim_options", testSimOptions},

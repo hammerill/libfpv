@@ -1324,8 +1324,31 @@ void Overlay::tabOsd() {
         int oa = osdElementOrder(a.name), ob = osdElementOrder(b.name);
         return oa != ob ? oa < ob : a.label < b.label;
     });
+    // Betaflight's three OSD profiles: each element has a visibility bit per
+    // profile and the active one (osd_profile) is what the pilot sees. The
+    // editor works on the active profile, so its live preview matches.
+    const int activeProfile = m_bf.has("osd_profile") ? std::clamp(m_bf.num("osd_profile", 1), 1, 3) : 1;
+    if (m_bf.has("osd_profile")) {
+        ImGui::TextUnformatted("OSD profile:");
+        for (int p = 1; p <= 3; p++) {
+            const std::string name = m_bf.str("osd_profile_" + std::to_string(p) + "_name");
+            char label[48];
+            if (name.empty() || name == "-")
+                std::snprintf(label, sizeof label, "%d###osdprofile%d", p, p);
+            else
+                std::snprintf(label, sizeof label, "%d: %s###osdprofile%d", p, name.c_str(), p);
+            ImGui::SameLine();
+            if (ImGui::RadioButton(label, activeProfile == p) && activeProfile != p) m_bf.set("osd_profile", p, true);
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Like on a real quad: each profile shows its own set of elements. Checking an element "
+                              "below shows it in the selected profile. An OSD profile adjustment on a switch "
+                              "changes the profile in flight.");
+    }
     // visible = the active OSD profile's bit (osd.h OSD_PROFILE_FLAG)
-    const int profileFlag = osdProfileFlag(m_bf.has("osd_profile") ? m_bf.num("osd_profile", 1) : 1);
+    const int profileFlag = osdProfileFlag(activeProfile);
     auto lower = [](std::string s) {
         for (char &c : s) c = (char)std::tolower((unsigned char)c);
         return s;

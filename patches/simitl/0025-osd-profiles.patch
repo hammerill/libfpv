@@ -1,0 +1,29 @@
+diff --git a/extern/betaflightext/src/main/cli/settings.c b/extern/betaflightext/src/main/cli/settings.c
+index a2b2532..72bae45 100644
+--- a/extern/betaflightext/src/main/cli/settings.c
++++ b/extern/betaflightext/src/main/cli/settings.c
+@@ -1683,8 +1683,8 @@ const clivalue_t valueTable[] = {
+ #ifdef USE_OSD_PROFILES
+     { "osd_profile",                VAR_UINT8  | MASTER_VALUE, .config.minmaxUnsigned = { 1, OSD_PROFILE_COUNT }, PG_OSD_CONFIG, offsetof(osdConfig_t, osdProfileIndex) },
+     { "osd_profile_1_name",         VAR_UINT8  | MASTER_VALUE | MODE_STRING, .config.string = { 1, OSD_PROFILE_NAME_LENGTH, STRING_FLAGS_NONE }, PG_OSD_CONFIG, offsetof(osdConfig_t, profile[0]) },
+-    { "osd_profile_2_name",         VAR_UINT8  | MASTER_VALUE | MODE_STRING, .config.string = { 1, OSD_PROFILE_NAME_LENGTH, STRING_FLAGS_NONE }, PG_OSD_CONFIG, offsetof(osdConfig_t, profile[1]) },
+-    { "osd_profile_3_name",         VAR_UINT8  | MASTER_VALUE | MODE_STRING, .config.string = { 1, OSD_PROFILE_NAME_LENGTH, STRING_FLAGS_NONE }, PG_OSD_CONFIG, offsetof(osdConfig_t, profile[2]) },
++    { "osd_profile_2_name",         VAR_UINT8  | MASTER_VALUE | MODE_STRING, .config.string = { 1, OSD_PROFILE_NAME_LENGTH, STRING_FLAGS_NONE }, PG_OSD_CONFIG, offsetof(osdConfig_t, profileMore[0]) },
++    { "osd_profile_3_name",         VAR_UINT8  | MASTER_VALUE | MODE_STRING, .config.string = { 1, OSD_PROFILE_NAME_LENGTH, STRING_FLAGS_NONE }, PG_OSD_CONFIG, offsetof(osdConfig_t, profileMore[1]) },
+ #endif
+     { "osd_gps_sats_show_pdop",     VAR_UINT8  | MASTER_VALUE | MODE_LOOKUP, .config.lookup = { TABLE_OFF_ON }, PG_OSD_CONFIG, offsetof(osdConfig_t, gps_sats_show_pdop) },
+     { "osd_displayport_device",     VAR_UINT8  | MASTER_VALUE | MODE_LOOKUP, .config.lookup = { TABLE_OSD_DISPLAYPORT_DEVICE }, PG_OSD_CONFIG, offsetof(osdConfig_t, displayPortDevice) },
+diff --git a/extern/betaflightext/src/main/target/simITL/target.h b/extern/betaflightext/src/main/target/simITL/target.h
+index 01a1be3..cdaa7d6 100644
+--- a/extern/betaflightext/src/main/target/simITL/target.h
++++ b/extern/betaflightext/src/main/target/simITL/target.h
+@@ -142,6 +142,9 @@ extern char* EEPROM_FILENAME;
+ #define USE_CMS
+ #define USE_MSP_DISPLAYPORT
+ #define USE_OSD_OVER_MSP_DISPLAYPORT
++// common_pre.h turns this on only for targets that define USE_OSD before
++// it, which this one does after; real quads have three OSD profiles.
++#define USE_OSD_PROFILES
+ #define USE_RC_STATS
+ 
+ #undef USE_RX_PPM

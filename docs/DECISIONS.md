@@ -112,6 +112,11 @@ for v1.
   thrust (D21, D38).
 * `0024-rotor-turbulence.patch`: `StateInit::rotorTurbulence`, unsteady
   thrust per rotor (D38).
+* `0025-osd-profiles.patch`: the simITL target defines
+  `USE_OSD_PROFILES` (`common_pre.h` only does for targets that define
+  `USE_OSD` before it), so Betaflight has three OSD profiles like a real
+  quad, and the CLI's `osd_profile_2_name`/`_3_name` point at
+  Betaflight patch `0019`'s fields (D15).
 
 ### D37. Client, server and shared code
 
@@ -310,6 +315,14 @@ its default.
   whole EEPROM. The RPM filter's group is new to the SITL, and without
   this every player's EEPROM, tunes and switches included, would be reset
   on upgrade. `dshot.c` skips its interrupt guard in a simulator.
+* `0019-osd-profiles-keep-eeprom-layout.patch`: with three OSD profiles
+  (SimITL patch `0025`, D15) `osdConfig_t` keeps only profile 1's name in
+  place; the names of profiles 2 and 3 are `profileMore`, at the end of
+  the struct, read through `OSD_PROFILE_NAME_BUF()`. Betaflight's own
+  layout grows the name array in the middle, which would shift every
+  later OSD setting (alarms, displayport device, canvas) of an EEPROM
+  saved with one profile; appended, `pgLoad` keeps them all and the new
+  names start empty.
 
 ### D7. One EEPROM per quad preset
 
@@ -977,6 +990,19 @@ below row 12 onto it, as a real flight controller does. The F8 OSD editor
 and `fpv_osd_draw_data` (the same grid as the video feed draws it) follow
 `osdVisibleRows()`, and so does the kamikaze build's centred OSD.
 `frame.osd` stays 30×16: rows 13 to 15 are blank on NTSC.
+
+**Three OSD profiles (2026-11).** SimITL's target built Betaflight with
+one OSD profile, so a real quad's diff with elements in profiles 2 and 3
+lost them and `osd_profile` did not exist. It now has three (SimITL patch
+`0025`), with the EEPROM layout kept (Betaflight patch `0019`): an
+element shows in the profiles whose visibility bits (11 to 13) it has,
+and the active one is `osd_profile`, switched by the CMS, the
+Configurator, an OSD profile adjustment on a switch or the F8 OSD tab's
+profile buttons. The tab edits the active profile, so its live preview
+is what the pilot sees. libfpv's CLI `save` does not reboot, so
+`bfb_cli_run` applies a changed `osd_profile` itself
+(`changeOsdProfileIndex`), as the reboot does on a real quad. libfpv's
+first-run layout stays in profile 1.
 
 *Only where the camera preset asks (2026-11).* Making every NTSC camera
 13 rows was wrong for most quads: the Freestyler and the Nomade (Caddx
