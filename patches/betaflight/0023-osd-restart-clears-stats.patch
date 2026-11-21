@@ -1,0 +1,12 @@
+diff --git a/src/main/osd/osd.c b/src/main/osd/osd.c
+--- a/src/main/osd/osd.c
++++ b/src/main/osd/osd.c
+@@ -1394,6 +1394,8 @@ static void osdRestartStateMachine(void)
+     // up for its 60 s over the new configuration's elements
+     osdStatsEnabled = false;
+     osdStatsVisible = false;
++    // and its timer: it would hold the boot logo off for those 60 s
++    resumeRefreshAt = 0;
+ }
+ 
+ #define OSD_UPDATE_INTERVAL_US (1000000 / osdConfig()->framerate_hz)
