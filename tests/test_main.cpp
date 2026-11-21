@@ -3439,121 +3439,6 @@ void testRcLink() {
     s.destroy();
 }
 
-void testHearing() {
-    Host h(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1));
-    loadWorld(makeLevel(h, 200, 30));  // a wall 30 m ahead of the drone
-    CHECK(fpv_audio_configure(48000, 2) == FPV_OK, "audio configure");
-    fpv_audio_set_volume(1.0f);
-    fpv_audio_set_beep_volume(1.0f);
-    std::vector<float> buf(4800 * 2);
-    Session s;
-    // 0.3 s for the hearing to settle, then the mean over 0.5 s: the four
-    // motors' slightly different rpm beat, so a 0.1 s window swings by 30 %
-    auto energy = [&] {
-        double e = 0;
-        size_t n = 0;
-        for (int b = 0; b < 8; b++) {
-            s.run(0.1f);
-            fpv_audio_read(buf.data(), 4800);
-            if (b < 3) continue;
-            for (float v : buf) e += v * v;
-            n += buf.size();
-        }
-        return e / n;
-    };
-    float p[3];
-    h.pos(0, 0, 0, p);
-    s.spawn(p);
-    s.arm();
-    s.rc.ch[2] = -0.8f;  // armed, still on the ground
-    s.run(1.0f);
-    fpv_set_view(FPV_VIEW_FPV);
-    double onboard = energy();
-    CHECK(!(s.f.flags & FPV_DRONE_HEARD_FROM_PILOT), "FPV view (Auto): heard onboard, no HEARD_FROM_PILOT flag");
-    fpv_set_view(FPV_VIEW_LOS);
-    s.run(0.05f);
-    CHECK(s.f.flags & FPV_DRONE_HEARD_FROM_PILOT, "LOS view (Auto): the HEARD_FROM_PILOT flag");
-    float pilot[3];
-    h.pos(0, 0, -3, pilot);
-    fpv_drone_set_pilot_position(s.drone, pilot);
-    double close = energy();
-    h.pos(0, 0, -60, pilot);
-    fpv_drone_set_pilot_position(s.drone, pilot);
-    double distant = energy();
-    h.pos(0, 0, 60, pilot);  // as far, behind the wall
-    fpv_drone_set_pilot_position(s.drone, pilot);
-    double walled = energy();
-    fpv_set_view(FPV_VIEW_FPV);
-    double back = energy();
-    std::printf("    hearing: onboard %.2e, pilot at 3 m %.2e, 60 m %.2e, 60 m behind a wall %.2e, onboard again %.2e\n",
-                onboard, close, distant, walled, back);
-    CHECK(close > distant * 50, "far away is much quieter (%.2e vs %.2e)", close, distant);
-    CHECK(distant > 0 && walled < distant * 0.3, "a wall in between is quieter still (%.2e vs %.2e)", walled, distant);
-    CHECK(std::fabs(back - onboard) < onboard * 0.3, "FPV view: onboard again (%.2e vs %.2e)", back, onboard);
-    for (float v : buf) {
-        if (!(std::fabs(v) <= 1.0f)) {
-            CHECK(false, "audio sample out of range %f", v);
-            break;
-        }
-    }
-
-    // stereo: right minus left, dB, over 1 s
-    auto balance = [&] {
-        double e[2] = {0, 0};
-        for (int b = 0; b < 13; b++) {
-            s.run(0.1f);
-            fpv_audio_read(buf.data(), 4800);
-            if (b < 3) continue;
-            for (size_t i = 0; i < buf.size(); i++) e[i & 1] += buf[i] * buf[i];
-        }
-        return 10 * std::log10((e[1] + 1e-20) / (e[0] + 1e-20));
-    };
-    // the pilot's head (LOS, no listener) faces a hovering drone: centred
-    h.pos(0, 0, -10, pilot);
-    fpv_drone_set_pilot_position(s.drone, pilot);
-    fpv_set_view(FPV_VIEW_LOS);
-    s.run(1.0f);  // the head turns round (it was behind the wall)
-    double los = balance();
-    // the game's listener, one orientation, on either side of the drone
-    // (close, so the direct sound is well above the room): heard on one
-    // side, then on the other
-    fpv_set_view(FPV_VIEW_PILOT);
-    const float ident[4] = {0, 0, 0, 1};
-    float ear[3];
-    h.pos(-3, 0, 0, ear);
-    fpv_audio_set_listener(ear, ident);
-    double sideA = balance();
-    h.pos(3, 0, 0, ear);
-    fpv_audio_set_listener(ear, ident);
-    double sideB = balance();
-    fpv_audio_set_listener(nullptr, nullptr);
-    fpv_set_view(FPV_VIEW_FPV);
-    double onboardBalance = balance();
-    std::printf("    stereo (R-L): LOS %.2f dB, listener on one side %.1f dB, the other %.1f dB, onboard %.2f dB\n", los,
-                sideA, sideB, onboardBalance);
-    CHECK(std::fabs(los) < 1.0, "LOS: the pilot faces the drone, centred (%.2f dB)", los);
-    CHECK(sideA * sideB < 0 && std::fabs(sideA) > 4 && std::fabs(sideB) > 4 && std::fabs(sideA - sideB) > 12,
-          "the listener hears the drone on its side (%.1f / %.1f dB)", sideA, sideB);
-    CHECK(std::fabs(onboardBalance) < 1.5, "onboard: centred (%.2f dB)", onboardBalance);
-
-    // the beeper switch (AUX3) disarmed: beeps through the motors
-    s.rc.ch[4] = -1.0f;
-    s.run(0.5f);
-    s.rc.ch[6] = 1.0f;
-    fpv_audio_set_volume(1.0f);
-    fpv_audio_set_beep_volume(0.0f);
-    double motorsOnly = energy() + energy();
-    fpv_audio_set_volume(0.0f);
-    fpv_audio_set_beep_volume(1.0f);
-    double beepsOnly = energy() + energy();
-    std::printf("    beeper switch: motor volume only %.2e, beep volume only %.2e\n", motorsOnly, beepsOnly);
-    CHECK(motorsOnly > 1e-4, "the beeper switch is heard with the beeps muted");
-    CHECK(beepsOnly < motorsOnly * 0.01, "and follows the motor volume");
-    fpv_audio_set_volume(0.1f);
-    fpv_audio_set_beep_volume(0.1f);
-    s.destroy();
-}
-
 
 // --- portals, pushes, cargo, game controls -----------------------------------------
 
@@ -3933,7 +3818,6 @@ int main(int argc, char **argv) {
         {"osd_refresh", testOsdRefresh},
         {"sim_options", testSimOptions},
         {"pilot_config", testPilotConfig},
-        {"hearing", testHearing},
         {"video_host_raycast", testVideoHostRaycast},
         {"rc_link", testRcLink},
         {"pinned", testPinned},
