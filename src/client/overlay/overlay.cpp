@@ -1845,10 +1845,19 @@ void Overlay::buildUi() {
     Lib &L = lib();
     ImGuiIO &io = ImGui::GetIO();
     ImVec2 size(std::min(m_w - 20, 984 * m_scale), std::min(m_h - 20, 744 * m_scale));
-    ImGui::SetNextWindowPos(ImVec2(m_w * 0.5f, m_h * 0.5f), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(size, ImGuiCond_Appearing);
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse;
     bool open = true;
-    if (ImGui::Begin("libfpv - FPV drone", &open, ImGuiWindowFlags_NoCollapse)) {
+    if (m_embedded) {
+        // the host's panel is the window
+        ImGui::SetNextWindowPos(ImVec2(0, 0));
+        ImGui::SetNextWindowSize(ImVec2(m_w, m_h));
+        flags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                 ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus;
+    } else {
+        ImGui::SetNextWindowPos(ImVec2(m_w * 0.5f, m_h * 0.5f), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+        ImGui::SetNextWindowSize(size, ImGuiCond_Appearing);
+    }
+    if (ImGui::Begin("libfpv - FPV drone", m_embedded ? nullptr : &open, flags)) {
         if (ImGui::BeginTabBar("tabs")) {
             struct Tab {
                 const char *name;
