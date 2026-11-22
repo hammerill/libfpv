@@ -643,9 +643,10 @@ a damaged VTX loses up to 20 dB of link budget, so the picture breaks up
 much closer to the pilot, until `fpv_drone_repair`. Every hit, damage on or
 off, also shakes the analog picture for a moment.
 
-- **Surfaces.** Water, lava, fire, saws, fans, spinning blades: give their
+- **Surfaces.** Lava, fire, saws, fans, spinning blades: give their
   triangles `FPV_MATERIAL_KILLS_PROPS` (or return such a material from the
-  raycast callback). A prop touching one breaks.
+  raycast callback). A prop touching one breaks. Water and other liquids
+  are better not solid at all (below).
 - **Everything libfpv can't see.** Fire and flames (also a burning car or
   a molotov's area), water volumes and the sea, bullets
   and shotgun pellets through the props, melee hits, explosions (with or
@@ -653,8 +654,32 @@ off, also shakes the analog picture for a moment.
   `fpv_drone_damage_props(drone, motor, amount)`, with the prop that was
   hit (the one nearest to the hit point, from `frame.motors[i].position`)
   or -1 for all four. A bullet through a prop: about 0.5 to 1 on that prop.
-  Fire or water: about 0.5 per second on all four, every frame
-  (`0.5 * frame_dt`). An explosion: 1 on all four within its radius.
+  Fire: about 0.5 per second on all four, every frame
+  (`0.5 * frame_dt`); water: per prop, below. An explosion: 1 on all four within its radius.
+- **Water and other liquids: let the drone in.** A real quad doesn't
+  bounce off a lake: it goes in, and its props stop working. So leave water,
+  mud, quicksand, slime and the like out of the collision (out of your
+  surfaces and the raycast callback's hits) and do it from the game, every
+  frame, with the previous `fpv_frame`:
+  - **Drag.** While the drone's centre (`frame.position`) is under the
+    surface, hold it back: `fpv_drone_push(drone, dv, 0)` with
+    `dv = -frame.velocity * (1 - exp(-k * dt))`. With k about 6 per second
+    a dead quad sinks at about 1.6 m/s, one at full throttle still climbs
+    out, and a dive into the water stops within a metre or two instead of
+    on an invisible floor. Thicker liquids take a bigger k.
+  - **Damage per prop.** For each motor, the hub in the world is
+    `frame.position + rotate(frame.rotation, frame.motors[i].position)`;
+    when it is under the surface, `fpv_drone_damage_props(drone, i,
+    rate * dt)`. About 1 per second for water (a whole prop in a second):
+    a drone that only dips its tail loses the rear props, one that lands
+    flat on the water loses all four, one that skims over it keeps them.
+  - **The surface height.** Most games have a query for it (the water
+    level at x, y; the camera's depth under water), or their water is a
+    plane or a box with a top. Look it up at each hub, or once at the
+    drone's x, y when the water is flat.
+  - Hot or burning liquids (lava): keep the floor and damage the props near
+    it instead (a prop within a few tens of centimetres, about 2 per
+    second), since nothing should sink into lava either.
 - **Don't check the setting.** The player can make the drone immune
   (F8 > Drone > "Props, motors and VTX take damage" off, `FPV_SIM_NO_DAMAGE`):
   libfpv then ignores all of it, including `fpv_drone_damage_props`. The game
