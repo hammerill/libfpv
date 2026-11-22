@@ -1,0 +1,13 @@
+diff --git a/extern/betaflightext/src/main/drivers/serial_ws.c b/extern/betaflightext/src/main/drivers/serial_ws.c
+index 6f343e6..ed01c55 100644
+--- a/extern/betaflightext/src/main/drivers/serial_ws.c
++++ b/extern/betaflightext/src/main/drivers/serial_ws.c
+@@ -253,6 +253,8 @@ static wsPort_t *wsReconfigure(wsPort_t *s, int id) {
+   lws_set_log_level(LLL_ERR | LLL_WARN, wsLogEmit);
+   memset(&info, 0, sizeof info); /* otherwise uninitialized garbage */
+ 	info.port = BASE_PORT + id + 1;
++  // loopback only: the configurator CLI must not be reachable from the LAN
++  info.iface = "127.0.0.1";
+ 	info.mounts = NULL;
+ 
+   protocols[0].user = (void*)s;
