@@ -1012,6 +1012,37 @@ cfg.host_url   = "https://github.com/you/gta4-fpv";  /* where players get it, re
   empty the section is hidden.
 - Older hosts (a smaller `struct_size`) keep working and show no section.
 
+## Label the mod `libfpv` inside the game
+
+When the game or its mod system needs a name for your mod, use `libfpv`,
+not your own name, handle or another personal prefix. Do this whatever the
+game and however its mods are distributed (a mod folder or ZIP, Steam
+Workshop, Nexus Mods, Thunderstore, mod.io, an ASI or plugin loader, a
+script mod). It covers every identifier the game or the player sees:
+
+- the mod's folder, package or archive name (`mods/libfpv.zip`,
+  `mods/unpacked/libfpv/`), and the package or plugin ID;
+- script namespaces, extension and module names, global tables
+  (`libfpv_main`), and the console commands they make;
+- named game objects: cameras, input actions and key-binding IDs
+  (`libfpv_toggle`), post effects, materials, shaders and their paths
+  (`shaders/libfpv/`);
+- log tags and the folders the mod writes at runtime (`temp/libfpv/`).
+
+Follow the game's own naming style (`libfpv_main`, `libfpvCam`,
+`Libfpv_VideoFeedPFX`, `LIBFPV_`), but keep the word `libfpv`. The name
+players read (`cfg.host_name`, the mod page's title) can still say which
+game it is for ("BeamNG FPV"), and your account, publisher or team
+namespace, repository URLs and credits stay yours. libfpv's own files
+(`libfpv.dll`, `libfpv-server.exe`, `libfpv-fonts/`, `libfpv-presets/`)
+keep their names, so don't give the mod's own files the same names in
+the same folder.
+
+If an earlier version used another name, the deploy script and the
+installer have to remove the old folder or package, so the game doesn't
+load both. Also tell players that key bindings saved under the old action
+IDs have to be set again.
+
 ## Split builds: the simulation in its own process
 
 Built with `-DLIBFPV_SPLIT_PROCESS=ON`, libfpv runs the simulation
