@@ -6,6 +6,8 @@
 
 <p><a href="https://github.com/hammerill/portal-2-fpv"><img src="https://raw.githubusercontent.com/hammerill/portal-2-fpv/main/portal-2-fpv.gif" alt="Portal 2 FPV" width=512></a></p>
 
+<p><a href="https://www.reddit.com/r/fpv/comments/1y2pfx9/fpv_drone_in_red_dead_redemption_2/"><img src="https://raw.githubusercontent.com/libfpv/libfpv-gifs/refs/heads/main/rdr2-fpv.gif" alt="RDR2 FPV" width=512></a></p>
+
 <p><a href="https://github.com/hammerill/gtasa-fpv"><img src="https://raw.githubusercontent.com/hammerill/gtasa-fpv/main/gtasa-fpv.gif" alt="GTA SA FPV" width=512></a></p>
 
 <p><a href="https://github.com/hammerill/gtaiv-fpv"><img src="https://raw.githubusercontent.com/hammerill/gtaiv-fpv/main/gtaiv-fpv.gif" alt="GTA IV FPV" width=512></a></p>
