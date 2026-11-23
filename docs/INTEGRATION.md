@@ -677,6 +677,15 @@ off, also shakes the analog picture for a moment.
     level at x, y; the camera's depth under water), or their water is a
     plane or a box with a top. Look it up at each hub, or once at the
     drone's x, y when the water is flat.
+  - **Check that the query sees every kind of water.** Open worlds often
+    keep the sea, lakes and rivers apart, and one query may know only some
+    of them. Red Dead Redemption 2's `GET_WATER_HEIGHT` alone never
+    reported the water a drone flew into, so the drone took no water
+    damage at all, and nobody noticed until a player did. rdr2-fpv now asks
+    several queries in turn (the vertical and segment water probes, a shape
+    test against river water, the water height). Fly into the sea, a lake
+    and a river before you call water done, and log the moment the drone
+    goes in, with the surface height and the query that found it.
   - Hot or burning liquids (lava): keep the floor and damage the props near
     it instead (a prop within a few tens of centimetres, about 2 per
     second), since nothing should sink into lava either.
@@ -1368,7 +1377,9 @@ hit. What worked in GTA IV:
   element the maintainer asked to keep goes into the video signal after
   the lens (noise, no fisheye), under the OSD, and goes with the OSD
   disable switch ([OSD disable switch](#osd-disable-switch)).
-- **Draw the drone model with the game's own transforms.** In the chase,
+- **Draw the drone with the game's own renderer when you can**
+  ([The drone model](#the-drone-model)). Otherwise, **draw the drone model
+  with the game's own transforms.** In the chase,
   LOS and pilot views the drone is an object in the world. gtasa-fpv draws
   it with fixed-function triangles right after the 3D scene. It uses the
   view and projection transforms the game left on the device, so the model
@@ -1381,6 +1392,51 @@ hit. What worked in GTA IV:
   switches, antenna, about 17 × 11 × 5 cm), drawn the same way between the
   character's hand bones and facing its head, looks like a radio at any
   distance. Nothing extra has to ship.
+
+### The drone model
+
+- **Prefer a model the game itself renders.** When the engine can load a
+  model from a mod, ship one and let the game draw it as one of its own
+  objects (an entity or a prop placed every frame at `frame.position` and
+  `frame.rotation`). It then gets everything the game's own objects get:
+  its shadow on the ground (the best height cue in the chase and LOS views),
+  the scene's light at any hour, fog, reflections and the game's own depth
+  and culling. Portal 2 does this: a 5" quad is generated as SMD, compiled
+  with studiomdl, shipped in the mod's folder, and carried by a prop entity.
+  **Start from libfpv's own models** in [docs/models/](models/): a 5"
+  quad (Portal 2's, in metres) as glTF and OBJ, with each prop split into
+  "still" and "spinning" parts by libfpv's motor index, and a JSON file
+  giving the axes, the motors and the camera. `make_models.py` generates
+  them, and new models go there too, so every game converts the same
+  source. Its README covers converting for Blender, Source, RAGE and
+  hand-drawn renderers.
+  Hand-drawn triangles (GTA SA) or debug markers (RDR2) are the fallback for
+  engines that can't load a mod's model. They cast no shadow. RDR2 under
+  ScriptHookRDR2 alone can't stream a model (that would need a loader for
+  streamed assets such as Lenny's Mod Loader), so rdr2-fpv draws markers
+  and darkens them at night.
+- **Get the model's axes right, and check them in game.** libfpv's frame is
+  X right, Y forward, Z up. Model formats and compilers have their own
+  conventions, and a source file's axes don't predict the compiled model's.
+  Portal 2's model was written with X forward, but in game its nose was
+  along +Y, so the entity has to be yawed 90° right. Map the frame's axes
+  (`rotate(frame.rotation, {1,0,0})`, `{0,1,0}`, `{0,0,1}`) onto the model's
+  own axes, not the frame's quaternion straight onto the entity. Then check
+  in the chase view: the nose points where the drone flies, a roll to the
+  right lowers the right-hand props, and each prop sits at
+  `frame.motors[i].position` (a mirrored model swaps them). A model a
+  quarter turn off looks fine while it hovers and wrong as soon as it
+  flies.
+- **The props must not block the FPV view.** The model stays drawn while
+  flying in FPV (its shadow still helps), and the FPV camera sits on its
+  nose. Check at the widest lens and the steepest camera tilt that no part
+  of the model shows in the FPV picture, the front props especially: place
+  the camera at the lens, keep the near plane beyond the model's parts, or
+  hide those parts from the FPV camera only, if the engine allows that.
+  Hide the whole model in FPV only if its shadow survives that.
+- Show the props' state: spinning (a blur disc above about 1500 rpm), still
+  (blades), or gone (`frame.motors[i].prop_damage >= 1`), through the
+  model's body groups or submodels.
 
 ### Input
 
@@ -1616,6 +1672,48 @@ what it needed (the distances and the on/off switch come from
 - **The price:** with the stand-in on, the population follows the drone,
   so the pilot's surroundings empty out ([Audio](#audio)). Players who
   want a living world around the pilot turn the stand-in off.
+- **The pilot must not drop out of the pose when the stand-in starts or
+  ends.** From home, the hand-over must be invisible: the pilot keeps the
+  pose without a jump, a blend or a stumble. Both integrations that got
+  this wrong broke the pose at every crossing of the stand-in distance:
+  - GTA SA moved CJ home with `CPed::Teleport`, which cleared his tasks and
+    restarted the pose from its first frame. The fix was to move him without
+    the engine's teleport (set the matrix, re-file him in the world).
+  - RDR2 swaps two peds: a clone stays home, Arthur goes to the drone. The
+    clone used to start in the default idle and blend into the pose, while
+    Arthur's pose was stopped with a slow blend-out. Arthur also came back
+    with the fall he had picked up while frozen in the air at the drone, and
+    the radio prop was deleted and created again. Now, in the same frame,
+    the pose goes over with no blend at the same point of the clip
+    (`_GET/_SET_ENTITY_ANIM_CURRENT_TIME`), the animation is updated at once
+    (`FORCE_PED_AI_AND_ANIMATION_UPDATE`), the same radio is attached to
+    the new hands, and Arthur's tasks are cleared before he is put back.
+  - **Don't let a respawn start the stand-in again.** After
+    `fpv_drone_reset` the next frames can still show the drone where it
+    was. RDR2 ended the stand-in for the respawn, started it again from
+    those stale frames and ended it again a frame later, which broke the
+    pose twice for each R. Don't evaluate the stand-in distances until the
+    frame shows the drone at its new spot (or for a few frames at most).
+  - Check it from the chase or LOS view at the stand-in distance: fly back
+    and forth across it and press R while standing in.
+- **Flying from a horse (or any mount) works like flying from a car.**
+  Wherever a vehicle needs care, a mount needs the same, and players expect
+  it to just work. RDR2 has these rules:
+  - Spawn in front of the mount, from its heading and its position (the
+    plain heading native), and hold it while the drone is flown, so a horse
+    still trotting at launch doesn't walk into or past the drone.
+  - Arthur leaves the saddle at once (no dismount to watch), the copy at
+    home sits in it, and the horse is held there while the stand-in lasts.
+  - Keep a borrowed horse from the population's clean-up while the
+    character is away (a mission entity until the flight ends, then given
+    back), but leave the player's own horse to the game.
+  - At the end, the copy leaves the saddle at once, then the character gets
+    back in. "Move here" brings the horse along: put it at the drone, as
+    high above the ground as it stood, and the character back in the
+    saddle. The first version left it 120 m behind, and to the player the
+    horse had simply vanished.
+  - Log when the horse is kept, held, freed, and whether it still exists
+    after each step.
 - **Log every change of state.** Log when the stand-in starts and ends,
   and why (on a mission, a passenger, didn't get out); when the car is
   held, released and set down (with its up vector); and the first hits on
@@ -1706,6 +1804,19 @@ recall, a buzz when an action is refused, a tick on a camera switch, and a
 bump on an impact (a minimum speed, e.g. 3 m/s, and a short cooldown, so
 scrapes don't play a sound on every contact frame).
 
+- **Wire up the impact bump and listen for it in game.** rdr2-fpv shipped with
+  an empty `on_frame` for it, behind a comment that described a bump, and a
+  player found it by hearing nothing when the drone hit things. Log the first
+  few bumps (speed, which sound) so the log shows whether it fires.
+- **When scripts can't reach the game's collision sounds**, play a short
+  impact from the game's own sound sets at `impact.position`. RDR2 can't
+  trigger its physics impact sounds from a script, so rdr2-fpv streams a
+  mission sound set that has a small impact (`PREPARE_SOUNDSET`, polled
+  every frame until it answers), plays the sound with its own sound id, so a
+  second hit isn't lost while the first still plays, and falls back to a
+  frontend tick if nothing loads. Release only the sound sets you loaded
+  yourself: one that answered at once already belonged to the game (a
+  mission), and releasing it can break that mission's audio.
 - **Use only sounds the game already has.** libfpv will never ship its own
   sounds for this. If the game has no fitting sound for a reaction, skip that
   reaction.
@@ -1792,3 +1903,17 @@ scrapes don't play a sound on every contact frame).
 | Audio | `waveOut`. The game's own sounds move to the pilot when the drone is heard from there, by re-pointing the audio code's camera operands. |
 | Wind | The weather's wind and direction, helicopter rotors and explosions ([Wind](#case-study-gta-san-andreas)). |
 | Streaming | `FindPlayerCoors` and `FindPlayerCentreOfWorld*` detoured to the drone, and CJ himself at the drone (out of his car if he was driving), drawn at home ([Standing in](#standing-in-for-the-drone)). |
+
+### Case study: Red Dead Redemption 2 (1.0.1491.50)
+
+| Hook | How rdr2-fpv does it |
+|---|---|
+| Loader | ScriptHookRDR2's ASI loader. A small `.asi` owns the log, the script fiber and the DX12/Vulkan present hooks, and hot-reloads the core DLL. |
+| Script access | ScriptHookRDR2's natives, resolved by mangled name with `GetProcAddress`. Wrappers are generated from alloc8or's rdr3-nativedb-data. |
+| Coordinates | X east, Y north, Z up, metres. Heading 0 = north, counter-clockwise. |
+| Camera | A scripted camera. `SET_CAM_ROT(pitch, roll, yaw, order 2)` = Rz(yaw) Rx(pitch) Ry(roll), vertical FOV. |
+| Collision | `START_EXPENSIVE_SYNCHRONOUS_SHAPE_TEST_LOS_PROBE` (map, vehicles, peds, objects; not river water or foliage). |
+| Water | Several queries in turn ([Damage](#damage)). |
+| Effects | Ragdoll and `APPLY_DAMAGE_TO_PED` with Arthur as the attacker; forces on wagons and props. The bump is a mission sound set's small impact at the impact point. |
+| Drawing | D3D11On12 on the game's DX12 queue, or a D3D11 device sharing textures and a fence with Vulkan. The drone is `_DRAW_MARKER` boxes and cylinders (no model streaming). |
+| Streaming | Arthur himself at the drone (invisible, frozen, without collision), a clone at home in the pose or in the saddle. On a mission only the focus moves (`SET_FOCUS_POS_AND_VEL`). |

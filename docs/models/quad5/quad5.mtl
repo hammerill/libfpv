@@ -1,0 +1,48 @@
+newmtl carbon
+Kd 0.1333 0.1333 0.1490
+d 1.0000
+
+newmtl electronics
+Kd 0.0941 0.2353 0.1255
+d 1.0000
+
+newmtl metal
+Kd 0.5882 0.5961 0.6196
+d 1.0000
+
+newmtl motor
+Kd 0.2745 0.2824 0.3137
+d 1.0000
+
+newmtl white
+Kd 0.9255 0.9255 0.9098
+d 1.0000
+
+newmtl blue
+Kd 0.1569 0.5490 1.0000
+d 1.0000
+
+newmtl orange
+Kd 1.0000 0.5490 0.1176
+d 1.0000
+
+newmtl strap
+Kd 0.0784 0.0784 0.0863
+d 1.0000
+
+newmtl camera
+Kd 0.0706 0.0706 0.0784
+d 1.0000
+
+newmtl lens
+Kd 0.1176 0.1569 0.2353
+d 1.0000
+
+newmtl prop
+Kd 0.1569 0.1569 0.1725
+d 1.0000
+
+newmtl propblur
+Kd 0.2353 0.2353 0.2588
+d 0.2745
+

@@ -1,0 +1,190 @@
+{
+  "name": "quad5",
+  "units": "metres",
+  "axes": {
+    "gltf_and_obj": {
+      "forward": "+Z",
+      "up": "+Y",
+      "left": "+X",
+      "right": "-X"
+    },
+    "json_positions": "named: forward / left / up, metres from the origin"
+  },
+  "parts": {
+    "body": "frame, stack, battery, camera, antenna, motors (always shown)",
+    "prop_still_<i>": "motor i's prop, standing still (below about 1500 rpm)",
+    "prop_spin_<i>": "motor i's prop, spinning: a translucent disc",
+    "rule": "per motor: show prop_spin_<i> or prop_still_<i> by frame.motors[i].rpm, neither once frame.motors[i].prop_damage >= 1"
+  },
+  "materials": {
+    "carbon": {
+      "rgba": [
+        34,
+        34,
+        38,
+        255
+      ]
+    },
+    "electronics": {
+      "rgba": [
+        24,
+        60,
+        32,
+        255
+      ]
+    },
+    "metal": {
+      "rgba": [
+        150,
+        152,
+        158,
+        255
+      ]
+    },
+    "motor": {
+      "rgba": [
+        70,
+        72,
+        80,
+        255
+      ]
+    },
+    "white": {
+      "rgba": [
+        236,
+        236,
+        232,
+        255
+      ]
+    },
+    "blue": {
+      "rgba": [
+        40,
+        140,
+        255,
+        255
+      ]
+    },
+    "orange": {
+      "rgba": [
+        255,
+        140,
+        30,
+        255
+      ]
+    },
+    "strap": {
+      "rgba": [
+        20,
+        20,
+        22,
+        255
+      ]
+    },
+    "camera": {
+      "rgba": [
+        18,
+        18,
+        20,
+        255
+      ]
+    },
+    "lens": {
+      "rgba": [
+        30,
+        40,
+        60,
+        255
+      ]
+    },
+    "prop": {
+      "rgba": [
+        40,
+        40,
+        44,
+        255
+      ]
+    },
+    "propblur": {
+      "rgba": [
+        60,
+        60,
+        66,
+        70
+      ]
+    }
+  },
+  "description": "A 5\" freestyle FPV quad (libfpv's freestyler-5 preset): true-X frame, 2207 motors, 5.1\" props, a 6S battery on top, a camera tilted up 25 degrees.",
+  "origin": "the drone's centre: libfpv's frame.position (the motors' hubs are about level with it)",
+  "motors": [
+    {
+      "index": 0,
+      "where": "rear right",
+      "hub": {
+        "forward": -0.0795,
+        "left": -0.0795,
+        "up": 0.0
+      },
+      "spin": "clockwise",
+      "parts": [
+        "prop_still_0",
+        "prop_spin_0"
+      ]
+    },
+    {
+      "index": 1,
+      "where": "front right",
+      "hub": {
+        "forward": 0.0795,
+        "left": -0.0795,
+        "up": 0.0
+      },
+      "spin": "counter-clockwise",
+      "parts": [
+        "prop_still_1",
+        "prop_spin_1"
+      ]
+    },
+    {
+      "index": 2,
+      "where": "rear left",
+      "hub": {
+        "forward": -0.0795,
+        "left": 0.0795,
+        "up": 0.0
+      },
+      "spin": "counter-clockwise",
+      "parts": [
+        "prop_still_2",
+        "prop_spin_2"
+      ]
+    },
+    {
+      "index": 3,
+      "where": "front left",
+      "hub": {
+        "forward": 0.0795,
+        "left": 0.0795,
+        "up": 0.0
+      },
+      "spin": "clockwise",
+      "parts": [
+        "prop_still_3",
+        "prop_spin_3"
+      ]
+    }
+  ],
+  "camera": {
+    "lens": {
+      "forward": 0.0456,
+      "left": 0.0,
+      "up": 0.0028
+    },
+    "uptilt_deg": 25
+  },
+  "size_m": {
+    "forward": 0.27,
+    "left": 0.27,
+    "up": 0.06
+  }
+}
