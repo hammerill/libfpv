@@ -101,8 +101,9 @@ game doesn't pass the flag) `flags` is 0 and the FPV view is drawn as above.
   camera's TVL through the link's ~5 MHz, about 400 TVL whatever the
   camera claims). Colour is limited to `chroma_cycles`, and fine detail near
   the colour subcarrier decodes as rainbows. The camera's edge enhancement
-  adds halos. Digital uses the transmitted mode's pixels (e.g. 720 × 540 for
-  a 4:3 camera in HDZero's 540p90).
+  adds faint halos, and bright edges bleed softly. Digital uses the
+  transmitted mode's pixels (e.g. 720 × 540 for a 4:3 camera in HDZero's
+  540p90).
 
 The easy way is `docs/renderers/fpv_video_gl3.h` (OpenGL 3.3, GLES 3,
 WebGL 2). It replaces the lens shader above and draws the OSD too:
@@ -150,8 +151,9 @@ in three steps:
      the picture's aspect.
    - With the resolution effect, low-pass the luma across the line to
      `luma_cycles` (about -6 dB there) and the colour (YIQ) to
-     `chroma_cycles`, then sharpen the luma (the camera's `sharpening` plus
-     the goggles' peaking): crisp edges with halos.
+     `chroma_cycles`, then sharpen the luma a little (`sharpening`: faint
+     halos) and mix in a fifth of the colour filter's wider blur (the soft
+     bleed around bright edges).
    - Add the line's grain and sparkles (denser on bright samples), apply its
      colour gain and hue, the decoder's upset (`chroma_boost`, `chroma_tint`
      times luma, `hue_sweep` turns across the line; check `struct_size`
@@ -178,12 +180,15 @@ in three steps:
    110 %) after the camera's filters, the colour off under it, and add its
    cross-colour: its luma demodulated against the
    subcarrier near a glyph (strokes a pixel wide turn a solid hue that
-   flips every field).
+   flips every field). Write alpha 1 where the OSD covers a sample (0
+   elsewhere) for the goggles' scaler.
 2. **The goggles.** Draw that texture with bilinear filtering into the
    picture's rectangle: `display_aspect` (or `picture_aspect` when it is 0)
    fitted to the screen, black around it. The camera's picture keeps
    `picture_aspect` for the lens and stretches to fill that rectangle
-   (a 720 × 480 DVR shows a 4:3 NTSC camera at 3:2), each step between two samples kept to about a screen pixel ("sharp
+   (a 720 × 480 DVR shows a 4:3 NTSC camera at 3:2). The picture is plain
+   bilinear (soft); where the signal's alpha marks an analog OSD sample,
+   each step between two samples is kept to about a screen pixel ("sharp
    bilinear") so the OSD's pixels stay crisp. For an analog field, move it
    down half a line when `field_parity` is 1 (bob).
 3. **The OSD on top**, digital or with the effects off, in the player's
@@ -1696,6 +1701,30 @@ what it needed (the distances and the on/off switch come from
     frame shows the drone at its new spot (or for a few frames at most).
   - Check it from the chase or LOS view at the stand-in distance: fly back
     and forth across it and press R while standing in.
+- **Hand the pilot over invisibly in every situation the character can
+  pilot from: on foot, in a car (driver or passenger), on a horse or
+  another mount, on a bike, in a boat, sitting, swimming.** A fix for one
+  of them doesn't carry over to the others. Each puts the character in a
+  different animation, and the hand-over must keep that one. The RDR2 fix
+  above made the pose seamless on foot, and on a horse the animation still
+  started over at every crossing of the stand-in distance. Check every
+  situation the game has, from the chase and LOS views. For each one, find
+  out whether the game lets a script carry the animation over (the clip and
+  its time, as for the pose on foot). Where it doesn't, the swap must happen
+  only while nobody can see the character:
+  - RDR2 on a horse: the riding animation belongs to the mount task, and no
+    native reads or sets its clip or time. The copy put in the saddle
+    starts it over, and so did Arthur put back in it. So on a horse the
+    stand-in starts as soon as the flight starts (the view has just cut to
+    the drone) and ignores the distances. It ends only on the next cut: the
+    pilot view (F), the end of the flight, or "move here". A respawn (R)
+    keeps it, and the drone respawns in front of the copy's horse. Near
+    home nothing about it shows: the character is invisible and the drone
+    is close to the copy anyway.
+  - In a car, GTA SA saves the seat matrix and the animation the driver sat
+    with when it gets out, and draws it in its seat
+    ([above](#standing-in-for-the-drone)). RDR2 uses only the light
+    stand-in in a wagon, so nobody is swapped there.
 - **Flying from a horse (or any mount) works like flying from a car.**
   Wherever a vehicle needs care, a mount needs the same, and players expect
   it to just work. RDR2 has these rules:
@@ -1704,6 +1733,7 @@ what it needed (the distances and the on/off switch come from
     still trotting at launch doesn't walk into or past the drone.
   - Arthur leaves the saddle at once (no dismount to watch), the copy at
     home sits in it, and the horse is held there while the stand-in lasts.
+    This swap happens only on a cut (see above).
   - Keep a borrowed horse from the population's clean-up while the
     character is away (a mission entity until the flight ends, then given
     back), but leave the player's own horse to the game.
@@ -1807,16 +1837,23 @@ scrapes don't play a sound on every contact frame).
 - **Wire up the impact bump and listen for it in game.** rdr2-fpv shipped with
   an empty `on_frame` for it, behind a comment that described a bump, and a
   player found it by hearing nothing when the drone hit things. Log the first
-  few bumps (speed, which sound) so the log shows whether it fires.
-- **When scripts can't reach the game's collision sounds**, play a short
-  impact from the game's own sound sets at `impact.position`. RDR2 can't
-  trigger its physics impact sounds from a script, so rdr2-fpv streams a
-  mission sound set that has a small impact (`PREPARE_SOUNDSET`, polled
-  every frame until it answers), plays the sound with its own sound id, so a
-  second hit isn't lost while the first still plays, and falls back to a
-  frontend tick if nothing loads. Release only the sound sets you loaded
-  yourself: one that answered at once already belonged to the game (a
-  mission), and releasing it can break that mission's audio.
+  few bumps (speed, what was played) so the log shows whether it fires.
+- **Make the bump sound like a whoop.** A whoop weighs 25 g: touching grass
+  is a soft brush, hitting a fence a light tick. A canned "impact" is made
+  for something heavy and sounds wrong on every hit. rdr2-fpv first played
+  the smallest impact it found in RDR2's mission sound sets
+  (`boat_impact_small`), and the player heard a barrel dropped on wet ground
+  each time the drone touched grass. Listen to the sound on soft and hard
+  surfaces before shipping it.
+- **When scripts can't reach the game's collision sounds, let the physics
+  play them.** RDR2 has no script call for its collision sounds. rdr2-fpv
+  drops a small, light prop (a cigar box), invisible and with collision, a
+  few centimetres off the surface at `impact.position`, moving into it along
+  `-impact.normal` at the impact speed (clamped to 1 to 6 m/s). The game
+  picks the sound from the surface it lands on, places it there and makes
+  it as loud as the hit. Keep one prop and move it for each bump, delete it
+  half a second after the last one, and leave it out of the drone's own
+  rays, or the drone bumps into it.
 - **Use only sounds the game already has.** libfpv will never ship its own
   sounds for this. If the game has no fitting sound for a reaction, skip that
   reaction.
@@ -1914,6 +1951,6 @@ scrapes don't play a sound on every contact frame).
 | Camera | A scripted camera. `SET_CAM_ROT(pitch, roll, yaw, order 2)` = Rz(yaw) Rx(pitch) Ry(roll), vertical FOV. |
 | Collision | `START_EXPENSIVE_SYNCHRONOUS_SHAPE_TEST_LOS_PROBE` (map, vehicles, peds, objects; not river water or foliage). |
 | Water | Several queries in turn ([Damage](#damage)). |
-| Effects | Ragdoll and `APPLY_DAMAGE_TO_PED` with Arthur as the attacker; forces on wagons and props. The bump is a mission sound set's small impact at the impact point. |
+| Effects | Ragdoll and `APPLY_DAMAGE_TO_PED` with Arthur as the attacker; forces on wagons and props. The bump is an invisible light prop dropped onto the surface at the impact point, so the game's physics plays that surface's collision sound. |
 | Drawing | D3D11On12 on the game's DX12 queue, or a D3D11 device sharing textures and a fence with Vulkan. The drone is `_DRAW_MARKER` boxes and cylinders (no model streaming). |
 | Streaming | Arthur himself at the drone (invisible, frozen, without collision), a clone at home in the pose or in the saddle. On a mission only the focus moves (`SET_FOCUS_POS_AND_VEL`). |

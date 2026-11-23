@@ -1393,8 +1393,14 @@ because the flight controller's OSD chip writes into the video before the
 VTX, so it tears, rolls and drowns in snow with the picture. Pixelation
 with nearest filtering was rejected for the picture: goggles interpolate,
 and blocky pixels read as a retro game, not a video feed. The scaler keeps
-each step between two samples to about a screen pixel ("sharp bilinear"),
-which leaves the soft picture as it was and the OSD's pixels crisp. In both renderers
+each step between two samples to about a screen pixel ("sharp bilinear")
+only where the OSD is, so its pixels stay crisp, and is plain bilinear
+over the picture: the signal pass writes 1 to alpha on samples the OSD
+covers, and the scaler reads the alpha once, filtered, at the centre of
+the four samples it blends, which sees a mark on any of them. (It used to
+be sharp over the whole picture, which at 1440 × 960 drew every field
+line as a flat band four pixels tall with a hard step to the next: the
+picture looked hard and blocky, which no goggles or DVR shows.) In both renderers
 (`fpv_video_gl3.h`, `fpv_video_gl2.h`) the signal shader is built as three
 programs, one per mode (lens only, analog, digital), not one that branches
 on the mode: as one, ANGLE's Direct3D 11 backend (Chrome and Edge on
@@ -1472,8 +1478,10 @@ things the first version got wrong. The goggles' look follows the Cobra X.
   a hit makes one band, not one per field while the jolt decays.
 - *A soft picture and a mangled OSD.* The luma low-pass was twice too soft
   (its -6 dB point sat at half of `luma_cycles`), so edges now rise over
-  about two samples with the camera's and the goggles' halos, like the
-  DVR's. The OSD was drawn at 3 % / 4 % margins into a linear 640 × 480
+  about two samples like the DVR's. (The halos first added with it, the
+  camera's `sharpening` plus a fixed goggle peaking, 1.56 times the edge
+  for the C03, overshot each edge by 35 % on both sides and made the whole
+  picture painfully sharp; see the soft-bleed entry below.) The OSD was drawn at 3 % / 4 % margins into a linear 640 × 480
   texture and then through the camera's filters: 16 rows of 18 glyph lines
   squeezed onto 13.8 field lines each, then blurred and sharpened, so
   glyphs lost rows and grew coloured garbage at the corners. It is now built
@@ -1532,6 +1540,18 @@ things the first version got wrong. The goggles' look follows the Cobra X.
   the OSD's luma against the subcarrier over ±4 samples (σ 2.5) near a
   glyph and add 0.35 of it. Under noise the glyphs get tinted in patches on
   top (the noise's colour, three times stronger over the OSD's strokes).
+- *Soft bleed, not halos (2026-11).* The picture's sharpening was then
+  fitted to the DVR's strong edges (VID00013: 6,800 steps of over 110
+  levels between flat sides, averaged). The real edge rises from 10 % to
+  95 % over three samples with no halo worth the name, and a soft bleed of
+  about 10 % reaches six samples out on both sides (the lens and the
+  sensor). The low-pass alone already matched the rise; the sharpening on
+  top (1.56 × the edge for the C03) undershot and overshot every edge by
+  35 %, which made the whole picture hurt to watch. The luma is now
+  sharpened by 0.6 × `sharpening` (0.36 for the C03) and mixed with 0.2 of
+  the colour filter's wider blur (σ ≈ 5 samples, no extra taps), the
+  closest fit to the DVR's edge. The OSD is switched in after this filter, so it
+  stays crisp.
 
 **Direct3D 9 (`fpv_video_d3d9.h`).** GTA San Andreas FPV had its own HLSL
 port of the GL3 shaders, so every renderer change meant porting it again in

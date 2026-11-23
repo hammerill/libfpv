@@ -216,6 +216,7 @@ float3 toRgb(float3 y) {
 }
 
 #if MODE == 1
+static float osdMark = 0.0;  // the OSD covers this sample: the scaler keeps it crisp
 float3 analog(float2 uv) {
   float2 px = floor(uv * raster);
   // the field line this pixel shows (from the top) and, when the picture
@@ -254,8 +255,10 @@ float3 analog(float2 uv) {
       wide += w * tap(p + float2(fi * 0.75 * sc + 0.3 * sc, 0.0)); wcs += w;
     }
     Y /= wsum; wide /= wcs;
-    // the camera's edge enhancement and the goggles' peaking: crisp edges with halos
-    Y += (0.6 + sharpen * 1.6) * (Y - Yring);
+    // the camera's edge enhancement, mild (faint halos), and the lens's and sensor's
+    // soft bleed a few samples wide around bright edges (measured on a Cobra X DVR)
+    Y += 0.6 * sharpen * (Y - Yring);
+    Y = lerp(Y, dot(wide, float3(0.299, 0.587, 0.114)), 0.2);
     yiq = float3(Y, toYiq(wide).yz);
     // composite: fine detail near the subcarrier decodes as colour (rainbows)
     float hp = 0.5 / subcarrier;
@@ -278,7 +281,7 @@ float3 analog(float2 uv) {
     float y0 = yiq.x;
     yiq.x = yiq.x * (1.0 - a) + oy;
     yiq.yz *= 1.0 - a;
-    osdA = a;
+    osdA = a; osdMark = a > 0.0 ? 1.0 : 0.0;
     // NTSC cross-colour: the decoder's notch can't tell the OSD's one-pixel strokes (near
     // the subcarrier's period) from colour, and demodulates them into a solid hue over a
     // glyph, set by where its strokes sit against the subcarrier; the subcarrier turns half
@@ -412,14 +415,14 @@ float4 main(float2 vpos : VPOS) : COLOR {
   // GL's uv: pixel centres, y up
   float2 uv = float2((vpos.x + 0.5) / raster.x, 1.0 - (vpos.y + 0.5) / raster.y);
 #if MODE == 1
-  float3 c = analog(uv);
+  float3 c = analog(uv); float mark = osdMark;
 #elif MODE == 2
-  float3 c = digitalPix(uv);
+  float3 c = digitalPix(uv); float mark = 0.0;
 #else
-  float3 c = tap(uv);
+  float3 c = tap(uv); float mark = 0.0;
   if (osdIn > 0.5) { float4 od = osdTap(uv); c = c * (1.0 - od.a) + od.rgb; }
 #endif
-  return float4(c, 1.0);
+  return float4(c, mark);
 }
 )hlsl";
 
@@ -438,10 +441,13 @@ float4 main(float2 vpos : VPOS) : COLOR {
     float fromTop = (1.0 - p.y) * rows.x - 0.5 * rows.y;
     p.y = 1.0 - fromTop / rows.x;
   }
-  // the goggles' scaler: bilinear, but each step between two samples kept to about a
-  // screen pixel, so the OSD's pixels stay crisp; the picture is soft anyway
-  float2 t = p * texSize - 0.5; float2 i = floor(t);
-  float2 f = saturate((t - i - 0.5) * max(rect.zw / texSize, float2(1.0, 1.0)) + 0.5);
+  // the goggles' scaler: bilinear, a soft picture. Where the OSD sits (the signal's
+  // alpha marks its samples; one filtered fetch at the four samples' centre sees any of
+  // them) each step between two samples is kept to about a screen pixel: crisp pixels.
+  float2 t = p * texSize - 0.5; float2 i = floor(t); float2 f = t - i;
+  float2 m = (i + 1.0) / texSize;
+  if (tex2Dlod(signal, float4(m.x, 1.0 - m.y, 0.0, 0.0)).a > 0.01)
+    f = saturate((f - 0.5) * max(rect.zw / texSize, float2(1.0, 1.0)) + 0.5);
   float2 q = (i + f + 0.5) / texSize;
   return float4(tex2Dlod(signal, float4(q.x, 1.0 - q.y, 0.0, 0.0)).rgb, 1.0);
 }
