@@ -230,9 +230,8 @@ the throttle, and no key (or both) hovers at a throttle learned in flight
 for each drone. T toggles turtle mode: to
 flip a crashed drone back over, turn it on, arm, hold an arrow key until
 it lands upright, then turn turtle off to fly away.
-Settings, EEPROMs and the
-selected preset are stored in `./data` (change it with
-`--data <dir>`).
+Settings, EEPROMs and the selected preset are stored in the shared config
+folder (see below; `--data <dir>` picks another).
 
 The web build of the same example runs in a browser:
 
@@ -240,12 +239,30 @@ The web build of the same example runs in a browser:
 python3 -m http.server -d build/web/web 8080   # then open http://localhost:8080
 ```
 
+### Shared config folder
+
+Every libfpv game keeps the pilot's setup in one per-user folder, so radio
+mappings, the Betaflight tune (EEPROM) and the settings carry over from game
+to game and survive reinstalling a game:
+
+| Platform | Folder |
+|---|---|
+| Windows | `%APPDATA%\libfpv` |
+| macOS | `~/Library/Application Support/libfpv` |
+| Linux and others | `$XDG_CONFIG_HOME/libfpv` (default `~/.config/libfpv`) |
+
+Set the `LIBFPV_DATA_DIR` environment variable to use another folder.
+Delete the folder to start over with default settings. Web builds keep it in
+the browser instead (IndexedDB).
+
 ## Integrating into a game
 
 ```c
 fpv_global_config cfg;
 fpv_global_config_defaults(&cfg);
-cfg.data_dir = "<writable folder>";
+char dir[1024];
+fpv_shared_data_dir(dir, sizeof dir);         // the shared config folder
+cfg.data_dir = dir;
 cfg.coords = fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1.0f);
 fpv_global_init(&cfg);                        // once
 
