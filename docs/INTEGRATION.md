@@ -489,6 +489,15 @@ fpv_wind_set_sources(&s, 1);
   23 m/s in its wake. libfpv finds where the wake lands and spreads it
   out along the ground there. The ray it casts for that starts 0.6 radii
   below the hub, which skips the aircraft's own body under the rotor.
+- **Check the mass you put into T.** The speed grows with the square root
+  of the mass, so a wrong mass makes a wake that throws the drone around.
+  A game's physics mass is not always the vehicle's real weight. Vice City
+  gives its scripted police and news helicopters (`CHeli`) a mass of 10⁸ kg
+  so that nothing can push them. reVC-mac-fpv took that mass as T, and their
+  downwash came out at about 2 km/s instead of about 10 m/s. Vice City's RC
+  Goblin is listed at 100 kg, which is far too heavy for a toy. Check each
+  kind of aircraft against its real weight (or the game's handling data),
+  cap the mass at the heaviest real one, and log the speed you pass.
 - **Jet.** `speed` at the outlet, `radius` the outlet's.
 - Scale `speed` with the rotor or engine speed: thrust ∝ rpm², so the
   induced velocity ∝ rpm. A parked helicopter with its rotor stopped is
