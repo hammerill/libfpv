@@ -731,6 +731,57 @@ drone then carries a warhead, and `libfpv.h` gains the "Kamikaze" section
 using CMake defines it itself). The rules are in the header and in
 DECISIONS D24.
 
+### Build the game for the same kind of libfpv
+
+`LIBFPV_KAMIKAZE` changes the ABI, not just the API. `libfpv.h` gives
+`fpv_frame` 12 radio channels in kamikaze builds (`FPV_CHANNEL_COUNT`,
+AUX7 and AUX8) and 10 otherwise. So everything after `channels` sits 8 bytes
+later in a kamikaze frame: `wind`, the portal and cargo fields, and the whole
+`video_feed`. A game compiled with `LIBFPV_KAMIKAZE` that loads a plain
+`libfpv.dll`, or the other way round, reads those fields shifted. No call
+fails and nothing is logged. `struct_size` passes too, because the larger
+frame is always "new enough". The usual symptoms:
+
+- `frame.wind[2]` reads `nan` (it is `last_portal`, -1, read as a float).
+- The video feed freezes about a second after the first flight starts (when
+  the goggles' shaders are ready), because `video_feed.field` seems to stand
+  still. The picture is strongly tinted, often pink or magenta, because the
+  colour fields are read from the wrong place. Only a device reset (Alt+Tab)
+  or a drone impact redraws it.
+- Impacts name the wrong objects, which can crash a game that acts on them.
+
+A game that loads `libfpv.dll` at runtime can't "find out at runtime whether
+the DLL has the kamikaze API" and use one build for both. The frame layout
+is fixed when the game is compiled. Instead:
+
+- **Make kamikaze a build option of the game, off by default**, for example
+  `-D<GAME>_FPV_KAMIKAZE=ON`, which defines `LIBFPV_KAMIKAZE`. Release and CI
+  builds leave it off and ship a plain `libfpv.dll`. On a kamikaze dev machine
+  (`LIBFPV_KAMIKAZE_DEV`, see CLAUDE.md), the option can default to on for
+  local builds. Plain builds of the game must not use the kamikaze types
+  and functions at all. Stub the few types the shared code needs.
+- **Refuse a `libfpv.dll` of the other kind** before `fpv_global_init`. A
+  kamikaze DLL exports `fpv_kamikaze_poll_detonation`, and a plain one
+  doesn't:
+
+  ```c
+  int dll_kamikaze = GetProcAddress(lib, "fpv_kamikaze_poll_detonation") != NULL;
+  #if defined(LIBFPV_KAMIKAZE)
+  int game_kamikaze = 1;
+  #else
+  int game_kamikaze = 0;
+  #endif
+  if (dll_kamikaze != game_kamikaze) {
+      log("libfpv.dll is a %s build, this game was built for a %s one: not loaded",
+          dll_kamikaze ? "kamikaze" : "plain", game_kamikaze ? "kamikaze" : "plain");
+      return 0;  /* play without the drone rather than misread every frame */
+  }
+  ```
+
+- **Check the pair when deploying**, too. A deploy script can grep the DLL
+  for `fpv_kamikaze_poll_detonation` and compare it with the game's build
+  option, as gtaiv-fpv's and gtasa-fpv's `deploy.sh` do.
+
 `-DLIBFPV_KAMIKAZE_PROMOTE=ON` keeps the plain build (no warhead, no
 kamikaze API) but still shows the overlay's Kamikaze tab, filled with a
 note about the Kamikaze version on Patreon, an "Open Patreon" button and a
