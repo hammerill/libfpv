@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "config/bf_config.h"
 #include "libfpv.h"
 #include "osd/draw_buffer.h"
 #include "overlay/collision_view.h"
@@ -58,6 +59,8 @@ private:
     void tabTuning();
     void tabOsd();
     void tabImport();
+    void sectionDefaults();
+    void readDefaults();
     void tabCamera();
     void tabControls();
     void tabConfigurator();
@@ -100,6 +103,14 @@ private:
     std::string m_cliInput, m_cliOutput;
     std::string m_osdSelected = "osd_vbat_pos";  // the OSD element setting being placed
     std::string m_osdFilter;
+    struct DefaultsState {
+        unsigned categories = kDefaultsAll & ~kDefaultsRates;  // the ticked boxes
+        bool read = false, exists = false;
+        unsigned found = 0;  // categories in defaults.diff.txt
+        std::string saved;   // its date
+        std::string message;
+    } m_defaults;
+    bool m_cameraAnglePending = false;  // the uptilt changed in flight
     int m_rateAxis = 0;
     bool m_rebindingToggle = false;
     std::string m_rebindingControl;  // the game control whose key is being changed

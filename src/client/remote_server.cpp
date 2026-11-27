@@ -215,6 +215,7 @@ public:
         return (CliResult)result;
     }
     void setDefaultDiff(const std::string &diff) override { post(wire::kSetDefaultDiff, diff); }
+    void setUserDefaults(const std::string &script) override { post(wire::kSetUserDefaults, script); }
     void selectPreset(const DronePreset &preset) override { post(wire::kSelectPreset, preset); }
     void resetEeproms(bool all, const DronePreset &preset) override { post(wire::kResetEeproms, all, preset); }
     void finishImport(const DronePreset &preset) override { post(wire::kFinishImport, preset); }

@@ -87,6 +87,7 @@ void SimServer::applyFirstRunConfig(const DronePreset &p) {
         if (game.rfind(reset, 0) == 0) game.erase(0, reset.size());
         script += game;
     }
+    script += m_cfg.userDefaults;  // the pilot's own, saved from the overlay
     script += "save noreboot\n";
     cliRun(script);
     writeFileAtomic(upgradeMarker(eepromPathFor(p)), kEepromUpgrade);
@@ -320,6 +321,10 @@ CliResult SimServer::cli(const std::string &script, std::string &output) {
 
 void SimServer::setDefaultDiff(const std::string &diff) {
     m_runner.call([&] { m_cfg.defaultDiff = diff; });
+}
+
+void SimServer::setUserDefaults(const std::string &script) {
+    m_runner.call([&] { m_cfg.userDefaults = script; });
 }
 
 void SimServer::selectPreset(const DronePreset &p) {

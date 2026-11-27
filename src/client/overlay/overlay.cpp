@@ -7,12 +7,15 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
+#include <filesystem>
 
 #include "imgui.h"
 #include "lib.h"
 #include "osd/osd.h"
 #include "overlay/osd_element_names.h"
 #include "util/build_info.h"
+#include "util/fs.h"
 #include "util/log.h"
 #include "web/web.h"
 
@@ -1475,6 +1478,112 @@ void Overlay::tabOsd() {
     ImGui::EndGroup();
 }
 
+// --- New-model defaults: <data_dir>/defaults.diff.txt, shared by every game -----
+
+namespace {
+
+std::filesystem::path defaultsPath() { return pathFromUtf8(lib().dataDir) / "defaults.diff.txt"; }
+
+struct DefaultsCategoryName {
+    unsigned bit;
+    const char *name;
+} const kDefaultsCategories[] = {{kDefaultsNames, "Names"},
+                                 {kDefaultsModes, "Modes / AUX switches"},
+                                 {kDefaultsOsd, "OSD"},
+                                 {kDefaultsLeds, "LEDs"},
+                                 {kDefaultsRates, "Rates"}};
+
+}  // namespace
+
+// Whether the file exists, its categories and the date in its first line.
+void Overlay::readDefaults() {
+    std::string text;
+    m_defaults.read = true;
+    m_defaults.exists = readTextFile(defaultsPath(), text);
+    m_defaults.found = 0;
+    m_defaults.saved.clear();
+    if (!m_defaults.exists) return;
+    filterDefaultsProfile(text, kDefaultsAll, &m_defaults.found);
+    std::string first = text.substr(0, text.find_first_of("\r\n"));
+    size_t at = first.find(", saved ");
+    if (at != std::string::npos) m_defaults.saved = first.substr(at + 8);
+}
+
+void Overlay::sectionDefaults() {
+    Lib &L = lib();
+    if (!m_defaults.read) readDefaults();
+    ImGui::TextWrapped("Every new model, in every game, starts with these settings on top of its preset's tune. "
+                       "PIDs, filters, motor and mixer settings always stay the preset's, and each quad's camera "
+                       "sets its video system.");
+    for (const auto &c : kDefaultsCategories) {
+        ImGui::CheckboxFlags(c.name, &m_defaults.categories, c.bit);
+        if (c.bit != kDefaultsRates) ImGui::SameLine();
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("(a whoop and a 5-inch want other rates)");
+    if (ImGui::Button("Save as new-model defaults")) {
+        char *out = nullptr;
+        fpv_result r = fpv_cli_exec("dump\n", &out);
+        std::string dump = out ? out : "";
+        fpv_free(out);
+        unsigned found = 0;
+        std::string profile = filterDefaultsProfile(dump, m_defaults.categories, &found);
+        if (r != FPV_OK) {
+            m_defaults.message = fpv_last_error();
+        } else if (!found) {
+            m_defaults.message = "Nothing to save: tick a category.";
+        } else {
+            char date[32];
+            std::time_t now = std::time(nullptr);
+            std::strftime(date, sizeof date, "%Y-%m-%d %H:%M", std::localtime(&now));
+            if (writeFileAtomic(defaultsPath(), std::string("# libfpv new-model defaults, saved ") + date + "\n" + profile)) {
+                std::lock_guard<std::recursive_mutex> lock(L.mutex);
+                L.userDefaults = profile;  // for the models created from now on
+                L.server->setUserDefaults(profile);
+                m_defaults.message = "Saved.";
+            } else {
+                m_defaults.message = "Cannot write " + pathToUtf8(defaultsPath());
+            }
+        }
+        readDefaults();
+    }
+    // the profile goes on by itself only when a model is set up for the first time
+    bool armed = false;
+    if (L.droneExists) {
+        FlightSnapshot prev, cur;
+        double prevWall, curWall;
+        L.server->snapshots(prev, prevWall, cur, curWall);
+        armed = cur.armed;
+    }
+    ImGui::SameLine();
+    ImGui::BeginDisabled(armed || !m_defaults.exists);
+    if (ImGui::Button("Apply defaults to this model")) {
+        std::string text;
+        readTextFile(defaultsPath(), text);
+        char *out = nullptr;
+        fpv_result r = fpv_cli_exec((filterDefaultsProfile(text, kDefaultsAll) + "save\n").c_str(), &out);
+        fpv_free(out);
+        m_defaults.message = r == FPV_OK ? "Applied to this model." : fpv_last_error();
+        m_bf.invalidate();
+    }
+    ImGui::EndDisabled();
+    if (armed) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("(disarm to apply)");
+    }
+    if (m_defaults.exists) {
+        std::string cats;
+        for (const auto &c : kDefaultsCategories)
+            if (m_defaults.found & c.bit) cats += (cats.empty() ? "" : ", ") + std::string(c.name);
+        ImGui::Text("Saved %s: %s", m_defaults.saved.empty() ? "(no date)" : m_defaults.saved.c_str(),
+                    cats.empty() ? "nothing" : cats.c_str());
+    } else {
+        ImGui::TextDisabled("No new-model defaults saved: new models start with their preset's setup.");
+    }
+    ImGui::TextDisabled("%s", pathToUtf8(defaultsPath()).c_str());
+    if (!m_defaults.message.empty()) ImGui::TextWrapped("%s", m_defaults.message.c_str());
+}
+
 void Overlay::tabImport() {
     ImGui::TextWrapped(
         "Paste the output of `diff all` from your real quad's Betaflight CLI. Hardware lines (resources, serial, "
@@ -1502,6 +1611,8 @@ void Overlay::tabImport() {
         ImGui::TextUnformatted(m_importReport.c_str());
         ImGui::EndChild();
     }
+    sectionTitle("New-model defaults");
+    sectionDefaults();
     sectionTitle("Betaflight CLI");
     static char line[256];
     bool enter = ImGui::InputText("##cli", line, sizeof line, ImGuiInputTextFlags_EnterReturnsTrue);
@@ -1546,7 +1657,22 @@ void Overlay::tabCamera() {
         L.settings.cameraFov = -1;
         L.settings.cameraFisheye = Settings{}.cameraFisheye;
         saveSettings();
+        done = true;
     }
+    // Betaflight's FPV camera angle follows the uptilt (FPV ANGLE MIX mode)
+    m_cameraAnglePending |= done;
+    bool armed = false;
+    if (m_cameraAnglePending && L.droneExists) {
+        FlightSnapshot prev, cur;
+        double prevWall, curWall;
+        L.server->snapshots(prev, prevWall, cur, curWall);
+        armed = cur.armed;
+    }
+    if (m_cameraAnglePending && !armed) {
+        syncBetaflightCameraAngle();
+        m_cameraAnglePending = false;
+    }
+    if (m_cameraAnglePending) ImGui::TextDisabled("Betaflight's FPV camera angle follows when you disarm");
     sectionTitle("Chase camera");
     bool chaseDone = false;
     ImGui::SliderFloat("Distance behind (m)", &L.settings.chaseDistance, 0.5f, 6.0f, "%.1f");

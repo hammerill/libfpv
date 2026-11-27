@@ -31,6 +31,7 @@ public:
 
     CliResult cli(const std::string &script, std::string &output) override;
     void setDefaultDiff(const std::string &diff) override;
+    void setUserDefaults(const std::string &script) override;
     void selectPreset(const DronePreset &preset) override;
     void resetEeproms(bool all, const DronePreset &preset) override;
     void finishImport(const DronePreset &preset) override;

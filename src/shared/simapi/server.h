@@ -36,6 +36,7 @@ struct ServerConfig {
     std::string eepromDir;      // one Betaflight EEPROM per quad: <dir>/<preset file name>.eeprom
     DronePreset preset;         // the quad flown first
     std::string defaultDiff;    // fpv_set_default_betaflight_diff, applied to new EEPROMs
+    std::string userDefaults;   // the pilot's new-model defaults (filterDefaultsProfile), after defaultDiff
     bool configurator = true;   // Betaflight Configurator over WebSocket
     int configuratorPort = 5761;
     bool threaded = true;       // the real-time loop; false = manual stepping (fpv_step)
@@ -77,6 +78,7 @@ public:
     // --- Betaflight configuration ------------------------------------------------
     virtual CliResult cli(const std::string &script, std::string &output) = 0;
     virtual void setDefaultDiff(const std::string &diff) = 0;
+    virtual void setUserDefaults(const std::string &script) = 0;
     // Flies `preset` on its own EEPROM: switches to it (created with libfpv's
     // first-run setup if new), follows its camera's video system and
     // applies its physics.

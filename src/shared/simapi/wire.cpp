@@ -74,12 +74,12 @@ void get(Reader &r, DronePreset &p) {
 }
 
 void put(Writer &w, const ServerConfig &c) {
-    pack(w, c.eepromDir, c.preset, c.defaultDiff, c.configurator, c.configuratorPort, c.threaded, c.simRateHz,
-         c.autoPauseSeconds);
+    pack(w, c.eepromDir, c.preset, c.defaultDiff, c.userDefaults, c.configurator, c.configuratorPort, c.threaded,
+         c.simRateHz, c.autoPauseSeconds);
 }
 void get(Reader &r, ServerConfig &c) {
-    unpack(r, c.eepromDir, c.preset, c.defaultDiff, c.configurator, c.configuratorPort, c.threaded, c.simRateHz,
-           c.autoPauseSeconds);
+    unpack(r, c.eepromDir, c.preset, c.defaultDiff, c.userDefaults, c.configurator, c.configuratorPort, c.threaded,
+           c.simRateHz, c.autoPauseSeconds);
 }
 
 void put(Writer &w, const WindState &s) { pack(w, s.on, s.mean, s.convection, s.sigma, s.lengthScale, s.sources); }

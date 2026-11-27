@@ -45,6 +45,7 @@ enum Op : uint16_t {
     // Betaflight configuration
     kCli,  // reply: result, output
     kSetDefaultDiff,
+    kSetUserDefaults,
     kSelectPreset,
     kResetEeproms,
     kFinishImport,
