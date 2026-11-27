@@ -1514,6 +1514,22 @@ void Overlay::tabCamera() {
         L.settings.cameraFisheye = Settings{}.cameraFisheye;
         saveSettings();
     }
+    sectionTitle("Chase camera");
+    bool chaseDone = false;
+    ImGui::SliderFloat("Distance behind (m)", &L.settings.chaseDistance, 0.5f, 6.0f, "%.1f");
+    chaseDone |= ImGui::IsItemDeactivatedAfterEdit();
+    ImGui::SliderFloat("Height above (m)", &L.settings.chaseHeight, 0.0f, 3.0f, "%.2f");
+    chaseDone |= ImGui::IsItemDeactivatedAfterEdit();
+    ImGui::SliderFloat("Follow (higher: tighter on the heading)", &L.settings.chaseFollow, 1.0f, 30.0f, "%.0f");
+    chaseDone |= ImGui::IsItemDeactivatedAfterEdit();
+    if (chaseDone) saveSettings();
+    if (ImGui::Button("Chase camera defaults")) {
+        const Settings d;
+        L.settings.chaseDistance = d.chaseDistance;
+        L.settings.chaseHeight = d.chaseHeight;
+        L.settings.chaseFollow = d.chaseFollow;
+        saveSettings();
+    }
     sectionTitle("Sound");
     if (ImGui::SliderFloat("Motor sound volume", &L.settings.audioVolume, 0, 1.5f)) fpv_audio_set_volume(L.settings.audioVolume);
     if (ImGui::IsItemDeactivatedAfterEdit()) saveSettings();

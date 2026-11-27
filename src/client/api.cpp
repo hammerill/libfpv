@@ -67,6 +67,9 @@ void loadSettings() {
         s.chaseSmoothing = j.value("chaseSmoothing", s.chaseSmoothing);
         s.videoNoise = j.value("videoNoise", s.videoNoise);
         s.videoResolution = j.value("videoResolution", s.videoResolution);
+        s.chaseDistance = j.value("chaseDistance", s.chaseDistance);
+        s.chaseHeight = j.value("chaseHeight", s.chaseHeight);
+        s.chaseFollow = j.value("chaseFollow", s.chaseFollow);
         // "auto", "on" or "off"; older versions stored a bool (off by default)
         auto hover = j.find("keyboardHover");
         if (hover != j.end() && hover->is_string()) {
@@ -141,6 +144,9 @@ void saveSettings() {
               {"chaseSmoothing", s.chaseSmoothing},
               {"videoNoise", s.videoNoise},
               {"videoResolution", s.videoResolution},
+              {"chaseDistance", s.chaseDistance},
+              {"chaseHeight", s.chaseHeight},
+              {"chaseFollow", s.chaseFollow},
               {"keyboardHover", s.keyboardHover == KeyboardHover::On    ? "on"
                                 : s.keyboardHover == KeyboardHover::Off ? "off"
                                                                         : "auto"},
