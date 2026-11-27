@@ -1,0 +1,13 @@
+// libfpv - libfpv.dll's version info (src/shared/version.rc).
+// SPDX-License-Identifier: GPL-3.0-or-later OR MIT
+#define LIBFPV_RC_FILE_DESCRIPTION "libfpv: FPV drone simulator library"
+#define LIBFPV_RC_FILE_NAME "libfpv.dll"
+#define LIBFPV_RC_FILE_TYPE VFT_DLL
+#if defined(LIBFPV_SPLIT_PROCESS)
+// the client side only: the simulation is in libfpv-server
+#define LIBFPV_RC_LICENSE "GPL-3.0-or-later OR MIT."
+#else
+// the simulation (Betaflight, SimITL) inside
+#define LIBFPV_RC_LICENSE "GPL-3.0-or-later."
+#endif
+#include "version.rc"

@@ -1122,6 +1122,91 @@ cfg.host_url   = "https://libfpv.com/games/gtaiv";  /* where players get it, rep
   empty the section is hidden.
 - Older hosts (a smaller `struct_size`) keep working and show no section.
 
+## Version info in the binaries
+
+On Windows, give every binary the mod builds (its DLL, ASI or EXE) a
+`VERSIONINFO` resource. libfpv's own `libfpv.dll` and `libfpv-server.exe`
+already have theirs (`src/shared/version.rc`). That's what the
+Details tab of a file's Properties shows, and antivirus programs read it too.
+An unsigned DLL that hooks a game, built with MinGW and carrying no version
+info, looks a lot like malware to machine-learning scanners. rdr2-fpv's
+release ZIP was flagged as `W32.Malware.<hex>` by one of VirusTotal's
+engines while its binaries had none. Version info doesn't guarantee a
+clean scan (code signing helps the most), but it costs one small file.
+
+- Write one shared `.rc` file, plus a three-line `.rc` per binary that
+  defines that binary's description and file name and then includes the
+  shared one. rdr2-fpv's `src/common/version.rc` is a complete example:
+
+  ```rc
+  // src/core/core.rc
+  #define MOD_FILE_DESCRIPTION "libfpv for Red Dead Redemption 2"
+  #define MOD_FILE_NAME "libfpv_rdr2.dll"
+  #include "version.rc"
+  ```
+
+  ```rc
+  // src/common/version.rc
+  #include <winver.h>
+  #include "build_info.h"   /* MOD_BUILD, MOD_BUILD_NUMBER */
+
+  VS_VERSION_INFO VERSIONINFO
+  FILEVERSION     MOD_BUILD_NUMBER, 0, 0, 0
+  PRODUCTVERSION  MOD_BUILD_NUMBER, 0, 0, 0
+  FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+  FILEFLAGS       0
+  FILEOS          VOS_NT_WINDOWS32
+  FILETYPE        VFT_DLL           /* VFT_APP for an EXE */
+  FILESUBTYPE     VFT2_UNKNOWN
+  BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+      BLOCK "040904b0"
+      BEGIN
+        VALUE "CompanyName",      "libfpv"
+        VALUE "FileDescription",  MOD_FILE_DESCRIPTION
+        VALUE "FileVersion",      MOD_BUILD
+        VALUE "InternalName",     MOD_FILE_NAME
+        VALUE "OriginalFilename", MOD_FILE_NAME
+        VALUE "ProductName",      "libfpv for Red Dead Redemption 2"
+        VALUE "ProductVersion",   MOD_BUILD
+        VALUE "LegalCopyright",   "Copyright (c) 2026 <the mod's authors>. MIT License."
+        VALUE "Comments",         "<what the mod is>. <the mod's page>"
+      END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+      VALUE "Translation", 0x409, 1200
+    END
+  END
+  ```
+
+- Fill it from the same generated header as `cfg.host_build` ("The About
+  tab" above). `FileVersion` and `ProductVersion` take that same string, so
+  the Properties dialog and the About tab never disagree. `FILEVERSION` has
+  to be four numbers, so generate a number too (the CI build number, 0 for
+  a local build). That way no version is ever typed in by hand.
+- `ProductName` is the name players read (`libfpv for <the game's full
+  name>`, see "Label the mod `libfpv` inside the game" below).
+  `OriginalFilename` is the file's real name, and `LegalCopyright` names
+  the mod's own license holder. In `Comments`, use only a URL you've checked
+  loads (the same rule as `host_url`).
+- CMake: add `RC` to `project(...)` and the `.rc` files to the targets'
+  sources. The MinGW toolchain files find `windres`. Make each target depend
+  on the step that writes the header, and add the header's folder to its
+  include directories. CMake scans the `.rc` for includes, so a new commit
+  rebuilds the resource. If you pass `-Wall` or other GCC-only options,
+  wrap them in `$<$<COMPILE_LANGUAGE:C,CXX>:...>` so they don't reach
+  `windres`.
+- To check it, run `x86_64-w64-mingw32-objdump -p <file>`: the Resource
+  Directory entry should be non-zero. On Windows, Properties > Details
+  should show the fields.
+- If the release is still flagged, report it to the engine that flags it
+  (VirusTotal's "False Positive Contacts" page lists their addresses). Send
+  the file's SHA-256, the VirusTotal link and the detection name. Each
+  build has a new hash, so ask them to fix the detection itself, not just
+  to whitelist one file.
+
 ## Label the mod `libfpv` inside the game
 
 When the game or its mod system needs a name for your mod, use `libfpv`,

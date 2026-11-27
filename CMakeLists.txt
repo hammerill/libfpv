@@ -159,10 +159,13 @@ endif()
 set(_build_info_args
   -DSRC=${PROJECT_SOURCE_DIR} -DOUT=${LIBFPV_GEN_DIR}/build_info.cpp -DVERSION=${PROJECT_VERSION}
   -DBF_DIR=${BF_DIR} -DSIMITL_DIR=${SIMITL_DIR})
+if(WIN32)
+  list(APPEND _build_info_args -DOUT_RC=${LIBFPV_GEN_DIR}/build_info_rc.h)
+endif()
 execute_process(COMMAND ${CMAKE_COMMAND} ${_build_info_args} -P ${PROJECT_SOURCE_DIR}/cmake/BuildInfo.cmake)
 add_custom_target(libfpv_build_info
   COMMAND ${CMAKE_COMMAND} ${_build_info_args} -P ${PROJECT_SOURCE_DIR}/cmake/BuildInfo.cmake
-  BYPRODUCTS ${LIBFPV_GEN_DIR}/build_info.cpp
+  BYPRODUCTS ${LIBFPV_GEN_DIR}/build_info.cpp $<$<BOOL:${WIN32}>:${LIBFPV_GEN_DIR}/build_info_rc.h>
   COMMENT "libfpv: build references"
   VERBATIM)
 
@@ -183,6 +186,13 @@ endif()
 add_library(libfpv::fpv ALIAS fpv)
 add_dependencies(fpv libfpv_build_info)
 libfpv_part(fpv)
+if(WIN32)
+  # Version info in the DLL (src/shared/version.rc; docs/INTEGRATION.md,
+  # "Version info in the binaries")
+  enable_language(RC)
+  target_sources(fpv PRIVATE src/client/libfpv.rc)
+  target_include_directories(fpv PRIVATE ${LIBFPV_GEN_DIR})
+endif()
 set_target_properties(fpv PROPERTIES
   OUTPUT_NAME fpv
   VERSION ${PROJECT_VERSION}
@@ -300,6 +310,11 @@ if(LIBFPV_SPLIT_PROCESS)
   # starts it from there). GPL-3.0-or-later, like Betaflight.
   add_executable(libfpv-server src/server/main.cpp $<TARGET_OBJECTS:fpv_shared> $<TARGET_OBJECTS:fpv_server>)
   libfpv_part(libfpv-server)
+  if(WIN32)
+    target_sources(libfpv-server PRIVATE src/server/libfpv-server.rc)
+    target_include_directories(libfpv-server PRIVATE ${LIBFPV_GEN_DIR})
+    add_dependencies(libfpv-server libfpv_build_info)
+  endif()
   target_include_directories(libfpv-server PRIVATE
     ${PROJECT_SOURCE_DIR}/src/server
     ${PROJECT_SOURCE_DIR}/src/shared  # before SimITL's own util/ and sim/

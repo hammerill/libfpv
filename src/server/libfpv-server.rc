@@ -1,0 +1,7 @@
+// libfpv-server - libfpv-server.exe's version info (src/shared/version.rc).
+// SPDX-License-Identifier: GPL-3.0-or-later
+#define LIBFPV_RC_FILE_DESCRIPTION "libfpv-server: the FPV drone simulation (Betaflight) for libfpv"
+#define LIBFPV_RC_FILE_NAME "libfpv-server.exe"
+#define LIBFPV_RC_FILE_TYPE VFT_APP
+#define LIBFPV_RC_LICENSE "GPL-3.0-or-later."
+#include "version.rc"
