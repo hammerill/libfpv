@@ -1895,8 +1895,13 @@ void Overlay::buildUi() {
         flags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                  ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus;
     } else {
-        ImGui::SetNextWindowPos(ImVec2(m_w * 0.5f, m_h * 0.5f), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-        ImGui::SetNextWindowSize(size, ImGuiCond_Appearing);
+        // Appearing alone would keep the embedded mode's full size: ImGui
+        // runs no frames while the overlay is closed, so it never sees the
+        // window disappear
+        ImGuiCond cond = m_placeWindow ? ImGuiCond_Always : ImGuiCond_Appearing;
+        m_placeWindow = false;
+        ImGui::SetNextWindowPos(ImVec2(m_w * 0.5f, m_h * 0.5f), cond, ImVec2(0.5f, 0.5f));
+        ImGui::SetNextWindowSize(size, cond);
     }
     if (ImGui::Begin("libfpv - FPV drone", m_embedded ? nullptr : &open, flags)) {
         if (ImGui::BeginTabBar("tabs")) {

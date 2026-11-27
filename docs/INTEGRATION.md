@@ -1529,6 +1529,11 @@ hit. What worked in GTA IV:
   when the device is lost.
 - The game's present hook runs on the render thread, and the drone ticks on
   the script thread. Copy the frame under a mutex and draw from the copy.
+- If the overlay lives inside a panel of your own (ReShade's add-on
+  settings, for example), call `fpv_overlay_set_embedded(1)` and pass the
+  panel's size to `fpv_overlay_set_display`. The overlay then fills the
+  panel with no title bar, border or close button. Your panel opens and
+  closes it.
 - Hooks provided by a script hook can disappear: GTA IV's ScriptHook
   restarts every script thread when a save is loaded, and the D3D hook went
   with it (no OSD after "Load Game"). Detect the restart, and register the

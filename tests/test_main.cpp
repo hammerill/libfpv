@@ -6,6 +6,7 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -268,6 +269,44 @@ void testChaseCamera() {
         CHECK(std::fabs(above - c.above) < 0.05f, "%s: %.2f m above, want %.2f", c.what, above, c.above);
         s.destroy();
     }
+}
+
+// Embedded (fpv_overlay_set_embedded): the overlay fills the display area,
+// for a host that shows it inside its own panel. Off again, it is the
+// centred window.
+void testOverlayEmbedded() {
+    Session s;
+    float p[3] = {0, 0, 0};
+    s.spawn(p);
+    s.run(0.1f);
+    // the pixels the overlay's vertices cover: x1, y1, x2, y2
+    auto bounds = [](std::array<float, 4> &b) {
+        const fpv_draw_data *od = nullptr;
+        for (int i = 0; i < 3; i++) od = fpv_overlay_render(0.016f);
+        b = {1e9f, 1e9f, -1e9f, -1e9f};
+        for (uint32_t l = 0; od && l < od->list_count; l++)
+            for (uint32_t v = 0; v < od->lists[l].vertex_count; v++) {
+                const float *q = od->lists[l].vertices[v].pos;
+                b = {std::min(b[0], q[0]), std::min(b[1], q[1]), std::max(b[2], q[0]), std::max(b[3], q[1])};
+            }
+        return od != nullptr;
+    };
+    std::array<float, 4> b;
+    fpv_overlay_set_display(1280, 720, 1.0f);
+    fpv_overlay_set_embedded(1);
+    fpv_overlay_set_open(1);
+    CHECK(bounds(b), "embedded: renders");
+    CHECK(b[0] <= 1 && b[1] <= 1 && b[2] >= 1279 && b[3] >= 719, "embedded: fills the display, %.0f %.0f %.0f %.0f",
+          b[0], b[1], b[2], b[3]);
+    fpv_overlay_set_open(0);
+    fpv_overlay_render(0.016f);
+    fpv_overlay_set_embedded(0);
+    fpv_overlay_set_open(1);
+    CHECK(bounds(b), "window: renders");
+    CHECK(b[0] > 100 && b[2] < 1180 && std::fabs((b[0] + b[2]) * 0.5f - 640) < 2,
+          "window: centred, narrower than the display, %.0f %.0f %.0f %.0f", b[0], b[1], b[2], b[3]);
+    fpv_overlay_set_open(0);
+    s.destroy();
 }
 
 void testArmDisarm() {
@@ -4082,6 +4121,7 @@ int main(int argc, char **argv) {
         {"rc_link", testRcLink},
         {"camera_fov", testCameraFov},
         {"chase_camera", testChaseCamera},
+        {"overlay_embedded", testOverlayEmbedded},
         {"pinned", testPinned},
         {"terminate_reinit", testTerminateReinit},
         {"threaded", testThreadedMode},
