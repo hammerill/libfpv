@@ -327,7 +327,15 @@ says, with the log and F8 > About > "Copy build info" attached.
 
 **Author.** The user's own account uploads the mod and is its author; the
 credits name libfpv and Betaflight. Where a repository asks about
-AI-generated content (art, sound, code), answer it truthfully.
+AI-generated content (art, sound, code), answer it truthfully. For a
+libfpv integration the level is "AI-assisted", and when the form asks
+"Describe how AI assisted you", the answer is:
+
+> The core libfpv integration is AI-driven. The libfpv integration spec is
+> defined and constantly updated by a human; as well as testing, polishing
+> and debugging.
+
+Mention any AI-generated art or sound in the mod on top of that.
 
 ### "Prepare for publishing on mod repos"
 
@@ -355,10 +363,16 @@ forms, so filling them in is copy and paste:
    user hasn't given any footage, do everything else and ask for it at the
    end; don't make or generate any.
 4. **Reply with:**
-   - a table of the one-line fields, one row per field (title, title with
-     the game's name, Thunderstore name, summary and its length, version,
-     file name, file description, category, tags, requirements, links,
-     author), with a column per repository where they differ;
+   - a table of the short fields, one row per field (title, title with
+     the game's name, Thunderstore name, version, file name, file
+     description, category, tags, requirements, links, author, AI level),
+     with a column per repository where they differ;
+   - every field that is a sentence or longer, or may need more than one
+     line, outside the table, each in its own code block under its field's
+     name: the summary (with its length), the AI answer above, and
+     anything else of that kind. Text in a table cell wraps across cells
+     and can't be copied cleanly from a terminal (Claude Code's CLI, for
+     one), while a code block copies as one piece;
    - the description in its own code blocks, because a table can't hold
      it: one in BBCode (Nexus Mods, Steam Workshop) and one in Markdown
      (mod.io, Thunderstore's README);
