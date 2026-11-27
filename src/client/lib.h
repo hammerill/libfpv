@@ -212,6 +212,12 @@ struct Lib {
     // linked portals (fpv_portals_set), internal frame
     std::vector<PortalLink> portals;
     uint32_t seenTeleports = 0;  // the snapshot's count at the last tick
+    // Where fpv_drone_create or fpv_drone_reset last placed the drone
+    // (internal frame), and the latest snapshot's simTime just after. Until
+    // the server steps, its snapshots still show the old drone or spot.
+    Vec3 placedPos;
+    Quat placedRot;
+    double placedSnapTime = -1;
 
     // host buttons in the Fly tab (fpv_overlay_set_action)
     struct HostAction {
@@ -291,6 +297,9 @@ constexpr float kPilotEarHeight = 1.6f;  // m above the pilot's feet: the LOS ey
 bool hearsFromPilot();
 Vec3 earPosition();
 bool audioPulled();
+
+// The host's raycast hits around the drone as collision planes (frame.cpp).
+void refreshRaycastProxies(const FlightSnapshot &s);
 
 // Pushes the simulation options (battery drain, damage) to the flight model.
 void applySimOptions();

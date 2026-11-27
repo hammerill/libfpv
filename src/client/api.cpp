@@ -806,6 +806,29 @@ FPV_API fpv_result fpv_surface_object_delete(uint32_t id) {
     return FPV_OK;
 }
 
+// Collision planes around a drone placed at `at` (internal units). Cast
+// before the server spawns or moves it there: with libfpv-server the planes
+// are a message, and the drone must not step without them.
+static void proxiesAt(Vec3 at, Quat rot) {
+    FlightSnapshot s;
+    s.active = true;
+    s.pos = at;
+    s.rot = rot;
+    refreshRaycastProxies(s);
+}
+
+// After the server placed the drone at `at`: fpv_drone_tick keeps the planes
+// cast there until the snapshots show the drone stepped.
+static void notePlaced(Vec3 at, Quat rot) {
+    Lib &L = lib();
+    FlightSnapshot prev, cur;
+    double prevWall, curWall;
+    L.server->snapshots(prev, prevWall, cur, curWall);
+    L.placedPos = at;
+    L.placedRot = rot;
+    L.placedSnapTime = cur.simTime;
+}
+
 static void setRaycast(fpv_raycast_fn cb, fpv_raycast_ex_fn cbEx, void *user) {
     Lib &L = lib();
     std::lock_guard<std::recursive_mutex> lock(L.mutex);
@@ -815,6 +838,16 @@ static void setRaycast(fpv_raycast_fn cb, fpv_raycast_ex_fn cbEx, void *user) {
     if (!cb && !cbEx) {
         L.world.setProxyPlanes({});
         if (L.server) L.server->worldSetProxyPlanes({}, {});
+    } else if (L.droneExists) {
+        // the planes now, not at the next fpv_drone_tick: the drone may
+        // already be falling
+        FlightSnapshot prev, cur;
+        double prevWall, curWall;
+        L.server->snapshots(prev, prevWall, cur, curWall);
+        if (cur.simTime == L.placedSnapTime)
+            proxiesAt(L.placedPos, L.placedRot);  // not stepped since it was placed
+        else
+            refreshRaycastProxies(cur);
     }
 }
 
@@ -856,7 +889,14 @@ FPV_API fpv_result fpv_drone_create(const fpv_drone_desc *descIn, fpv_drone **ou
     Quat rot = L.conv.rotToInternal(rotH);
     Vec3 pilotH{desc.pilot_position[0], desc.pilot_position[1], desc.pilot_position[2]};
     Vec3 pilot = length2(pilotH) > 0 ? L.conv.posToInternal(pilotH) : pos;
+    // the ground under the new drone before it steps: the first
+    // fpv_drone_tick can come late (the host sets up its camera, the game
+    // hitches), and a drone that falls through meanwhile never finds the
+    // ground again. Around the spawn point: the drone rests a few cm above
+    // it, and the rays reach at least 2 m.
+    proxiesAt(pos, rot);
     L.server->spawn(currentPreset(), pos, rot, pilot);
+    notePlaced(pos, rot);
     L.droneExists = true;
     L.pilotPos = pilot;
     L.spawnPos = pos;
@@ -894,10 +934,16 @@ FPV_API fpv_result fpv_drone_reset(fpv_drone *d, const float position[3], const 
         fwd.y = 0;
         rot = lookRotation(length2(fwd) > 1e-6f ? fwd : Vec3{0, 0, 1}, {0, 1, 0});
     }
+    // the host's hits around the old spot are gone: the planes around the
+    // new one, before the drone steps there
+    if (L.hasHostRaycast()) {
+        proxiesAt(pos, rot);
+    } else {
+        L.world.setProxyPlanes({});
+        L.server->worldSetProxyPlanes({}, {});
+    }
     L.server->reset(pos, rot);
-    // the host's hits around the old spot; the next tick casts anew
-    L.world.setProxyPlanes({});
-    L.server->worldSetProxyPlanes({}, {});
+    notePlaced(pos, rot);
     L.chaseValid = false;
     L.windProbe.reset();
     return FPV_OK;

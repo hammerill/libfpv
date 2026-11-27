@@ -309,6 +309,108 @@ void testOverlayEmbedded() {
     s.destroy();
 }
 
+// Host ground at y = 50 (Y up), only through the raycast callback.
+static int raycastLedge(void *, const float o[3], const float d[3], float maxDist, fpv_raycast_hit *hit) {
+    if (d[1] >= 0 || o[1] < 50) return 0;
+    float t = (o[1] - 50) / -d[1];
+    if (t > maxDist) return 0;
+    *hit = fpv_raycast_hit{};
+    hit->distance = t;
+    hit->normal[1] = 1;
+    return 1;
+}
+
+// The same ground through the extended callback.
+static int raycastLedgeEx(void *u, const float o[3], const float d[3], float maxDist, fpv_raycast_hit_ex *hit) {
+    return raycastLedge(u, o, d, maxDist, &hit->hit);
+}
+
+// The host's first fpv_drone_tick can come late (it sets up its camera, the
+// game hitches). The sim must already stand the drone on the raycast ground,
+// whether the callback was set before or after fpv_drone_create, and through
+// fpv_world_set_raycast_callback_ex too (gtaiv-fpv sets that one after it).
+void testRaycastGroundAtSpawn() {
+    const char *how[] = {"callback set before create", "callback set after create", "_ex callback set after create"};
+    for (int c = 0; c < 3; c++) {
+        if (c == 0) fpv_world_set_raycast_callback(raycastLedge, nullptr);
+        Session s;
+        float p[3] = {0, 50, 0};
+        s.spawn(p);
+        if (c == 1) fpv_world_set_raycast_callback(raycastLedge, nullptr);
+        if (c == 2) fpv_world_set_raycast_callback_ex(raycastLedgeEx, nullptr);
+        s.rc.send();  // disarmed, not the previous test's sticks
+        for (int i = 0; i < 50; i++) fpv_step(0.01f);  // 0.5 s with no tick
+        s.run(1.0f);
+        CHECK(std::fabs(s.f.position[1] - 50) < 0.1f, "%s: rests at y %.2f", how[c], s.f.position[1]);
+        s.destroy();
+        fpv_world_set_raycast_callback(nullptr, nullptr);
+    }
+}
+
+// The ground streams in late (gtaiv-fpv after a far respawn): the host holds
+// the drone on its spawn with fpv_drone_reset every tick, before
+// fpv_drone_tick, until its own probe finds the ground. Then it rests there.
+static bool g_ledgeLoaded = false;
+static int raycastLedgeLate(void *u, const float o[3], const float d[3], float maxDist, fpv_raycast_hit_ex *hit) {
+    return g_ledgeLoaded ? raycastLedgeEx(u, o, d, maxDist, hit) : 0;
+}
+
+void testRaycastGroundHeldByReset() {
+    g_ledgeLoaded = false;
+    Session s;
+    float p[3] = {0, 50, 0};
+    s.spawn(p);
+    fpv_world_set_raycast_callback_ex(raycastLedgeLate, nullptr);
+    s.rc.send();
+    for (int i = 0; i < 50; i++) {
+        if (i == 30) g_ledgeLoaded = true;
+        fpv_step(0.01f);
+        if (i <= 30) fpv_drone_reset(s.drone, p, nullptr);  // held until the ground is there
+        fpv_drone_tick(s.drone, 0.01f, &s.f);
+    }
+    s.run(1.0f);
+    CHECK(std::fabs(s.f.position[1] - 50) < 0.1f, "rests on the late ground at y %.2f", s.f.position[1]);
+    s.destroy();
+    fpv_world_set_raycast_callback(nullptr, nullptr);
+    g_ledgeLoaded = false;
+}
+
+// Where each of the host's rays started.
+static std::vector<std::array<float, 3>> g_rayFrom;
+static int raycastLedgeLogged(void *u, const float o[3], const float d[3], float maxDist, fpv_raycast_hit *hit) {
+    g_rayFrom.push_back({o[0], o[1], o[2]});
+    return raycastLedge(u, o, d, maxDist, hit);
+}
+
+// A drone deleted and created again 100 m away: until the server steps the
+// new drone, its snapshot is still the old drone's. The first fpv_drone_tick
+// must keep the planes cast at the new spot, not cast them at the old one.
+void testRaycastGroundAfterRecreate() {
+    fpv_world_set_raycast_callback(raycastLedgeLogged, nullptr);
+    Session s;
+    float a[3] = {0, 50, 0};
+    s.spawn(a);
+    s.rc.send();
+    s.run(0.5f);
+    s.destroy();
+    g_rayFrom.clear();
+    float b[3] = {100, 50, 0};
+    s.spawn(b);
+    size_t atCreate = g_rayFrom.size();
+    fpv_drone_tick(s.drone, 0.01f, &s.f);  // before any step
+    int stale = 0;
+    for (auto &o : g_rayFrom)
+        if (std::fabs(o[0] - 100) > 5) stale++;
+    CHECK(atCreate > 0, "fpv_drone_create casts the planes");
+    CHECK(stale == 0, "%d of %zu rays start at the old drone", stale, g_rayFrom.size());
+    s.run(1.0f);
+    CHECK(std::fabs(s.f.position[0] - 100) < 1 && std::fabs(s.f.position[1] - 50) < 0.1f,
+          "rests at the new spot: x %.2f, y %.2f", s.f.position[0], s.f.position[1]);
+    s.destroy();
+    fpv_world_set_raycast_callback(nullptr, nullptr);
+    g_rayFrom.clear();
+}
+
 void testArmDisarm() {
     Host h(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1));
     loadWorld(makeLevel(h, 100, 0));
@@ -4122,6 +4224,9 @@ int main(int argc, char **argv) {
         {"camera_fov", testCameraFov},
         {"chase_camera", testChaseCamera},
         {"overlay_embedded", testOverlayEmbedded},
+        {"raycast_ground_at_spawn", testRaycastGroundAtSpawn},
+        {"raycast_ground_after_recreate", testRaycastGroundAfterRecreate},
+        {"raycast_ground_held_by_reset", testRaycastGroundHeldByReset},
         {"pinned", testPinned},
         {"terminate_reinit", testTerminateReinit},
         {"threaded", testThreadedMode},

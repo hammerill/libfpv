@@ -1447,7 +1447,12 @@ move (see "Moving surfaces").
   `kind << 28 | handle` (ped, vehicle, object, building). libfpv returns
   the id in `frame.impacts`, so the game can react to the right entity.
 - The callback runs on the host thread inside `fpv_drone_tick`, so engine
-  calls that must be made on the game thread are safe there.
+  calls that must be made on the game thread are safe there. It also runs
+  inside `fpv_drone_create`, `fpv_drone_reset` and
+  `fpv_world_set_raycast_callback` (or `_ex`, once a drone exists), so the
+  drone has ground under it before its first tick. Call these where your
+  engine's line test already works: with the world loaded, not from another
+  thread or mid-physics-step.
 - The same raycast is useful outside libfpv: for the near plane, for
   placing the character at "move here", and for logging a probe sweep
   around the spawn to check it works.

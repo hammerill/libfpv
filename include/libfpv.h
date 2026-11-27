@@ -322,9 +322,12 @@ FPV_API fpv_result fpv_surface_object_move(uint32_t object_id, const fpv_transfo
 FPV_API fpv_result fpv_surface_object_delete(uint32_t object_id);
 
 /* Optional, for worlds too large or too dynamic to export as triangles.
- * Called on the host thread inside fpv_drone_tick() (never on the
- * simulation thread). Each hit becomes a temporary collision plane around
- * the drone until the next tick. Return non-zero on hit. */
+ * Called on the host thread (never on the simulation thread): inside
+ * fpv_drone_tick(), and also inside fpv_drone_create(), fpv_drone_reset()
+ * and fpv_world_set_raycast_callback() (or _ex) while a drone exists, to put
+ * ground under the drone before its first tick. Each hit becomes a temporary
+ * collision plane around the drone until the next cast. Return non-zero
+ * on hit. */
 typedef struct fpv_raycast_hit {
     float distance;    /* host units along the ray */
     float normal[3];   /* host coords, facing the ray origin */
