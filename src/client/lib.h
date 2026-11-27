@@ -264,6 +264,9 @@ void saveSettings();
 
 // Preset handling, called with the API mutex held.
 const DronePreset &currentPreset();
+// Betaflight's fpv_mix_degrees from the camera uptilt setting (the CLI
+// through the server). Saving suspends RX briefly: disarm first.
+void syncBetaflightCameraAngle();
 // The OSD rows the current quad's video shows (13 when its camera preset asks
 // for NTSC's 13 rows, else FPV_OSD_ROWS).
 int osdVisibleRows();

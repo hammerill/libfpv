@@ -118,6 +118,7 @@ std::string betaflightFirstRunScript(bool ntsc) {
     s << modeLine(4, kAirModeSwitch) << "\n";  // AIR MODE on AUX5 high
     s << modeLine(5, kOsdSwitch) << "\n";      // OSD DISABLE on AUX6 high
     s << "set crashflip_rate = 30\n";   // turtle cuts power past ~90 deg and fast spins
+    s << "set small_angle = 180\n";     // arms at any attitude, upside down too
     s << "set vcd_video_system = " << (ntsc ? "NTSC" : "PAL") << "\n";
     s << betaflightOsdLayout(ntsc);
     s << "set craft_name = LIBFPV\n";

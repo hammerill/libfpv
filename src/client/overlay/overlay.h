@@ -110,6 +110,7 @@ private:
         std::string saved;   // its date
         std::string message;
     } m_defaults;
+    bool m_cameraAnglePending = false;  // the uptilt changed in flight
     int m_rateAxis = 0;
     bool m_rebindingToggle = false;
     std::string m_rebindingControl;  // the game control whose key is being changed

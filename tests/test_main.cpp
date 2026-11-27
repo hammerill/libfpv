@@ -436,9 +436,14 @@ void testNewModelDefaults() {
     float p[3] = {0, 0, 0};
     s.spawn(p, "propeater-5");  // a new EEPROM, set up for the first time; an HD camera, not NTSC
     s.run(0.5f);
-    CHECK(fpv_cli_exec("get craft_name\nget osd_vbat_pos\nget p_roll\nget vcd_video_system\naux\n", &o) == FPV_OK, "get");
+    CHECK(fpv_cli_exec("get craft_name\nget osd_vbat_pos\nget p_roll\nget vcd_video_system\nget small_angle\n"
+                       "get fpv_mix_degrees\naux\n", &o) == FPV_OK, "get");
     std::string got = o ? o : "";
     fpv_free(o);
+    // libfpv's own first run: arms at any attitude; Betaflight's FPV camera angle is the uptilt
+    CHECK(got.find("small_angle = 180") != std::string::npos, "small_angle");
+    size_t mix = got.find("fpv_mix_degrees = ");
+    CHECK(mix != std::string::npos && std::atoi(got.c_str() + mix + 18) > 0, "fpv_mix_degrees from the uptilt");
     CHECK(got.find("craft_name = DEFTEST") != std::string::npos, "name: %s", got.c_str());
     CHECK(got.find("osd_vbat_pos = 2085") != std::string::npos, "OSD element");
     CHECK(got.find("aux 7 13 3 1300 1500 0 0") != std::string::npos, "BEEPER switch");

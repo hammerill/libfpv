@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later OR MIT
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -215,6 +216,21 @@ bool osdNtscLines() {
     return !p.vtx.digital && p.camera.system == FPV_VIDEO_NTSC;
 }
 
+// Betaflight's FPV camera angle (fpv_mix_degrees, the Configurator's "FPV
+// Camera Angle", 0-90, used by FPV ANGLE MIX mode) follows libfpv's camera
+// uptilt, whose slider goes to 70. Saved only when it differs.
+void syncBetaflightCameraAngle() {
+    Lib &L = lib();
+    const DronePreset &p = currentPreset();
+    float tilt = L.settings.cameraUptilt >= 0 ? L.settings.cameraUptilt : p.camera.uptiltDeg;
+    int deg = std::clamp((int)std::lround(tilt), 0, 90);
+    std::string out;
+    if (L.server->cli("get fpv_mix_degrees\n", out) != CliResult::Ok) return;
+    size_t at = out.find("fpv_mix_degrees = ");
+    if (at != std::string::npos && std::atoi(out.c_str() + at + 18) == deg) return;
+    L.server->cli("set fpv_mix_degrees = " + std::to_string(deg) + "\nsave noreboot\n", out);
+}
+
 fpv_result selectPreset(const std::string &key, bool applyToFlight) {
     Lib &L = lib();
     int idx = key.empty() ? L.presetIndex : findPreset(key);
@@ -222,7 +238,10 @@ fpv_result selectPreset(const std::string &key, bool applyToFlight) {
     L.presetIndex = idx;
     L.settings.preset = L.presets[idx].fileName;
     saveSettings();
-    if (applyToFlight) L.server->selectPreset(L.presets[idx]);
+    if (applyToFlight) {
+        L.server->selectPreset(L.presets[idx]);
+        syncBetaflightCameraAngle();  // the quad's own EEPROM
+    }
 #if defined(LIBFPV_KAMIKAZE)
     applyKamikazeSettings();  // the bomb is per quad
 #endif
@@ -649,6 +668,7 @@ FPV_API fpv_result fpv_global_init(const fpv_global_config *cfgIn) {
     if (!L.server->start(sc, serverError))
         return setError(FPV_ERROR_IO, "the simulation server did not start: %s", serverError.c_str());
     L.armingFlagNames = L.server->armingDisableFlagNames();
+    syncBetaflightCameraAngle();  // settings.json may have changed since the EEPROM was saved
 
     if (!(cfg.flags & FPV_INIT_NO_DEVICE_INPUT)) {
         std::string inputErr;
@@ -904,6 +924,7 @@ FPV_API fpv_result fpv_drone_create(const fpv_drone_desc *descIn, fpv_drone **ou
     // it, and the rays reach at least 2 m.
     proxiesAt(pos, rot);
     L.server->spawn(currentPreset(), pos, rot, pilot);
+    syncBetaflightCameraAngle();  // the spawn may have switched to another quad's EEPROM
     notePlaced(pos, rot);
     L.droneExists = true;
     L.pilotPos = pilot;
