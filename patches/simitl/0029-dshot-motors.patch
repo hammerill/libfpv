@@ -1,0 +1,164 @@
+diff --git a/extern/betaflightext/src/main/target/simITL/target.c b/extern/betaflightext/src/main/target/simITL/target.c
+index f69c665..4aaf596 100644
+--- a/extern/betaflightext/src/main/target/simITL/target.c
++++ b/extern/betaflightext/src/main/target/simITL/target.c
+@@ -33,6 +33,7 @@
+ #include "drivers/io.h"
+ #include "drivers/dma.h"
+ #include "drivers/dshot.h"
++#include "drivers/dshot_command.h"
+ #include "drivers/motor_impl.h"
+ #include "drivers/serial.h"
+ #include "drivers/serial_tcp.h"
+@@ -250,7 +251,8 @@ bool motorPwmDevInit(motorDevice_t *device, const motorDevConfig_t *motorConfig,
+   const uint8_t motorCount = device->count;
+   pwmMotorCount = device->count;
+ #ifdef USE_DSHOT_TELEMETRY
+-  dshotMotorCount = device->count;  // libfpv: rpm telemetry for each
++  dshotMotorCount = device->count;
++  useDshotTelemetry = false;  // libfpv: analog ESCs send no rpm
+ #endif
+   printf("Initialized motor count %d\n", motorCount);
+ 
+@@ -522,9 +524,10 @@ int IO_GPIOPortIdx(IO_t io)
+     return (((size_t)IO_GPIO(io) - GPIOA_BASE) >> 10);
+ }
+ 
+-// libfpv: every simulated ESC sends its rpm back, like bidirectional DShot
+-// (simSetMotorRpm), whatever the motor protocol
+-bool useDshotTelemetry = true;
++// libfpv: the simulated ESCs send their rpm back (simSetMotorRpm) when
++// Betaflight drives them with bidirectional DShot (dshot_bidir = ON), as
++// real ones do. dshotPwmDevInit sets it at boot.
++bool useDshotTelemetry = false;
+ 
+ #ifdef USE_DSHOT_TELEMETRY
+ // The telemetry frame an ESC would send for a motor at `rpm`: the
+@@ -548,19 +551,13 @@ static uint16_t erpmTelemetryValue(float rpm)
+     return (uint16_t)((e << 9) | period);
+ }
+ 
+-// DShot itself has no simulated driver: the motors run on PWM (libfpv's
+-// default protocol) and only the telemetry is DShot's.
+-dshotTelemetryCycleCounters_t dshotDMAHandlerCycleCounters;
+-
+-bool dshotPwmDevInit(motorDevice_t *device, const motorDevConfig_t *motorConfig)
+-{
+-    UNUSED(device);
+-    UNUSED(motorConfig);
+-    return false;
+-}
++dshotTelemetryCycleCounters_t dshotDMAHandlerCycleCounters;  // no DMA (CLI dshot_telemetry_info)
+ 
+ void simSetMotorRpm(const float *rpm, int count)
+ {
++    if (!useDshotTelemetry) {
++        return;  // no bidirectional DShot: the ESCs send nothing back
++    }
+     for (int i = 0; i < count && i < MAX_SUPPORTED_MOTORS; i++) {
+         dshotTelemetryState.motorState[i].rawValue = erpmTelemetryValue(rpm[i]);
+     }
+@@ -572,4 +569,101 @@ void simSetMotorRpm(const float *rpm, int count)
+     UNUSED(rpm);
+     UNUSED(count);
+ }
+-#endif
+\ No newline at end of file
++#endif
++
++#ifdef USE_DSHOT
++// libfpv: DShot ESCs. The simulator reads motorsPwm (0 to 1000) for every
++// protocol: a DShot throttle of 48 to 2047 maps onto it like PWM's 1000 to
++// 2000. DShot commands (0 to 47, spin direction, beacon...) stop the motor
++// while they are sent, and go out at Betaflight's pace (dshot_command.c),
++// as the platform DShot drivers send them: write() fills the frames,
++// updateComplete() sends them.
++static uint16_t dshotSimFrame[MAX_SUPPORTED_MOTORS];  // the frames to send
++static uint16_t dshotSimValue[MAX_SUPPORTED_MOTORS];  // the frames sent last
++
++static void dshotSimWriteInt(uint8_t index, uint16_t value)
++{
++    if (index >= MAX_SUPPORTED_MOTORS) {
++        return;
++    }
++    if (dshotCommandIsProcessing()) {
++        value = dshotCommandGetCurrent(index);
++    }
++    dshotSimFrame[index] = value;
++}
++
++static void dshotSimWrite(uint8_t index, float value)
++{
++    dshotSimWriteInt(index, lrintf(value));
++}
++
++static void dshotSimRequestTelemetry(unsigned index)
++{
++    UNUSED(index);  // the simulated ESCs answer every frame
++}
++
++static bool dshotSimIsMotorIdle(unsigned index)
++{
++    return index >= MAX_SUPPORTED_MOTORS || dshotSimValue[index] == DSHOT_CMD_MOTOR_STOP;
++}
++
++static bool dshotSimDecodeTelemetry(void)
++{
++    return true;  // simSetMotorRpm stores each step's telemetry frames
++}
++
++static void dshotSimCompleteUpdate(void)
++{
++    // a command sequence holds the frames back between its repeats
++    if (!dshotCommandQueueEmpty() && !dshotCommandOutputIsEnabled(pwmMotorCount)) {
++        return;
++    }
++    for (int i = 0; i < MAX_SUPPORTED_MOTORS && i < pwmMotorCount; i++) {
++        const uint16_t value = dshotSimFrame[i];
++        dshotSimValue[i] = value;
++        motorsPwm[i] = value < DSHOT_MIN_THROTTLE ? 0 : lrintf((value - DSHOT_MIN_THROTTLE) * 1000.0f / DSHOT_RANGE);
++    }
++}
++
++static const motorVTable_t dshotVTable = {
++  .postInit = motorPostInitNull,
++  .convertExternalToMotor = dshotConvertFromExternal,
++  .convertMotorToExternal = dshotConvertToExternal,
++  .enable = pwmEnableMotors,
++  .disable = pwmDisableMotors,
++  .isMotorEnabled = pwmIsMotorEnabled,
++  .decodeTelemetry = dshotSimDecodeTelemetry,
++  .write = dshotSimWrite,
++  .writeInt = dshotSimWriteInt,
++  .updateComplete = dshotSimCompleteUpdate,
++  .shutdown = pwmShutdownPulsesForAllMotors,
++  .requestTelemetry = dshotSimRequestTelemetry,
++  .isMotorIdle = dshotSimIsMotorIdle,
++  .getMotorIO = NULL,
++};
++
++bool dshotPwmDevInit(motorDevice_t *device, const motorDevConfig_t *devConfig)
++{
++    if (!device) {
++        return false;
++    }
++    device->vTable = &dshotVTable;
++    pwmMotorCount = device->count;
++#ifdef USE_DSHOT_TELEMETRY
++    dshotMotorCount = device->count;
++    useDshotTelemetry = devConfig->useDshotTelemetry;
++#else
++    UNUSED(devConfig);
++#endif
++    for (int i = 0; i < MAX_SUPPORTED_MOTORS; i++) {
++        dshotSimFrame[i] = DSHOT_CMD_MOTOR_STOP;
++        dshotSimValue[i] = DSHOT_CMD_MOTOR_STOP;
++        motorsPwm[i] = 0;
++    }
++    for (int motorIndex = 0; motorIndex < MAX_SUPPORTED_MOTORS && motorIndex < device->count; motorIndex++) {
++        pwmMotors[motorIndex].enabled = true;
++    }
++    printf("Initialized DShot motor count %d, bidirectional %s\n", device->count, devConfig->useDshotTelemetry ? "on" : "off");
++    return true;
++}
++#endif // USE_DSHOT

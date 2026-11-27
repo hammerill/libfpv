@@ -1512,8 +1512,15 @@ FPV_API void fpv_audio_set_listener(const float position[3], const float rotatio
  * CLI mode. */
 FPV_API fpv_result fpv_cli_exec(const char *commands, char **out_output);
 
+/* Betaflight's 8 debug values, as `debug_mode` (set with fpv_cli_exec) makes
+ * them: what the blackbox records as debug[0..7]. A diagnostic: with
+ * RPM_FILTER they are each motor's frequency in Hz, with GYRO_FILTERED the
+ * filtered gyro in deg/s. The value of the last simulation step. */
+FPV_API fpv_result fpv_betaflight_debug(int16_t out_values[8]);
+
 /* Imports a real quad's `diff all` (or `dump`): drops hardware-specific
- * lines, forces PWM and ARM on AUX1 (other modes kept on AUX2-4), applies
+ * lines, sets DShot600 with bidirectional DShot and ARM on AUX1 (other
+ * modes kept on AUX2-4), applies
  * the rest and saves. `out_report` (optional) lists what was skipped and
  * why. */
 FPV_API fpv_result fpv_import_betaflight_diff(const char *diff_text, char **out_report);

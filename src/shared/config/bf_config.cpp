@@ -69,13 +69,13 @@ std::string modeLine(int slot, ModeSwitch m) {
 }  // namespace
 
 namespace {
-// PWM with unsynced updates: with synced PWM, Betaflight slows the PID loop
-// down to the ESCs' 480 Hz (pid_process_denom), see D5. Right after any
-// `defaults`: Betaflight's default protocol is DShot, and a `profile` line
-// sets the mixer's output range for the protocol of that moment.
+// DShot600 with bidirectional DShot, as on a typical real quad: the
+// simulated ESCs then report their rpm, for dynamic idle and the RPM filter
+// (D38, D44). Right after any `defaults`: a `profile` line sets the mixer's
+// output range for the protocol of that moment.
 const char *const kMotorDefaults =
-    "set motor_pwm_protocol = PWM\n"
-    "set use_unsynced_pwm = ON\n";
+    "set motor_pwm_protocol = DSHOT600\n"
+    "set dshot_bidir = ON\n";
 }  // namespace
 
 std::string betaflightBaseDefaults() {
@@ -216,7 +216,6 @@ DiffImport buildDiffImport(const std::string &diffText, bool ntsc) {
         {"timer", "hardware timer assignment"},
         {"dma", "hardware DMA assignment"},
         {"serial", "serial ports: the simulator receives RC over MSP"},
-        {"beacon", "DShot beacon needs DShot ESCs"},
         {"vtxtable", "VTX frequency table: no video transmitter hardware"},
         {"vtx", "VTX channel switching: no video transmitter hardware"},
         {"led", "LED strip"},
@@ -241,11 +240,12 @@ DiffImport buildDiffImport(const std::string &diffText, bool ntsc) {
     };
     // `set` variables that are hardware specific (prefix match).
     static const std::vector<std::pair<std::string, const char *>> kSkipVars = {
-        {"motor_pwm_protocol", "forced to PWM, the only protocol the simulator drives"},
+        {"motor_pwm_protocol", "set by libfpv: DShot600"},
         {"motor_pwm_rate", "ESC hardware"},
+        {"dshot_bidir", "set by libfpv: bidirectional DShot on"},
         {"dshot_", "DShot ESC hardware"},
         {"motor_poles", "ESC telemetry hardware"},
-        {"use_unsynced_pwm", "forced on, with the PWM protocol"},
+        {"use_unsynced_pwm", "ESC hardware"},
         {"serialrx_", "receiver hardware: RC arrives over MSP"},
         {"rx_spi_", "receiver hardware"},
         {"spektrum_", "receiver hardware"},
@@ -463,7 +463,8 @@ std::string formatImportReport(const DiffImport &imp, const std::string &cliOutp
         r << "\nSwitches moved (flip these on your radio):\n";
         for (auto &m : imp.remapped) r << "  " << m << "\n";
     }
-    r << "\nAlways set by libfpv: motor protocol PWM, ARM on AUX1, no power-on arming delay, MSP receiver.\n";
+    r << "\nAlways set by libfpv: motor protocol DShot600 with bidirectional DShot, ARM on AUX1, no power-on arming "
+         "delay, MSP receiver.\n";
     if (!imp.skipped.empty()) {
         r << "\nSkipped " << imp.skipped.size() << " lines:\n";
         for (auto &l : imp.skipped) r << "  " << l << "\n";

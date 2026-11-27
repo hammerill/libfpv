@@ -104,7 +104,7 @@ for v1.
 * `0021-esc-rpm-telemetry.patch`: the simulated ESCs report each motor's
   rpm to Betaflight as bidirectional DShot does, so dynamic idle and the
   RPM filter work (D38). The SITL target compiles `USE_DSHOT` and its
-  telemetry; the motors still run on PWM.
+  telemetry. Patch `0029` adds the DShot ESCs.
 * `0022-esc-start-from-standstill.patch`: an ESC starting a stopped motor
   drives nothing for 0.12 s first (D38).
 * `0023-reversed-props-no-duct-thrust.patch`: props spun backwards (turtle
@@ -117,6 +117,9 @@ for v1.
   `USE_OSD` before it), so Betaflight has three OSD profiles like a real
   quad, and the CLI's `osd_profile_2_name`/`_3_name` point at
   Betaflight patch `0019`'s fields (D15).
+* `0029-dshot-motors.patch`: DShot ESCs for the simITL target. The rpm
+  telemetry of `0021` only comes back with bidirectional DShot
+  (`dshot_bidir = ON`), as from real ESCs (D44).
 
 ### D37. Client, server and shared code
 
@@ -267,18 +270,18 @@ reports "busy" instead of interleaving.
 
 Measured: a fresh EEPROM does not arm. There is no ARM mode, there is a 5 s
 power-on grace (`BOOTGRACE`), and gyro calibration (`CALIB`) takes about
-4 s of sim time. libfpv's defaults set `pwr_on_arm_grace = 0`, PWM, and
-`aux 0 0 0 1700 2100 0 0` (ARM on AUX1).
+4 s of sim time. libfpv's defaults set `pwr_on_arm_grace = 0`, DShot600
+with bidirectional DShot (D44), and `aux 0 0 0 1700 2100 0 0` (ARM on
+AUX1). The import puts the motor settings right after `defaults nosave`: a
+`profile` line computes the mixer's output range for the protocol of that
+moment.
 
-They also set `use_unsynced_pwm = ON`. Since the SITL build compiles DShot
-(D38), Betaflight's defaults are DShot600 and synced updates. With PWM and
-synced updates, its config validation raises `pid_process_denom` so the
-PID loop runs no faster than the ESCs' 480 Hz, and the quad wobbles at
-about 20 Hz. The import puts both settings right after `defaults nosave`:
-a `profile` line computes the mixer's output range for the protocol of that
-moment, and with DShot's range PWM motors stayed at zero. `ensureEssentials`
-turns unsynced PWM back on if it is off, with `pid_process_denom` back to
-its default.
+A pilot can still pick PWM. With PWM and synced updates, Betaflight's
+config validation raises `pid_process_denom` so the PID loop runs no faster
+than the ESCs' 480 Hz, and the quad wobbles at about 20 Hz. On PWM,
+`ensureEssentials` turns `use_unsynced_pwm` back on if it is off, with
+`pid_process_denom` back to its default. DShot is always synced and has no
+such limit.
 
 ### D6. Betaflight patches
 
@@ -323,6 +326,10 @@ its default.
   later OSD setting (alarms, displayport device, canvas) of an EEPROM
   saved with one profile; appended, `pgLoad` keeps them all and the new
   names start empty.
+* `0025-sitl-dshot-enable-time.patch`: in simulator builds the motors'
+  enable time is at least 1 ms. 0 means "not enabled", and the simulator's
+  clock reads 0 at its first boot, so DShot commands never started and
+  `BOOTGRACE` never cleared: a quad on DShot did not arm (D44).
 
 ### D7. One EEPROM per quad preset
 
@@ -996,6 +1003,63 @@ game's.
 **Reversing it** means dropping the probe block and the cut loop in
 `refreshRaycastProxies` (frame.cpp) and the `standsAt` checks in
 `CollisionWorld`; the movers are independent of them.
+
+### D44. DShot ESCs and the RPM filter
+
+The simulated ESCs take DShot (SimITL `0029`). A DShot throttle of 48 to
+2047 drives the simulator like PWM's 1000 to 2000. DShot commands stop the
+motor while they are sent and go out at Betaflight's pace, as the platform
+drivers send them. The ESCs do not act on the commands themselves: turtle
+mode still reverses the motors from `isCrashFlipModeActive()` (D21), and
+the beeper switch's beeps are libfpv's own (D31).
+
+**Telemetry.** The ESCs report their rpm (SimITL `0021`, D38) only with
+bidirectional DShot (`dshot_bidir = ON`), as real ESCs do. With
+`dshot_bidir = OFF` or PWM, Betaflight gets no rpm: no RPM filter, no
+dynamic idle, and `dshot_telemetry_info` says it is off.
+
+**Defaults.** The first-run setup, every preset and every import set
+DShot600 with bidirectional DShot, so the RPM filter and dynamic idle work
+without setup, as before. An EEPROM made by an older libfpv (PWM was
+forced) gets them once, with the EEPROM upgrade `dshot-bidir-6`. After
+that the pilot's choice stays: `ensureEssentials` accepts DShot with or
+without telemetry, and PWM. Other protocols (OneShot, MultiShot, brushed)
+go back to DShot600. A change of the protocol family or of `dshot_bidir`
+reboots Betaflight at the next `ensureEssentials` or import
+(`bfb_features_pending`), because the motor driver starts at boot.
+
+**Flight.** On `main` the motors ran on PWM with the rpm telemetry always
+on. On DShot with bidirectional DShot the same quads fly the same:
+`flight_realism` gives the freestyler-5 126 km/h (125 on PWM), the
+`air65_blackbox` idle 4470 rpm (4422).
+
+**Proof that the filter filters.** `fpv_betaflight_debug` (the
+`Server::debugValues` call) returns Betaflight's `debug[]`, as the blackbox
+records it. The `rpm_filter` test hovers the freestyler-5 for 2 s:
+
+* `debug_mode = RPM_FILTER`: each motor's notch frequency, 163 Hz, against
+  the simulated 162 rpm/60 (within 5 %).
+* `debug_mode = GYRO_FILTERED`, roll and pitch: 0.00 deg/s RMS with the
+  RPM filter, 1.0 to 1.3 deg/s with `rpm_filter_harmonics = 0`. SimITL adds gyro
+  noise at 1, 2 and 3 times the motor frequency, and the notches take it
+  out. The debug values are whole deg/s, so the filtered gyro rounds to 0.
+* `dshot_bidir = OFF`: no telemetry, and the quad still arms and hovers.
+
+**Top speed.** Since the rpm telemetry (D38) the freestyler-5 tops out at
+125 to 126 km/h. The gyro at full
+throttle, 80 degrees of tilt (GYRO_FILTERED, every 2 ms over 4 s):
+
+| | Top speed | Roll, RMS | Roll |
+|---|---|---|---|
+| RPM filter on, 2 ms ESC delay | 126 km/h | 54 deg/s | ±68 deg/s at 20 Hz |
+| `rpm_filter_harmonics = 0` | 142 km/h | 7 deg/s | noise only |
+| `dshot_bidir = OFF` | 142 km/h | 7 deg/s | noise only |
+| RPM filter on, 0.3 ms ESC delay | 144 km/h | 0.1 deg/s | none |
+
+So the cap is a roll oscillation at 20 Hz: the notches' phase lag on top
+of SimITL's 2 ms ESC delay. Dynamic idle plays no part (the second row
+keeps it). With a 0.3 ms ESC delay (proposed in hammerill/libfpv#16) the
+RPM filter runs and the oscillation is gone.
 
 ## Presentation
 
@@ -1890,9 +1954,10 @@ less on the web, where nothing can unload the module.
 ### D21. Turtle mode (flip over after crash)
 
 Betaflight decides crash flip when arming with the FLIP OVER AFTER CRASH
-switch on, then reverses the motors with a DShot command. libfpv drives
-PWM (D5), so instead `bfb_crash_flip_active()` (armed and
-`isCrashFlipModeActive()`) feeds `StateInput::motorsReversed` every step.
+switch on, then reverses the motors with a DShot command. The simulated
+ESCs do not act on DShot commands, and PWM has none (D5, D44), so instead
+`bfb_crash_flip_active()` (armed and `isCrashFlipModeActive()`) feeds
+`StateInput::motorsReversed` every step.
 Betaflight's own crash flip mixer picks the motors from the sticks.
 Fresh EEPROMs get turtle on AUX4 (`aux 3 35 3 1700 2100 0 0`). The F8
 radio wizard's turtle switch step binds AUX4, the keyboard fallback toggles
@@ -2012,7 +2077,7 @@ timer and GPS Rescue.
   shows the arming point for a GPS cycle. The value is kept behind a mutex
   rather than a simulation-thread job, so hosts can set a moving home
   every frame without waiting.
-* GPS is a libfpv essential, like PWM: `ensureEssentials` turns
+* GPS is a libfpv essential, like the motor protocol: `ensureEssentials` turns
   `feature GPS` back on and reboots Betaflight in-process when it is not
   running (features only apply at boot). The first-run script and every
   import include `feature GPS`.

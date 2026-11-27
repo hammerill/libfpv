@@ -36,6 +36,7 @@ public:
     void finishImport(const DronePreset &preset) override;
     void reboot() override;
     std::vector<std::string> armingDisableFlagNames() override;
+    std::vector<int16_t> debugValues() override;
     ConfiguratorStatus configurator() override;
 
     void spawn(const DronePreset &preset, Vec3 pos, Quat rot, Vec3 pilot) override;

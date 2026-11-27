@@ -228,6 +228,15 @@ public:
         }
         return names;
     }
+    std::vector<int16_t> debugValues() override {
+        std::vector<int16_t> values;
+        std::string reply;
+        if (call(wire::kDebugValues, std::string(), reply)) {
+            wire::Reader r(reply);
+            wire::unpack(r, values);
+        }
+        return values;
+    }
     ConfiguratorStatus configurator() override {
         ConfiguratorStatus s;
         std::string reply;

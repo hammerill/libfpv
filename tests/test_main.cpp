@@ -595,7 +595,7 @@ void testEepromUpgrade() {
         if (e.path().extension() == ".upgrade") fs::remove(e.path());
     // an old EEPROM, with another mode on AUX6
     cli("aux 3 0 0 900 900 0 0\naux 4 0 0 900 900 0 0\naux 5 0 0 900 900 0 0\naux 6 2 5 1700 2100 0 0\n"
-        "set crashflip_rate = 0\nsave");
+        "set crashflip_rate = 0\nset motor_pwm_protocol = PWM\nset dshot_bidir = OFF\nsave");
     activate(other.c_str());
     activate(first.c_str());
     std::string aux = cli("aux");
@@ -603,12 +603,17 @@ void testEepromUpgrade() {
     CHECK(aux.find("aux 4 28 4 1700 2100") != std::string::npos, "air mode switch added: %s", aux.c_str());
     CHECK(aux.find(" 19 5 ") == std::string::npos, "OSD switch not put on a used AUX6: %s", aux.c_str());
     CHECK(cli("get crashflip_rate").find("crashflip_rate = 30") != std::string::npos, "crash flip cut-off set");
-    cli("aux 3 0 0 900 900 0 0\naux 4 0 0 900 900 0 0\nsave");  // the player removes them again
+    std::string motors = cli("get motor_pwm_protocol\nget dshot_bidir");
+    CHECK(motors.find("= DSHOT600") != std::string::npos && motors.find("dshot_bidir = ON") != std::string::npos,
+          "PWM from older libfpv: bidirectional DShot600 now: %s", motors.c_str());
+    // the player removes them again, and picks PWM
+    cli("aux 3 0 0 900 900 0 0\naux 4 0 0 900 900 0 0\nset motor_pwm_protocol = PWM\nsave");
     activate(other.c_str());
     activate(first.c_str());
     aux = cli("aux");
     CHECK(aux.find("aux 3 35 3") == std::string::npos, "removed turtle switch stays removed");
     CHECK(aux.find(" 28 4 ") == std::string::npos, "removed air mode switch stays removed");
+    CHECK(cli("get motor_pwm_protocol").find("= PWM") != std::string::npos, "the player's PWM is kept");
     // an EEPROM upgraded for turtle only gets just the new switches
     cli("aux 6 0 0 900 900 0 0\nsave");
     activate(other.c_str());
@@ -1385,8 +1390,9 @@ void testPresetSwitchBattery() {
 
 void testCli() {
     char *out = nullptr;
-    CHECK(fpv_cli_exec("get motor_pwm_protocol", &out) == FPV_OK, "cli: %s", fpv_last_error());
-    CHECK(out && std::strstr(out, "PWM"), "PWM protocol: %s", out ? out : "(null)");
+    CHECK(fpv_cli_exec("get motor_pwm_protocol\nget dshot_bidir", &out) == FPV_OK, "cli: %s", fpv_last_error());
+    CHECK(out && std::strstr(out, "motor_pwm_protocol = DSHOT600"), "DShot600: %s", out ? out : "(null)");
+    CHECK(out && std::strstr(out, "dshot_bidir = ON"), "bidirectional DShot: %s", out ? out : "(null)");
     fpv_free(out);
     CHECK(fpv_cli_exec("bl", &out) == FPV_OK, "refused commands do not fail the call");
     CHECK(out && std::strstr(out, "refused"), "bootloader refused: %s", out ? out : "");
@@ -1403,6 +1409,100 @@ void testCli() {
     CHECK(fpv_cli_exec("get crashflip_rate", &out) == FPV_OK, "get crashflip_rate");
     CHECK(out && std::strstr(out, "crashflip_rate = 30"), "turtle cut-off on by default: %s", out ? out : "");
     fpv_free(out);
+}
+
+// The simulated ESCs on DShot (D44): with bidirectional DShot they report
+// their rpm, the RPM filter's notches follow it (debug_mode RPM_FILTER: each
+// motor's frequency) and take the motors' noise out of the gyro
+// (GYRO_FILTERED, hovering, against rpm_filter_harmonics = 0). Without it
+// the ESCs send nothing back and the quad still flies.
+void testRpmFilter() {
+    Host h(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1));
+    loadWorld(makeLevel(h, 300, 0));
+    auto cli = [](const std::string &cmd) {
+        char *o = nullptr;
+        fpv_cli_exec(cmd.c_str(), &o);
+        std::string r = o ? o : "";
+        fpv_free(o);
+        return r;
+    };
+    const char *q = "freestyler-5";
+    std::string other = fpv_preset_name(0);
+    if (other == q) other = fpv_preset_name(1);
+    // Betaflight reads these at boot: another quad's EEPROM and back reboots it
+    auto reboot = [&]() {
+        for (const char *preset : {other.c_str(), q}) {
+            Session s;
+            float p[3] = {0, 0, 0};
+            s.spawn(p, preset);
+            s.run(0.05f);
+            s.destroy();
+        }
+    };
+    float thr = findHoverThrottle(h, q);
+    struct Hover {
+        float hz[4] = {}, rpm[4] = {};  // mean RPM_FILTER value, mean rpm / 60
+        float noise = 0;                // GYRO_FILTERED roll and pitch, RMS deg/s
+        bool armed = false;
+    };
+    auto hover = [&]() {
+        Hover r;
+        Session s;
+        hoverFromRest(s, h, thr, q);
+        s.run(0.5f);
+        int n = 0;
+        double sq = 0;
+        bool debugOk = true;
+        s.run(2.0f, [&](float) {
+            int16_t d[8];
+            debugOk &= fpv_betaflight_debug(d) == FPV_OK;
+            for (int m = 0; m < 4; m++) {
+                r.hz[m] += d[m];
+                r.rpm[m] += std::fabs(s.f.motors[m].rpm) / 60.0f;
+            }
+            sq += (double)d[0] * d[0] + (double)d[1] * d[1];
+            n++;
+        });
+        for (int m = 0; m < 4; m++) {
+            r.hz[m] /= n;
+            r.rpm[m] /= n;
+        }
+        r.noise = (float)std::sqrt(sq / (2.0 * n));
+        r.armed = s.armed();
+        CHECK(debugOk, "debug values: %s", fpv_last_error());
+        s.destroy();
+        return r;
+    };
+
+    CHECK(cli("dshot_telemetry_info").find("Dshot reads") != std::string::npos, "bidirectional DShot telemetry running");
+    cli("set debug_mode = RPM_FILTER\nsave");
+    reboot();
+    Hover on = hover();
+    std::printf("    RPM_FILTER: motor Hz %.0f %.0f %.0f %.0f, simulated rpm/60 %.0f %.0f %.0f %.0f\n", on.hz[0], on.hz[1],
+                on.hz[2], on.hz[3], on.rpm[0], on.rpm[1], on.rpm[2], on.rpm[3]);
+    for (int m = 0; m < 4; m++)
+        CHECK(std::fabs(on.hz[m] - on.rpm[m]) < 0.05f * on.rpm[m] && on.rpm[m] > 100,
+              "motor %d: the notches follow its rpm, %.0f Hz against %.0f", m + 1, on.hz[m], on.rpm[m]);
+
+    cli("set debug_mode = GYRO_FILTERED\nsave");
+    reboot();
+    Hover filtered = hover();
+    cli("set rpm_filter_harmonics = 0\nsave");
+    reboot();
+    Hover unfiltered = hover();
+    std::printf("    gyro noise at hover (filtered roll and pitch, RMS): %.2f deg/s with the RPM filter, %.2f without\n",
+                filtered.noise, unfiltered.noise);
+    CHECK(unfiltered.noise > 0.5f, "the simulated motors shake the gyro: %.2f deg/s", unfiltered.noise);
+    CHECK(filtered.noise < 0.5f * unfiltered.noise, "the RPM filter takes that out: %.2f against %.2f deg/s", filtered.noise,
+          unfiltered.noise);
+
+    // no bidirectional DShot: no rpm comes back, and the quad still flies
+    cli("set rpm_filter_harmonics = 3\nset dshot_bidir = OFF\nsave");
+    reboot();
+    std::string info = cli("dshot_telemetry_info");
+    CHECK(info.find("Dshot reads") == std::string::npos, "no telemetry without dshot_bidir: %s", info.c_str());
+    Hover plain = hover();
+    CHECK(plain.armed, "flies on DShot without telemetry");
 }
 
 // The overlay's OSD tab lists every osd_*_pos setting the CLI reports; each
@@ -1476,8 +1576,9 @@ void testDiffImport(const std::string &corpusDir) {
         fpv_free(report);
 
         char *out = nullptr;
-        fpv_cli_exec("get motor_pwm_protocol\naux", &out);
-        CHECK(out && std::strstr(out, "= PWM"), "%s: PWM forced", name.c_str());
+        fpv_cli_exec("get motor_pwm_protocol\nget dshot_bidir\naux", &out);
+        CHECK(out && std::strstr(out, "= DSHOT600") && std::strstr(out, "dshot_bidir = ON"),
+              "%s: DShot600 with bidirectional DShot", name.c_str());
         CHECK(out && std::strstr(out, "aux 0 0 0 1700 2100"), "%s: ARM on AUX1", name.c_str());
         fpv_free(out);
 
@@ -4198,6 +4299,7 @@ int main(int argc, char **argv) {
         {"preset_switch_battery", testPresetSwitchBattery},
         {"preset_switch_rest", testPresetSwitchRest},
         {"cli", testCli},
+        {"rpm_filter", testRpmFilter},
         {"osd_element_names", testOsdElementNames},
         {"diff_import", [&] { testDiffImport(corpus); }},
         {"axes_y_up_right", [] { testAxes(FPV_COORDS_Y_UP_RIGHT_HANDED, 1, "Y-up right-handed"); }},
