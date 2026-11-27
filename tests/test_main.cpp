@@ -236,6 +236,40 @@ void testCameraFov() {
     CHECK(fpv_camera_set_fov(0) == FPV_OK && fpv_camera_get_fov() == preset, "0 back to the preset's");
 }
 
+// The chase camera sits chaseDistance behind and chaseHeight above the drone
+// (settings.json, the overlay's Camera page), within the sliders' ranges.
+void testChaseCamera() {
+    Host h(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1));
+    struct Case {
+        const char *what, *json;
+        float behind, above;
+    } cases[] = {{"defaults", "{}", 1.3f, 0.45f},
+                 {"set", "{\"chaseDistance\": 3, \"chaseHeight\": 1, \"chaseFollow\": 20}", 3.0f, 1.0f},
+                 {"out of range", "{\"chaseDistance\": -4, \"chaseHeight\": 50, \"chaseFollow\": 0}", 0.5f, 3.0f}};
+    for (const Case &c : cases) {
+        fpv_global_terminate();
+        std::ofstream(std::filesystem::path(g_dataDir) / "settings.json") << c.json;
+        if (!init(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1))) return;
+        loadWorld(makeLevel(h, 100, 0));
+        Session s;
+        float p[3];
+        h.pos(0, 0, 0, p);
+        s.spawn(p);
+        s.rc.send();
+        s.run(1.0f);
+        const float *cam = s.f.chase_camera.position, *fwd = s.f.camera.forward;
+        float d[3] = {cam[0] - s.f.position[0], cam[1] - s.f.position[1], cam[2] - s.f.position[2]};
+        float above = h.up(d), right = h.right(d), ahead = h.fwd(d);
+        float behind = std::sqrt(right * right + ahead * ahead);
+        // along the FPV camera's heading: negative, the chase camera is behind
+        float along = h.dir(fwd, h.R) * right + h.dir(fwd, h.F) * ahead;
+        CHECK(std::fabs(behind - c.behind) < 0.05f && along < 0, "%s: %.2f m behind (along %.2f), want %.2f", c.what,
+              behind, along, c.behind);
+        CHECK(std::fabs(above - c.above) < 0.05f, "%s: %.2f m above, want %.2f", c.what, above, c.above);
+        s.destroy();
+    }
+}
+
 void testArmDisarm() {
     Host h(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1));
     loadWorld(makeLevel(h, 100, 0));
@@ -4047,6 +4081,7 @@ int main(int argc, char **argv) {
         {"video_host_raycast", testVideoHostRaycast},
         {"rc_link", testRcLink},
         {"camera_fov", testCameraFov},
+        {"chase_camera", testChaseCamera},
         {"pinned", testPinned},
         {"terminate_reinit", testTerminateReinit},
         {"threaded", testThreadedMode},

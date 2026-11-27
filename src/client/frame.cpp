@@ -607,7 +607,7 @@ extern "C" FPV_API fpv_result fpv_drone_tick(fpv_drone *d, float frameDt, fpv_fr
         L.chasePos = desired;
         L.chaseValid = true;
     }
-    float k = L.settings.chaseSmoothing ? 1.0f - std::exp(-frameDt * std::max(0.5f, L.settings.chaseFollow)) : 1.0f;
+    float k = L.settings.chaseSmoothing ? 1.0f - std::exp(-frameDt * L.settings.chaseFollow) : 1.0f;
     L.chasePos = lerp(L.chasePos, desired, k);
     Vec3 chase = L.chasePos;
     {

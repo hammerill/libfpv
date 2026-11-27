@@ -49,8 +49,9 @@ struct Settings {
     // the video feed post-process (frame.video_feed), on by default in games that draw it
     bool videoNoise = true;        // the link's noise
     bool videoResolution = true;   // the camera's resolution and aspect
-    // Chase camera: metres behind and above the drone, and how fast it follows (1/s).
-    float chaseDistance = 1.3f, chaseHeight = 0.45f, chaseFollow = 12.0f;
+    // Chase camera: metres behind and above the drone, and how fast it follows
+    // (1/s). loadSettings clamps them to the overlay sliders' ranges.
+    float chaseDistance = 1.3f, chaseHeight = 0.45f, chaseFollow = 6.0f;
     KeyboardHover keyboardHover = KeyboardHover::Auto;  // automatic hover throttle, see InputManager
     float keyboardThrottleExpo = kDefaultKeyboardThrottleExpo;  // 1/s, see InputManager
     float keyboardYawExpo = kDefaultKeyboardYawExpo;            // 1/s, see InputManager

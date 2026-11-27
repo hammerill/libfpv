@@ -67,9 +67,10 @@ void loadSettings() {
         s.chaseSmoothing = j.value("chaseSmoothing", s.chaseSmoothing);
         s.videoNoise = j.value("videoNoise", s.videoNoise);
         s.videoResolution = j.value("videoResolution", s.videoResolution);
-        s.chaseDistance = j.value("chaseDistance", s.chaseDistance);
-        s.chaseHeight = j.value("chaseHeight", s.chaseHeight);
-        s.chaseFollow = j.value("chaseFollow", s.chaseFollow);
+        // the overlay sliders' ranges (overlay.cpp tabCamera)
+        s.chaseDistance = std::clamp(j.value("chaseDistance", s.chaseDistance), 0.5f, 6.0f);
+        s.chaseHeight = std::clamp(j.value("chaseHeight", s.chaseHeight), 0.0f, 3.0f);
+        s.chaseFollow = std::clamp(j.value("chaseFollow", s.chaseFollow), 1.0f, 30.0f);
         // "auto", "on" or "off"; older versions stored a bool (off by default)
         auto hover = j.find("keyboardHover");
         if (hover != j.end() && hover->is_string()) {
