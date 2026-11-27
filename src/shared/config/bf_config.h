@@ -10,8 +10,9 @@
 
 namespace fpv {
 
-// Settings libfpv needs regardless of the tune: PWM (the only protocol
-// SimITL drives), ARM on AUX1, no power-on grace, MSP receiver, OSD.
+// Settings libfpv needs regardless of the tune: DShot600 with bidirectional
+// DShot (the rpm for dynamic idle and the RPM filter), ARM on AUX1, no
+// power-on grace, MSP receiver, OSD.
 std::string betaflightBaseDefaults();
 // The out-of-the-box tune for a fresh EEPROM: base defaults + modes on
 // AUX2-6 + a readable OSD layout (for an NTSC camera's 13 rows, or 16).

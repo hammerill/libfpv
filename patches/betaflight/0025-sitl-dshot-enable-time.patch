@@ -1,0 +1,17 @@
+diff --git a/src/main/drivers/motor.c b/src/main/drivers/motor.c
+index 2fa45124c..ca3b9b020 100644
+--- a/src/main/drivers/motor.c
++++ b/src/main/drivers/motor.c
+@@ -328,7 +328,12 @@ void motorEnable(void)
+ {
+     if (motorDevice.initialized && motorDevice.vTable->enable()) {
+         motorDevice.enabled = true;
++#if defined(SIMULATOR_BUILD)
++        // 0 means "not enabled": a simulator's clock reads 0 at its first boot
++        motorDevice.motorEnableTimeMs = MAX(millis(), (timeMs_t)1);
++#else
+         motorDevice.motorEnableTimeMs = millis();
++#endif
+     }
+ }
+ 

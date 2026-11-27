@@ -15,8 +15,11 @@
 
 #include "platform.h"
 
+#include "build/debug.h"
 #include "cli/cli.h"
 #include "config/config.h"
+#include "drivers/dshot.h"
+#include "drivers/motor.h"
 #include "drivers/serial.h"
 #include "fc/controlrate_profile.h"
 #include "fc/core.h"
@@ -404,7 +407,20 @@ int bfb_features_pending(void)
             return 1;
         }
     }
+    /* the motor driver, and with it bidirectional DShot, starts at boot */
+    bool dshot = false;
+    checkMotorProtocolEnabled(&motorConfig()->dev, &dshot);
+    if (dshot != isMotorProtocolDshot() || (dshot && !motorConfig()->dev.useDshotTelemetry != !useDshotTelemetry)) {
+        return 1;
+    }
     return 0;
+}
+
+void bfb_debug_values(int16_t out[BFB_DEBUG_VALUE_COUNT])
+{
+    for (int i = 0; i < BFB_DEBUG_VALUE_COUNT; i++) {
+        out[i] = i < DEBUG16_VALUE_COUNT ? debug[i] : 0;
+    }
 }
 
 void bfb_gps_update(float east, float north, float up, float vEast, float vNorth, float vUp)

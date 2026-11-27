@@ -110,7 +110,8 @@ const char *armingHelp(const char *flag) {
         {"CRASH", "Crash detection triggered: disarm and re-arm."},
         {"RUNAWAY", "Runaway takeoff prevention triggered: disarm and re-arm."},
         {"REBOOT_REQD", "A setting needs a reboot: libfpv reboots Betaflight when you import; otherwise press Reboot in the Configurator tab."},
-        {"MOTOR_PROTO", "Motor protocol was changed: only PWM works in the simulator (libfpv restores it on next start)."},
+        {"MOTOR_PROTO", "Motor protocol was changed: only DShot and PWM work in the simulator (libfpv restores DSHOT600 on next start)."},
+        {"DSHOT_TELEM", "Bidirectional DShot is on but a motor sends no rpm yet."},
         {"PARALYZE", "PARALYZE mode is active."},
         {"LOAD", "CPU load too high."},
         {"BOMB", "The bomb arm switch is on (or the drone was destroyed): the motors only arm with the bomb safe. "
@@ -1688,7 +1689,7 @@ void Overlay::tabConfigurator() {
     ImGui::TextWrapped("2. In Options, enable \"manual connection mode\".");
     ImGui::TextWrapped("3. Choose \"Manual Selection\", enter %s as the port and press Connect.", info.url);
     ImGui::TextWrapped("Everything you change there is the same configuration as this overlay. Keep the motor "
-                       "protocol on PWM and ARM on AUX1.");
+                       "protocol on DShot (or PWM) and ARM on AUX1.");
     if (ImGui::Button("Reboot Betaflight")) {
         lib().server->reboot();
     }

@@ -29,7 +29,7 @@ const char *const kEepromUpgrades[] = {"turtle-2", "air-osd-3"
 #if defined(LIBFPV_KAMIKAZE)
                                        , "bomb-osd-4"
 #endif
-                                       , "crashflip-tune-5"
+                                       , "crashflip-tune-5", "dshot-bidir-6"
 };
 // Index of the upgrade called `name` (the kamikaze one is not in every build).
 size_t upgradeIndex(const char *name) {
@@ -127,20 +127,24 @@ bool SimServer::syncVideoSystem(const DronePreset &p) {
 }
 
 // Makes sure libfpv's essentials survived edits made in the Configurator
-// (another motor protocol would leave the motors stopped), then reboots
-// Betaflight if it has to, or always with `reboot` (a quad's EEPROM was just
-// switched to or created).
+// (a motor protocol the simulator does not drive would leave the motors
+// stopped), then reboots Betaflight if it has to, or always with `reboot` (a
+// quad's EEPROM was just switched to or created).
 void SimServer::ensureEssentials(const DronePreset &p, bool reboot) {
     reboot |= syncVideoSystem(p);
-    if (cliRun("get motor_pwm_protocol").find("= PWM") == std::string::npos) {
-        FPV_LOGW("motor protocol was changed away from PWM; restoring PWM");
-        cliRun("set motor_pwm_protocol = PWM\nsave noreboot");
+    // the simulated ESCs take DShot and PWM (D44)
+    std::string protocol = cliRun("get motor_pwm_protocol");
+    bool pwm = protocol.find("= PWM") != std::string::npos;
+    if (!pwm && protocol.find("= DSHOT") == std::string::npos) {
+        FPV_LOGW("motor protocol is not DShot or PWM; restoring DSHOT600");
+        cliRun("set motor_pwm_protocol = DSHOT600\nsave noreboot");
     }
     // Synced PWM makes Betaflight raise pid_process_denom to run the PID loop
     // no faster than the ESCs' 480 Hz, and it keeps that denominator: put
     // both back (an EEPROM made while synced PWM was the default, or a
-    // Configurator edit). Takes effect after the reboot below.
-    if (cliRun("get use_unsynced_pwm").find("= ON") == std::string::npos) {
+    // Configurator edit). Takes effect after the reboot below. DShot is
+    // always synced and not limited that way.
+    if (pwm && cliRun("get use_unsynced_pwm").find("= ON") == std::string::npos) {
         FPV_LOGW("unsynced PWM was off; turning it back on");
         std::string denom = cliRun("get pid_process_denom");
         size_t def = denom.find("Default value: ");
@@ -196,6 +200,13 @@ void SimServer::ensureEssentials(const DronePreset &p, bool reboot) {
         std::istringstream tune(p.betaflightDiff);
         for (std::string line; std::getline(tune, line);)
             if (line.rfind("set crashflip_rate", 0) == 0) script += line + "\n";
+    }
+    if (next <= upgradeIndex("dshot-bidir-6")) {
+        // older libfpv forced PWM: DShot600 with bidirectional DShot now
+        // gives dynamic idle and the RPM filter their rpm (D44). The motor
+        // driver starts at boot (bfb_features_pending).
+        if (cliRun("get motor_pwm_protocol").find("= PWM") != std::string::npos)
+            script += "set motor_pwm_protocol = DSHOT600\nset dshot_bidir = ON\n";
     }
     if (!script.empty()) {
         FPV_LOGI("upgrading Betaflight configuration for new switches and OSD elements");
@@ -375,6 +386,12 @@ std::vector<std::string> SimServer::armingDisableFlagNames() {
     std::vector<std::string> names;
     for (int i = 0; i < 32; i++) names.push_back(bfb_arming_disable_flag_name(i));
     return names;
+}
+
+std::vector<int16_t> SimServer::debugValues() {
+    std::vector<int16_t> values(BFB_DEBUG_VALUE_COUNT);
+    m_runner.call([&] { bfb_debug_values(values.data()); });
+    return values;
 }
 
 ConfiguratorStatus SimServer::configurator() {

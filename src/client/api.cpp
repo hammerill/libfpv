@@ -1347,6 +1347,14 @@ FPV_API fpv_result fpv_cli_exec(const char *commands, char **outOutput) {
     return FPV_OK;
 }
 
+FPV_API fpv_result fpv_betaflight_debug(int16_t outValues[8]) {
+    REQUIRE_INIT();
+    if (!outValues) return setError(FPV_ERROR_INVALID_ARGUMENT, "out_values is NULL");
+    std::vector<int16_t> v = L.server->debugValues();
+    for (size_t i = 0; i < 8; i++) outValues[i] = i < v.size() ? v[i] : 0;
+    return FPV_OK;
+}
+
 FPV_API fpv_result fpv_import_betaflight_diff(const char *diff, char **outReport) {
     REQUIRE_INIT();
     if (outReport) *outReport = nullptr;

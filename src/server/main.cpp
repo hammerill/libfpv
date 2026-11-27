@@ -206,6 +206,8 @@ bool dispatch(SimServer &server, LoopbackSocket &s, uint16_t op, const std::stri
         return true;
     case wire::kArmingFlagNames:
         return reply(s, op, server.armingDisableFlagNames());
+    case wire::kDebugValues:
+        return reply(s, op, server.debugValues());
     case wire::kConfigurator:
         return reply(s, op, server.configurator());
     // the drone

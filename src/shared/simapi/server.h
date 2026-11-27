@@ -90,6 +90,9 @@ public:
     virtual void reboot() = 0;
     // Betaflight's names of the arming disable flags, by bit.
     virtual std::vector<std::string> armingDisableFlagNames() = 0;
+    // Betaflight's debug[] values (8), as its `debug_mode` sets them: a
+    // diagnostic, like the blackbox's debug fields.
+    virtual std::vector<int16_t> debugValues() = 0;
     virtual ConfiguratorStatus configurator() = 0;
 
     // --- the drone ------------------------------------------------------------------

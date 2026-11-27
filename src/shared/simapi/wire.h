@@ -50,6 +50,7 @@ enum Op : uint16_t {
     kFinishImport,
     kReboot,
     kArmingFlagNames,  // reply: names
+    kDebugValues,      // reply: values
     kConfigurator,     // reply: ConfiguratorStatus
     // the drone
     kSpawn,

@@ -85,8 +85,13 @@ int bfb_gps_configured(void);
 /* Betaflight booted with the GPS feature on (features apply at boot). */
 int bfb_gps_running(void);
 /* The active EEPROM turns a feature on or off that the running Betaflight
- * does not have that way yet (features apply at boot). */
+ * does not have that way yet (features apply at boot), or changes the motor
+ * protocol family or bidirectional DShot (the motor driver starts at boot). */
 int bfb_features_pending(void);
+/* Betaflight's debug[] values, as `debug_mode` sets them (the blackbox's
+ * debug fields). */
+#define BFB_DEBUG_VALUE_COUNT 8
+void bfb_debug_values(int16_t out[BFB_DEBUG_VALUE_COUNT]);
 /* Feeds Betaflight's virtual GPS: position (metres) and velocity (m/s) in
  * a local east/north/up frame. */
 void bfb_gps_update(float east, float north, float up, float vEast, float vNorth, float vUp);
