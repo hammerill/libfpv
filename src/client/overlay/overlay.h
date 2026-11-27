@@ -24,6 +24,7 @@ public:
     void setOpen(bool open);
     bool isOpen() const { return m_open; }
     void setDisplay(float w, float h, float scale);
+    void setEmbedded(bool embedded) { m_embedded = embedded; }
     void mouseMove(float x, float y);
     void mouseButton(int b, bool down);
     void mouseWheel(float dx, float dy);
@@ -71,6 +72,7 @@ private:
     ImGuiContext *m_ctx = nullptr;
     bool m_open = false;
     float m_w = 1280, m_h = 720, m_scale = 1.0f;
+    bool m_embedded = false;  // fills the display, no window chrome
     float m_fontScaleBuilt = 0;
     std::vector<uint8_t> m_fontPixels;
     int m_fontW = 0, m_fontH = 0;
