@@ -193,6 +193,56 @@ CliFilterResult filterCliCommands(const std::string &commands, bool ntsc) {
     return r;
 }
 
+// A `dump`, not a `diff`: a setting the pilot put back to Betaflight's
+// default (an OSD element hidden, a switch cleared) must also reach a new
+// model, whose first-run setup is not Betaflight's defaults. Empty names
+// dump as "-", which `set` takes back as empty. vcd_video_system stays out:
+// the new quad's camera sets it (SimServer::syncVideoSystem), and Betaflight
+// moves elements below an NTSC camera's last row up to it.
+std::string filterDefaultsProfile(const std::string &dump, unsigned categories, unsigned *found) {
+    std::ostringstream s;
+    unsigned seen = 0;
+    enum { kMaster, kPidProfile, kRateProfile } section = kMaster;
+    auto keep = [&](unsigned category, const std::string &line) {
+        if (!(categories & category)) return;
+        s << line << "\n";
+        seen |= category;
+    };
+    for (const std::string &raw : splitLines(dump)) {
+        std::string line = trim(raw);
+        if (line.empty() || line[0] == '#') continue;
+        std::vector<std::string> w = splitWords(line);
+        std::string cmd = lower(w[0]);
+        if (cmd == "profile") {
+            section = kPidProfile;
+        } else if (cmd == "rateprofile") {
+            section = kRateProfile;
+            if (categories & kDefaultsRates) s << line << "\n";
+        } else if (cmd == "aux" || cmd == "adjrange") {
+            keep(kDefaultsModes, line);
+        } else if (cmd == "led" || cmd == "color" || cmd == "mode_color") {
+            keep(kDefaultsLeds, line);
+        } else if (cmd == "feature" && w.size() > 1 && (w[1] == "LED_STRIP" || w[1] == "-LED_STRIP")) {
+            keep(kDefaultsLeds, line);
+        } else if (cmd == "set" && section == kRateProfile) {
+            keep(kDefaultsRates, line);
+        } else if (cmd == "set" && section == kMaster) {
+            std::string rest = trim(line.substr(3));
+            std::string name = lower(trim(rest.substr(0, rest.find('='))));
+            if (name == "craft_name" || name == "pilot_name")
+                keep(kDefaultsNames, line);
+            else if (startsWith(name, "osd_") && name != "osd_displayport_device")
+                keep(kDefaultsOsd, line);
+            else if (startsWith(name, "ledstrip_"))
+                keep(kDefaultsLeds, line);
+        }
+    }
+    // ARM stays on AUX1 whatever an edited file says
+    if (seen & kDefaultsModes) s << "aux 0 0 0 1700 2100 0 0\n";
+    if (found) *found = seen;
+    return s.str();
+}
+
 const char *betaflightModeName(int boxId) {
     static const std::map<int, const char *> names = {
         {0, "ARM"},          {1, "ANGLE"},       {2, "HORIZON"},     {3, "ALTHOLD"},     {4, "ANTI GRAVITY"},

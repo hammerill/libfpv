@@ -606,6 +606,13 @@ FPV_API fpv_result fpv_global_init(const fpv_global_config *cfgIn) {
     if (L.presets.empty()) L.presets.push_back(builtinDefaultPreset());
     loadSettings();
     for (auto &kv : L.settings.controlKeys) L.input.setControlKey(kv.first, kv.second);
+    // the pilot's new-model defaults, saved from the overlay (Import & CLI)
+    std::string userDefaults;
+    L.userDefaults.clear();
+    if (readTextFile(pathFromUtf8(L.dataDir) / "defaults.diff.txt", userDefaults)) {
+        L.userDefaults = filterDefaultsProfile(userDefaults, kDefaultsAll);
+        FPV_LOGI("new models start with defaults.diff.txt");
+    }
     L.input.setKeyboardHover(L.settings.keyboardHover);
     L.input.setKeyboardThrottleExpo(L.settings.keyboardThrottleExpo);
     L.input.setKeyboardYawExpo(L.settings.keyboardYawExpo);
@@ -631,6 +638,7 @@ FPV_API fpv_result fpv_global_init(const fpv_global_config *cfgIn) {
     sc.eepromDir = L.eepromDir;
     sc.preset = currentPreset();
     sc.defaultDiff = L.defaultDiff;
+    sc.userDefaults = L.userDefaults;
     sc.configurator = !(cfg.flags & FPV_INIT_NO_CONFIGURATOR);
     sc.configuratorPort = cfg.configurator_port;
     sc.threaded = cfg.timing == FPV_TIMING_THREAD;
