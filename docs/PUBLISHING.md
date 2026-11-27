@@ -337,6 +337,12 @@ libfpv integration the level is "AI-assisted", and when the form asks
 
 Mention any AI-generated art or sound in the mod on top of that.
 
+**Credits (the short field).** Where a repository has a short credits
+field (as opposed to the credits in the description), it reads:
+
+> Thanks to devs of SimITL and pr0p for their amazing FPV physics engine I
+> can now embed in any game.
+
 ### "Prepare for publishing on mod repos"
 
 When the user asks for this (or anything like it: "get the Nexus page
@@ -369,7 +375,8 @@ forms, so filling them in is copy and paste:
      with a column per repository where they differ;
    - every field that is a sentence or longer, or may need more than one
      line, outside the table, each in its own code block under its field's
-     name: the summary (with its length), the AI answer above, and
+     name: the summary (with its length), the short credits, the AI
+     answer above, and
      anything else of that kind. Text in a table cell wraps across cells
      and can't be copied cleanly from a terminal (Claude Code's CLI, for
      one), while a code block copies as one piece;
