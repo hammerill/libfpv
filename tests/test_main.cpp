@@ -1383,6 +1383,59 @@ void testPresetSwitchBattery() {
     }
 }
 
+// A saved setting goes live at once, as on a real flight controller after
+// "save noreboot" (the overlay's sliders and fpv_cli_exec send that): new
+// yaw PIDs apply while armed, and the drone stays armed (no reboot).
+void testLiveSave() {
+    Host h(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1));
+    loadWorld(makeLevel(h, 100, 0));
+    Session s;
+    float p[3];
+    h.pos(0, 20, 0, p);
+    s.spawn(p);
+    s.run(0.5f);
+    // the CLI edits the active quad's EEPROM: read it only now, after the spawn
+    char *o = nullptr;
+    fpv_cli_exec("get p_yaw\nget i_yaw\nget f_yaw\n", &o);
+    std::string before = o ? o : "";
+    fpv_free(o);
+    auto value = [&](const char *name) {
+        size_t at = before.find(std::string(name) + " = ");
+        return at == std::string::npos ? -1 : std::atoi(before.c_str() + at + std::strlen(name) + 3);
+    };
+    const int pYaw = value("p_yaw"), iYaw = value("i_yaw"), fYaw = value("f_yaw");
+    CHECK(pYaw > 0 && iYaw > 0, "yaw PIDs read: %s", before.c_str());
+    s.rc.ch[5] = 1;  // ANGLE
+    s.arm();
+    CHECK(s.armed(), "armed");
+    s.rc.ch[2] = 0.0f;
+    s.run(1.0f);
+    auto yaw = [&] {  // the largest yaw rate (deg/s) in 0.6 s of full stick
+        float most = 0;
+        s.rc.ch[3] = 1.0f;
+        s.run(0.6f, [&](float) { most = std::max(most, std::fabs(h.dir(s.f.angular_velocity, h.U)) * 57.3f); });
+        s.rc.ch[3] = 0.0f;
+        s.run(0.5f);
+        return most;
+    };
+    float normal = yaw();
+    // PID gains are copied at init (pidInit): without the re-init after the
+    // save, the old gains would stay in use until a reboot
+    CHECK(fpv_cli_exec("set p_yaw = 0\nset i_yaw = 0\nset f_yaw = 0\nsave\n", &o) == FPV_OK, "yaw PIDs off: %s",
+          fpv_last_error());
+    fpv_free(o);
+    s.run(0.2f);
+    CHECK(s.armed(), "still armed after the save");
+    float off = yaw();
+    std::printf("    yaw at full stick: %.0f deg/s, %.0f deg/s after saving zero yaw PIDs in flight\n", normal, off);
+    CHECK(off < 0.3f * normal, "the new PIDs apply at once (%.0f -> %.0f deg/s)", normal, off);
+    s.destroy();
+    std::string restore = "set p_yaw = " + std::to_string(pYaw) + "\nset i_yaw = " + std::to_string(iYaw) +
+                          "\nset f_yaw = " + std::to_string(fYaw) + "\nsave\n";
+    fpv_cli_exec(restore.c_str(), &o);
+    fpv_free(o);
+}
+
 void testCli() {
     char *out = nullptr;
     CHECK(fpv_cli_exec("get motor_pwm_protocol", &out) == FPV_OK, "cli: %s", fpv_last_error());
@@ -4199,6 +4252,7 @@ int main(int argc, char **argv) {
         {"preset_switch_rest", testPresetSwitchRest},
         {"cli", testCli},
         {"osd_element_names", testOsdElementNames},
+        {"live_save", testLiveSave},
         {"diff_import", [&] { testDiffImport(corpus); }},
         {"axes_y_up_right", [] { testAxes(FPV_COORDS_Y_UP_RIGHT_HANDED, 1, "Y-up right-handed"); }},
         {"axes_y_up_left", [] { testAxes(FPV_COORDS_Y_UP_LEFT_HANDED, 1, "Y-up left-handed"); }},

@@ -1315,7 +1315,7 @@ void Overlay::tabTuning() {
         changed = true;
     }
     if (ImGui::IsItemDeactivatedAfterEdit()) release = true;
-    if (changed || release) m_bf.run(std::string("simplified_tuning apply\n") + (release ? "save\n" : ""));
+    if (changed || release) m_bf.run(std::string("simplified_tuning apply\n") + (release ? "save noreboot\n" : ""));
     sectionTitle("Angle mode");
     int angle = m_bf.num("angle_limit", 60);
     if (ImGui::SliderInt("Max angle", &angle, 10, 85)) m_bf.set("angle_limit", angle, false);
@@ -1324,7 +1324,7 @@ void Overlay::tabTuning() {
         for (auto &s : sliders) m_bf.set(s.name, 100, false);
         m_bf.set("simplified_gyro_filter_multiplier", 100, false);
         m_bf.set("simplified_dterm_filter_multiplier", 100, false);
-        m_bf.run("simplified_tuning apply\nsave\n");
+        m_bf.run("simplified_tuning apply\nsave noreboot\n");
     }
     ImGui::TextDisabled("Full PID and filter control: Betaflight Configurator (see its tab).");
 }

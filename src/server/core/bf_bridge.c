@@ -17,6 +17,10 @@
 
 #include "cli/cli.h"
 #include "config/config.h"
+#include "fc/rc.h"
+#include "flight/pid.h"
+#include "flight/pid_init.h"
+#include "sensors/gyro_init.h"
 #include "drivers/serial.h"
 #include "fc/controlrate_profile.h"
 #include "fc/core.h"
@@ -153,6 +157,16 @@ int bfb_cli_run(const char *script, char **output)
         cliProcess();
     }
     free(in);
+    /* "save noreboot" only writes the EEPROM: set up what Betaflight reads at
+     * boot again, so a saved rate, PID, angle limit or filter goes live without
+     * a reboot. (Not readEEPROM(): its featureInit would turn on a feature that
+     * needs the reboot, such as LED_STRIP.) LEDs and OSD elements need nothing:
+     * the led command and osdAnalyzeActiveElements below apply them. */
+    if (strstr(script, "save noreboot")) {
+        initRcProcessing();          /* rates_type and the rates */
+        pidInit(currentPidProfile);  /* PIDs, angle_limit, D-term filters */
+        gyroInitFilters();           /* gyro filters (simplified tuning) */
+    }
 #ifdef USE_OSD
     /* a real CLI "save" reboots, which rebuilds the list of OSD elements to
      * draw; "save noreboot" does not, so moved or enabled elements would
