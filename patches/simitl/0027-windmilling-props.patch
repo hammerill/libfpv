@@ -1,0 +1,119 @@
+diff --git a/src/sim/physics.cpp b/src/sim/physics.cpp
+--- a/src/sim/physics.cpp
++++ b/src/sim/physics.cpp
+@@ -279,16 +279,33 @@ float Physics::motorTorque(float volts, float rpm, float kV, float R, float I0)
+   // geometric pitch speed. Descending (vel < 0) keeps static thrust.
+   constexpr float ZERO_THRUST_PITCH_RATIO = 0.9f;
+ 
++  // libfpv: past J0 the prop windmills: the blades see negative angles of
++  // attack and push back on the quad (negative thrust), and the airflow
++  // drives the rotor (negative shaft torque) once J is a little past J0.
++  // Isolated-propeller tests at negative thrust (Goyal, Sinnige et al., TU
++  // Delft, AIAA Aviation 2021 and AIAA J. 2024) show both: CT keeps falling
++  // through zero, and the shaft power crosses zero shortly after it.
++  //
++  // Negative thrust is the drag of the prop disc, CW * 0.5 rho v^2 A, scaled
++  // by (1 - (w / v)^2) (w = zero-thrust inflow at this rpm) so it is zero at
++  // J0 and the most at a stopped prop. CW is bounded by momentum theory: a
++  // freely windmilling rotor with axial induction a ~ 0.1 has a disc thrust
++  // coefficient of 4a(1 - a) ~ 0.36 (Glauert), a stalled stopped 3-blade
++  // prop about its solidity (~0.15) times a flat plate's 1.2 (Hoerner).
++  // ponytail: monotonic in rpm, so differential rpm always keeps its sign.
++  // Real props stall deep past J0 and lose (or invert) that authority;
++  // a measured CT(J) table for J > J0 would replace this.
++  constexpr float WINDMILL_DRAG_COEFF = 0.3f;
++  // Shaft torque, a quarter of static at J0 (inflowTorque below), reaches
++  // zero at this multiple of J0 and drives the rotor past it.
++  constexpr float ZERO_TORQUE_J0_RATIO = 1.2f;
++
+   // libfpv: height of the frame's centre of pressure over the centre of
+   // mass, as a share of the centre-to-motor distance.
+   constexpr float COP_OFFSET_ARM_RATIO = 0.1f;
+ 
+-  static float inflowThrustFactor(float pitch, float rpm, float vel) {
+-    if (vel <= 0.0f) return 1.0f;
+-    const float zeroThrustVel = ZERO_THRUST_PITCH_RATIO * pitch * std::max(rpm, 0.0f) / 60.0f;
+-    if (zeroThrustVel <= 0.01f) return 0.0f;
+-    const float j = vel / zeroThrustVel;
+-    return std::max(0.0f, 1.0f - j * j);
++  static float zeroThrustVel(float pitch, float rpm) {
++    return ZERO_THRUST_PITCH_RATIO * pitch * std::max(rpm, 0.0f) / 60.0f;
+   }
+ 
+   // libfpv: a duct adds thrust through the suction on its lip, which only
+@@ -299,22 +316,30 @@ float Physics::motorTorque(float volts, float rpm, float kV, float R, float I0)
+   static float ductThrustFactor(float gain, float pitch, float rpm, float vel) {
+     if (gain <= 0.0f || pitch <= 0.0f) return 1.0f;
+     if (vel <= 0.0f) return 1.0f + gain;
+-    const float fadeVel = DUCT_FADE_ZERO_THRUST_RATIO * ZERO_THRUST_PITCH_RATIO * pitch * std::max(rpm, 0.0f) / 60.0f;
++    const float fadeVel = DUCT_FADE_ZERO_THRUST_RATIO * zeroThrustVel(pitch, rpm);
+     if (fadeVel <= 0.01f) return 1.0f;
+     return 1.0f + gain * std::max(0.0f, 1.0f - vel / fadeVel);
+   }
+ 
+   // Shaft power drops less than thrust as the prop unloads: at zero thrust a
+-  // small prop still needs about a quarter of its static torque.
+-  static float inflowTorqueFactor(float pitch, float rpm, float vel) {
+-    return 0.25f + 0.75f * inflowThrustFactor(pitch, rpm, vel);
++  // small prop still needs about a quarter of its static torque. As a share
++  // of the static torque at propMaxRpm (zero-thrust inflow wMax).
++  static float inflowTorque(float w, float wMax, float vel) {
++    const float w2 = w * w, v2 = vel > 0.0f ? vel * vel : 0.0f;
++    if (v2 <= w2) return (w2 - 0.75f * v2) / (wMax * wMax);
++    constexpr float zq = ZERO_TORQUE_J0_RATIO * ZERO_TORQUE_J0_RATIO - 1.0f;
++    return 0.25f * (w2 - (v2 - w2) / zq) / (wMax * wMax);
+   }
+ 
+   float Physics::propThrust(float rpm, float vel) {
+     if (mSimState->stateInit.propPitch > 0.0f) {
+-      const float rpmRatio = std::max(rpm, 0.0f) / std::max(mSimState->stateInit.propMaxRpm, 0.01f);
+-      const float staticThrust = mSimState->stateInit.propThrustFactor.z * rpmRatio * rpmRatio;
+-      return staticThrust * inflowThrustFactor(mSimState->stateInit.propPitch, rpm, vel);
++      const float pitch = mSimState->stateInit.propPitch;
++      const float w = zeroThrustVel(pitch, rpm);
++      const float wMax = std::max(zeroThrustVel(pitch, mSimState->stateInit.propMaxRpm), 0.01f);
++      const float w2 = w * w, v2 = vel > 0.0f ? vel * vel : 0.0f;
++      if (v2 <= w2) return mSimState->stateInit.propThrustFactor.z * (w2 - v2) / (wMax * wMax);
++      const float r = 0.5f * mSimState->stateInit.propDiameter;
++      return -WINDMILL_DRAG_COEFF * 0.5f * AIR_RHO * float(M_PI) * r * r * (v2 - w2);
+     }
+     vel = std::max(0.0f, vel);
+     // max thrust vs velocity:
+@@ -335,10 +360,10 @@ float Physics::motorTorque(float volts, float rpm, float kV, float R, float I0)
+ 
+   float Physics::propTorque(float rpm, float vel) {
+     if (mSimState->stateInit.propPitch > 0.0f) {
+-      const float rpmRatio = std::max(rpm, 0.0f) / std::max(mSimState->stateInit.propMaxRpm, 0.01f);
+-      const float staticThrust = mSimState->stateInit.propThrustFactor.z * rpmRatio * rpmRatio;
+-      return staticThrust * mSimState->stateInit.propTorqueFactor *
+-             inflowTorqueFactor(mSimState->stateInit.propPitch, rpm, vel);
++      const float pitch = mSimState->stateInit.propPitch;
++      const float wMax = std::max(zeroThrustVel(pitch, mSimState->stateInit.propMaxRpm), 0.01f);
++      return mSimState->stateInit.propThrustFactor.z * mSimState->stateInit.propTorqueFactor *
++             inflowTorque(zeroThrustVel(pitch, rpm), wMax, vel);
+     }
+     return propThrust(rpm, vel) * mSimState->stateInit.propTorqueFactor;
+   }
+@@ -598,7 +623,8 @@ float Physics::motorTorque(float volts, float rpm, float kV, float R, float I0)
+       
+       // clamp speed so it has no propwash effect at 0 
+       // positive value depending on how much thrust is given against actual movement direction of quad
+-      float reverseThrust = (speed > minPropWashSpeed) ? 
++      // (a windmilling prop, negative thrust, leaves its wake behind)
++      float reverseThrust = (speed > minPropWashSpeed && motors[i].thrust > 0.0f) ? 
+         std::max(0.0f, dot(normalize(airVel), normalize(motors[i].thrust * up) * -1.0f)) : 0.0f;
+       // keep between 0.0 and 1.0, takes x % that point the most against movement direction
+       
+@@ -679,8 +705,11 @@ float Physics::motorTorque(float volts, float rpm, float kV, float R, float I0)
+       const auto domega = netTorque / std::max(mSimState->stateInit.propInertia, 0.00000001f);
+       const auto drpm = (domega * dt) * 60.0f / (2.0f * float(M_PI));
+ 
++      // the motor alone cannot drive the rotor past its no-load speed in one
++      // step; a windmilling prop (negative load torque) can, against the
++      // ESC's braking
+       const auto maxdrpm = fabsf(volts * kV - rpm);
+-      rpm += clamp(drpm, -maxdrpm, maxdrpm);
++      rpm += pTorque < 0.0f ? drpm : clamp(drpm, -maxdrpm, maxdrpm);
+ 
+       if((motors[i].status & MotorStatus::MotorBurnedOut) != 0){
+         rpm = 0.0f;
