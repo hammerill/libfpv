@@ -293,6 +293,7 @@ void testOverlayEmbedded() {
     };
     std::array<float, 4> b;
     fpv_overlay_set_display(1280, 720, 1.0f);
+    fpv_overlay_mouse_move(640, 360);  // the drawn cursor inside the window, not where a test left it
     fpv_overlay_set_embedded(1);
     fpv_overlay_set_open(1);
     CHECK(bounds(b), "embedded: renders");
