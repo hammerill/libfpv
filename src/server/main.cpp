@@ -185,6 +185,11 @@ bool dispatch(SimServer &server, LoopbackSocket &s, uint16_t op, const std::stri
         if (wire::unpack(r, diff)) server.setDefaultDiff(diff);
         return true;
     }
+    case wire::kSetUserDefaults: {
+        std::string script;
+        if (wire::unpack(r, script)) server.setUserDefaults(script);
+        return true;
+    }
     case wire::kSelectPreset: {
         DronePreset p;
         if (wire::unpack(r, p)) server.selectPreset(p);

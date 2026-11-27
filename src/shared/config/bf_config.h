@@ -64,6 +64,22 @@ struct DiffImport {
 DiffImport buildDiffImport(const std::string &diffText, bool ntsc = false);
 std::string formatImportReport(const DiffImport &imp, const std::string &cliOutput);
 
+// The new-model defaults (<data_dir>/defaults.diff.txt): the pilot's own
+// setup, applied to every new EEPROM after the preset tune and the game's
+// default diff.
+enum DefaultsCategory : unsigned {
+    kDefaultsNames = 1,   // craft_name, pilot_name
+    kDefaultsModes = 2,   // aux switches and adjustments
+    kDefaultsOsd = 4,     // osd_* (not vcd_video_system: each quad's camera sets it)
+    kDefaultsLeds = 8,    // led, color, mode_color, ledstrip_*, feature LED_STRIP
+    kDefaultsRates = 16,  // the current rate profile
+    kDefaultsAll = 31,
+};
+// The lines of a `dump` in `categories`, as a CLI script. PIDs, filters,
+// motor and mixer settings are never kept: they belong to each preset's
+// tune. `found` gets the categories that had lines.
+std::string filterDefaultsProfile(const std::string &dump, unsigned categories, unsigned *found = nullptr);
+
 // Names of Betaflight modes by box id (as used by the `aux` command).
 const char *betaflightModeName(int boxId);
 
