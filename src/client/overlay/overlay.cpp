@@ -669,6 +669,39 @@ void Overlay::tabRadio() {
         return;
     }
 
+    // The device to fly with: automatic, or one the pilot picks (remembered).
+    {
+        const std::string pref = L.input.preferredGuid();
+        const InputStatus st = L.input.status();
+        std::string label = pref.empty() ? "Automatic" : st.preferredName;
+        if (st.preferredMissing) label += " (not connected)";
+        if (ImGui::BeginCombo("Fly with", label.c_str())) {
+            if (ImGui::Selectable("Automatic", pref.empty())) L.input.setPreferred("", "");
+            for (auto &d : devs) {
+                ImGui::PushID(d.guid.c_str());
+                if (ImGui::Selectable(d.name.c_str(), d.guid == pref)) L.input.setPreferred(d.guid, d.name);
+                ImGui::PopID();
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::TextDisabled("Automatic: a set-up radio, then a gamepad, then the keyboard.");
+        if (st.preferredMissing) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 0.35f, 0.3f, 1));
+            ImGui::TextWrapped("%s is not connected. Only the keyboard flies until it is back. Every switch reads "
+                               "low, so a mode set on a switch's low position (an OSD-off switch, for example) "
+                               "turns on.",
+                               st.preferredName.c_str());
+            ImGui::PopStyleColor();
+#if defined(_WIN32)
+            ImGui::TextWrapped("Plug it in again. If it still does not show up, check that Windows lists it in "
+                               "\"Set up USB game controllers\" (joy.cpl).");
+#else
+            ImGui::TextWrapped("Plug it in again.");
+#endif
+        }
+        ImGui::Separator();
+    }
+
     if (devs.empty()) {
         ImGui::TextWrapped(
             "No radio or gamepad detected. Connect your radio with USB and choose \"USB Joystick (HID)\" on the radio "
