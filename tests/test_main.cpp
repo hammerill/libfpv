@@ -228,6 +228,14 @@ void testSharedDataDir() {
     setEnv("LIBFPV_DATA_DIR", "");
 }
 
+void testCameraFov() {
+    const float preset = fpv_camera_get_fov();
+    CHECK(preset >= 60 && preset <= 150, "preset FOV %.1f", preset);
+    CHECK(fpv_camera_set_fov(100) == FPV_OK && fpv_camera_get_fov() == 100, "set 100: %.1f", fpv_camera_get_fov());
+    CHECK(fpv_camera_set_fov(200) == FPV_ERROR_INVALID_ARGUMENT && fpv_camera_get_fov() == 100, "200 rejected");
+    CHECK(fpv_camera_set_fov(0) == FPV_OK && fpv_camera_get_fov() == preset, "0 back to the preset's");
+}
+
 void testArmDisarm() {
     Host h(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1));
     loadWorld(makeLevel(h, 100, 0));
@@ -4038,6 +4046,7 @@ int main(int argc, char **argv) {
         {"pilot_config", testPilotConfig},
         {"video_host_raycast", testVideoHostRaycast},
         {"rc_link", testRcLink},
+        {"camera_fov", testCameraFov},
         {"pinned", testPinned},
         {"terminate_reinit", testTerminateReinit},
         {"threaded", testThreadedMode},
