@@ -250,6 +250,127 @@ Actions"). The page is then at `https://<you>.github.io/<mod>/`.
   site, and link the source repository and the exact libfpv commit from the
   page.
 
+## Mod repositories: Nexus Mods, Steam Workshop, Thunderstore, mod.io
+
+A mod can also be uploaded to the game's mod repositories, so players who
+browse there find it. Keep the page short and send players to the mod's
+libfpv.com page for everything that changes (the install guide, the
+requirements, new builds), so there is still one set of instructions to
+maintain. Use the same names and wording on every repository, so libfpv
+mods read as one family.
+
+**Title.** `FPV Drone via libfpv`. When the repository needs the game's
+name in the title (a site that lists mods of all games together, or a
+moderator who asks for it), use `FPV Drone via libfpv for <game>` with the
+game's full name: `FPV Drone via libfpv for Red Dead Redemption 2`. Leave
+out "via libfpv" only when the user asks for it, for example when the game
+is new and this is its first FPV mod: `FPV Drone for GTA 6`. Where the name
+can only have letters, digits and underscores (Thunderstore), use
+`FPV_Drone_via_libfpv`; the site shows the underscores as spaces. Inside
+the game the mod is still `libfpv` (INTEGRATION.md, "Label the mod
+`libfpv` inside the game") and F8 > About still says `libfpv for <game>`.
+
+**Summary** (the one-line description lists show; keep it under 250
+characters, the limit of Thunderstore and mod.io). Start with libfpv.com's
+headline, then name the game and what the player can do:
+
+> Real Betaflight firmware flying across the games you know well. libfpv
+> puts an FPV drone into Red Dead Redemption 2: fly it with your own radio,
+> gamepad or keyboard, and tune it in Betaflight Configurator like a real
+> quad.
+
+List only the ways of flying the mod supports.
+
+**Description** (the page body), in this order:
+
+1. The summary.
+2. The game's blurb from its libfpv.com page ("Arthur puts a quad down on
+   the ground in front of him. Chase wagons across the plains...").
+3. A short feature list: libfpv's features first (real Betaflight
+   firmware, your own radio, a gamepad or the keyboard, Betaflight
+   Configurator at `ws://localhost:5761`, the OSD, rates, presets and
+   cameras in the F8 overlay), then one or two of the game's own (what the
+   mod hooks: traffic, people, water, police).
+4. One line to the mod's page: "Install guide, requirements and updates:
+   https://libfpv.com/games/<id>". Don't copy the install steps, the
+   folder tree or the controls table into the repository; they go stale.
+5. Credits and licences: Betaflight and SimITL, libfpv (GPL-3.0-or-later,
+   its client library also MIT), the mod's own licence and the
+   game-side libraries it uses, and a link to the source ("Licensing"
+   below).
+
+**Media.** First the user's own footage of the drone flying in the game:
+several screenshots, or a single video (a GIF counts too). Ask the user
+for it; don't make it from something else or generate it. Last, the
+libfpv logo, `docs/img/libfpv-logo.png` in this repository
+(https://raw.githubusercontent.com/hammerill/libfpv/main/docs/img/libfpv-logo.png).
+Where the repository picks a thumbnail from the first image, that keeps
+the game in it.
+
+**Category and tags.** The repository's own category for gameplay or
+vehicles (whichever fits a drone you fly), and the tags `FPV`, `drone`,
+`quadcopter`, `Betaflight` and `libfpv`, as far as the site allows. Add any
+tag the site requires (game version, single player).
+
+**Version and files.** The version is the release's build number (`Build
+42`, or `42` where only numbers are allowed). Upload the same ZIP as the
+mod's release, under the same name, and describe the file as "Build 42,
+2026-11-27". Upload each new build there as well, or don't upload files at
+all and send players to the mod's page instead: an old file left on the
+repository becomes the build players get.
+
+**Requirements and links.** Put each prerequisite (an ASI loader, a script
+hook, a recompilation) in the repository's requirements field, with a
+link, so its tools warn players who miss one. Put the mod's libfpv.com
+page in the links or homepage field. Bug reports go wherever that page
+says, with the log and F8 > About > "Copy build info" attached.
+
+**Author.** The user's own account uploads the mod and is its author; the
+credits name libfpv and Betaflight. Where a repository asks about
+AI-generated content (art, sound, code), answer it truthfully.
+
+### "Prepare for publishing on mod repos"
+
+When the user asks for this (or anything like it: "get the Nexus page
+ready", "what do I put on Thunderstore"), don't upload anything and don't
+log in anywhere. Gather everything the user will paste into the upload
+forms, so filling them in is copy and paste:
+
+1. **Collect the facts from the integration**, not from memory: the
+   game's full name, the libfpv.com page (test it as INTEGRATION.md "The
+   About tab" says, and if it fails ask the user at the end), the latest
+   release's build number, date and ZIP name, the prerequisites from
+   `docs/INSTALL.md`, the ways of flying and the game's own hooks from the
+   README and the code, the licences from "Licensing", and the game's
+   blurb from its libfpv.com page.
+2. **Fill in every field** from the conventions above, adapted to the
+   game, and check each against the limits you know (250 characters for
+   the summary on Thunderstore and mod.io, letters, digits and underscores
+   for a Thunderstore name). Say which limits you could not confirm.
+3. **Put the media in a new temporary folder** (the agent's scratchpad,
+   or `mktemp -d`), numbered in upload order: the user's screenshots or
+   video first (`01-flying.png`, `02-...`), the libfpv logo last
+   (`09-libfpv-logo.png`, copied from `docs/img/libfpv-logo.png`). Copy
+   the files; don't move, resize or convert the user's originals. If the
+   user hasn't given any footage, do everything else and ask for it at the
+   end; don't make or generate any.
+4. **Reply with:**
+   - a table of the one-line fields, one row per field (title, title with
+     the game's name, Thunderstore name, summary and its length, version,
+     file name, file description, category, tags, requirements, links,
+     author), with a column per repository where they differ;
+   - the description in its own code blocks, because a table can't hold
+     it: one in BBCode (Nexus Mods, Steam Workshop) and one in Markdown
+     (mod.io, Thunderstore's README);
+   - the media folder's full absolute path, and its Windows path too when
+     the agent runs in WSL (`wslpath -w <folder>`), with the files in
+     upload order;
+   - what is still missing (footage, an unconfirmed URL or limit), asked
+     as questions at the end.
+
+Write nothing of this into the repository: the values change with every
+build, and the next request gathers them again.
+
 ## Licensing
 
 libfpv is GPL-3.0-or-later because it embeds Betaflight. Shipping

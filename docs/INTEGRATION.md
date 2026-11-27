@@ -3,7 +3,9 @@
 The full hook sequence is shown in `examples/standalone/main.cpp` (the
 comment at the top lists every call in order). This file holds the details
 that need more than a comment. For a game compiled to run in a web browser,
-read [WEB.md](WEB.md) as well.
+read [WEB.md](WEB.md) as well. To release the mod or get it onto mod
+repositories ("prepare for publishing on mod repos"), follow
+[PUBLISHING.md](PUBLISHING.md).
 
 ## Lens distortion
 
@@ -1095,11 +1097,20 @@ fields of `fpv_global_config`. **Fill in all three**: a report that names
 libfpv's commit but not the mod's can't be reproduced.
 
 ```c
-cfg.host_name  = "GTA IV FPV";                       /* the mod, as players know it */
-cfg.host_build = "1.4.0 (3f2a9c1e7b0d, dirty)";      /* version + full or short commit */
-cfg.host_url   = "https://github.com/you/gta4-fpv";  /* where players get it, report bugs */
+cfg.host_name  = "libfpv for Grand Theft Auto IV";  /* the mod, as players know it */
+cfg.host_build = "1.4.0 (3f2a9c1e7b0d, dirty)";     /* version + full or short commit */
+cfg.host_url   = "https://libfpv.com/games/gtaiv";  /* where players get it, report bugs */
 ```
 
+- `host_name` follows "Label the mod `libfpv` inside the game" below:
+  `libfpv for <the game's full name>`.
+- Don't make `host_url` up from the mod's name or a guessed repository: a
+  public repository for the mod may not exist. Fetch the URL you mean to
+  use (`curl -sSL -o /dev/null -w '%{http_code}' <url>`) and use it only
+  if it loads (HTTP 200, and the page is the mod's). If it gives a 404 or
+  any other error, leave `host_url` empty, carry on with the rest of the
+  work, and when everything else is done ask the user which URL to use.
+  An unknown URL never blocks anything else.
 - `host_build` is free text, so put everything that tells your build
   apart: the mod's version, its commit (`git rev-parse HEAD` at build time,
   not at configure time, so a new commit shows without re-running the
@@ -1130,9 +1141,9 @@ script mod). It covers every identifier the game or the player sees:
 
 Follow the game's own naming style (`libfpv_main`, `libfpvCam`,
 `Libfpv_VideoFeedPFX`, `LIBFPV_`), but keep the word `libfpv`. The name
-players read (`cfg.host_name`, the mod page's title) can still say which
-game it is for ("BeamNG FPV"), and your account, publisher or team
-namespace, repository URLs and credits stay yours. libfpv's own files
+players read (`cfg.host_name`, the mod page's title) is `libfpv for` and
+the game's full name ("libfpv for BeamNG.drive"), and your account,
+publisher or team namespace, repository URLs and credits stay yours. libfpv's own files
 (`libfpv.dll`, `libfpv-server.exe`, `libfpv-fonts/`, `libfpv-presets/`)
 keep their names, so don't give the mod's own files the same names in
 the same folder.
