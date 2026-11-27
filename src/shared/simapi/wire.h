@@ -57,6 +57,7 @@ enum Op : uint16_t {
     kReset,
     kRepair,
     kDamageProps,
+    kReplaceProps,
     kSetPilotPosition,
     kPush,
     kSetCargo,

@@ -291,6 +291,13 @@ void Flight::repair() {
 #endif
 }
 
+void Flight::replaceProps() {
+#if defined(LIBFPV_KAMIKAZE)
+    if (m_warhead.detonated()) return;  // the drone is gone, not its props
+#endif
+    for (float &d : m_propDamage) d = 0;
+}
+
 void Flight::damageProps(int motor, float amount) {
     if (!canDamage() || !m_active || !(amount > 0)) return;
     for (int i = 0; i < 4; i++)

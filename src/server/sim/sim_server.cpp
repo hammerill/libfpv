@@ -410,6 +410,10 @@ void SimServer::repair() {
     m_runner.call([&] { m_flight.repair(); });
 }
 
+void SimServer::replaceProps() {
+    m_runner.call([&] { m_flight.replaceProps(); });
+}
+
 void SimServer::damageProps(int motor, float amount) {
     m_runner.call([&] { m_flight.damageProps(motor, amount); });
 }

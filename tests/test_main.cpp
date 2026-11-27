@@ -1127,6 +1127,36 @@ void testAxes(fpv_coords_preset_id preset, float upm, const char *name) {
     CHECK(std::fabs(r[0] * u[0] + r[1] * u[1] + r[2] * u[2]) < 1e-3f, "%s: camera axes orthogonal", name);
 }
 
+// Bent propellers (here from fpv_drone_damage_props, as from a crash) are
+// new after fpv_drone_replace_props; the battery keeps its charge.
+void testReplaceProps() {
+    Host h(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1));
+    loadWorld(makeLevel(h, 300, 0));
+    Session s;
+    float p[3];
+    h.pos(0, 3, 0, p);
+    s.spawn(p);
+    s.arm();
+    s.rc.ch[5] = 1;  // ANGLE
+    s.rc.ch[2] = 0.0f;
+    s.run(2.0f);  // fly a little: the pack is no longer full
+    auto damage = [&] {
+        float d = 0;
+        for (const fpv_motor_state &m : s.f.motors) d = std::max(d, m.prop_damage);
+        return d;
+    };
+    CHECK(fpv_drone_damage_props(s.drone, -1, 0.5f) == FPV_OK, "damage props: %s", fpv_last_error());
+    s.run(0.1f);
+    const float bent = damage(), mah = s.f.battery.mah_drawn;
+    CHECK(bent > 0, "the props are bent (%.2f)", bent);
+    CHECK(mah > 0, "the battery was used (%.0f mAh)", mah);
+    CHECK(fpv_drone_replace_props(s.drone) == FPV_OK, "replace props: %s", fpv_last_error());
+    s.run(0.1f);
+    CHECK(damage() == 0, "new props (%.2f)", damage());
+    CHECK(s.f.battery.mah_drawn >= mah, "battery kept: %.0f mAh drawn, %.0f before", s.f.battery.mah_drawn, mah);
+    s.destroy();
+}
+
 void testWallCrash() {
     Host h(fpv_coords_preset(FPV_COORDS_Y_UP_RIGHT_HANDED, 1));
     loadWorld(makeLevel(h, 300, 40));
@@ -4222,6 +4252,7 @@ int main(int argc, char **argv) {
         {"pilot_config", testPilotConfig},
         {"video_host_raycast", testVideoHostRaycast},
         {"rc_link", testRcLink},
+        {"replace_props", testReplaceProps},
         {"camera_fov", testCameraFov},
         {"chase_camera", testChaseCamera},
         {"overlay_embedded", testOverlayEmbedded},

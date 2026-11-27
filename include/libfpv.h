@@ -411,6 +411,9 @@ FPV_API fpv_result fpv_drone_damage_props(fpv_drone *drone, int32_t motor_index,
  * when the drone is heard from the pilot), host coords of the feet. For a
  * game whose character walks while the drone flies (FPV_VIEW_PILOT). */
 FPV_API fpv_result fpv_drone_set_pilot_position(fpv_drone *drone, const float position[3]);
+/* New propellers only, as after a crash in the field: the battery and the
+ * motors stay as they are. */
+FPV_API fpv_result fpv_drone_replace_props(fpv_drone *drone);
 /* Switches the physical preset (frame, motors, props, battery, camera). */
 FPV_API fpv_result fpv_drone_set_preset(fpv_drone *drone, const char *preset);
 

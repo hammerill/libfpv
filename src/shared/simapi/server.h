@@ -99,6 +99,7 @@ public:
     // Puts the drone back at pos and starts a new flight (the OSD timer).
     virtual void reset(Vec3 pos, Quat rot) = 0;
     virtual void repair() = 0;
+    virtual void replaceProps() = 0;  // new propellers only: the battery stays
     virtual void damageProps(int motor, float amount) = 0;
     virtual void setPilotPosition(Vec3 pos) = 0;
     virtual void push(Vec3 velocity, bool replace) = 0;

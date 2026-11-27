@@ -228,6 +228,9 @@ bool dispatch(SimServer &server, LoopbackSocket &s, uint16_t op, const std::stri
     case wire::kRepair:
         server.repair();
         return true;
+    case wire::kReplaceProps:
+        server.replaceProps();
+        return true;
     case wire::kDamageProps: {
         int motor = 0;
         float amount = 0;

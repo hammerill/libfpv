@@ -49,6 +49,7 @@ public:
     // The drone's cargo (simulation thread): mass and inertia at once, also in flight.
     void setCargo(const Cargo &cargo);
     void repair();
+    void replaceProps();  // new propellers only
     // Adds `amount` (0..1) to a prop's damage, motor -1 = all, and to the
     // video transmitter's (all of it for motor -1, a quarter for one prop).
     // Simulation thread; nothing with damage off.

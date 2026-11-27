@@ -955,6 +955,12 @@ FPV_API fpv_result fpv_drone_repair(fpv_drone *d) {
     return FPV_OK;
 }
 
+FPV_API fpv_result fpv_drone_replace_props(fpv_drone *d) {
+    REQUIRE_DRONE(d);
+    L.server->replaceProps();
+    return FPV_OK;
+}
+
 FPV_API fpv_result fpv_drone_damage_props(fpv_drone *d, int32_t motor, float amount) {
     REQUIRE_DRONE(d);
     if (motor < -1 || motor > 3 || !std::isfinite(amount))

@@ -42,6 +42,7 @@ public:
     void despawn() override;
     void reset(Vec3 pos, Quat rot) override;
     void repair() override;
+    void replaceProps() override;
     void damageProps(int motor, float amount) override;
     void setPilotPosition(Vec3 pos) override;
     void push(Vec3 velocity, bool replace) override;
