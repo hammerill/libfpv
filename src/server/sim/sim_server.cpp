@@ -234,6 +234,7 @@ void SimServer::warmUpBetaflight() {
         steps++;
     }
     FPV_LOGD("Betaflight warm-up: %.2f s simulated in %.0f ms", steps * dt, (wallSeconds() - t0) * 1000.0);
+    bfb_osd_restart();  // the warm-up used up the boot logo's seconds: show it again
 }
 
 // --- lifecycle ---------------------------------------------------------------------
@@ -392,6 +393,7 @@ void SimServer::spawn(const DronePreset &preset, Vec3 pos, Quat rot, Vec3 pilot)
         m_flight.setCargo({});  // a new drone carries nothing
         m_flight.spawn(preset, {0, 0, 0}, rot, pilot);
         m_flight.teleport(pos + rotate(rot, Vec3{0, m_flight.restHeight() + 0.002f, 0}), rot);
+        bfb_osd_restart();  // a new drone powers up: the boot logo
     });
 }
 

@@ -317,6 +317,11 @@ void bfb_osd_set_aim_dot(int on)
     osdHostAimDot = on != 0;
 }
 
+void bfb_osd_restart(void)
+{
+    osdRestartStateMachine();
+}
+
 int bfb_osd_disabled(void)
 {
     return IS_RC_MODE_ACTIVE(BOXOSD) ? 1 : 0;

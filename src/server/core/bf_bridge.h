@@ -77,6 +77,8 @@ void bfb_osd_set_host_message(int index, const char *text);
 /* Aim mode: the crosshairs and the artificial horizon elements are not
  * drawn; libfpv draws its own aiming dot over the OSD. */
 void bfb_osd_set_aim_dot(int on);
+/* Shows the boot logo again for its few seconds, as after a power-up. */
+void bfb_osd_restart(void);
 /* Calibration, RX recovery or boot grace still pending. */
 int bfb_settling(void);
 
