@@ -245,6 +245,7 @@ public:
     void despawn() override { post(wire::kDespawn); }
     void reset(Vec3 pos, Quat rot) override { post(wire::kReset, pos, rot); }
     void repair() override { post(wire::kRepair); }
+    void replaceProps() override { post(wire::kReplaceProps); }
     void damageProps(int motor, float amount) override { post(wire::kDamageProps, motor, amount); }
     void setPilotPosition(Vec3 pos) override { post(wire::kSetPilotPosition, pos); }
     void push(Vec3 velocity, bool replace) override { post(wire::kPush, velocity, replace); }
