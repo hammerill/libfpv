@@ -1,0 +1,34 @@
+diff --git a/src/main/osd/osd.c b/src/main/osd/osd.c
+--- a/src/main/osd/osd.c
++++ b/src/main/osd/osd.c
+@@ -535,8 +535,6 @@ static void osdCompleteInitialization(void)
+     osdIsReady = true;
+ }
+ 
+-static void osdRestartStateMachine(void);
+-
+ void osdInit(displayPort_t *osdDisplayPortToUse, osdDisplayPortDevice_e displayPortDeviceType)
+ {
+     osdDisplayPortDeviceType = displayPortDeviceType;
+@@ -1369,7 +1367,7 @@ typedef enum {
+ 
+ osdState_e osdState = OSD_STATE_INIT;
+ 
+-static void osdRestartStateMachine(void)
++void osdRestartStateMachine(void)
+ {
+     osdState = OSD_STATE_INIT;
+     // a real reboot drops the post-flight stats screen too; here it stayed
+diff --git a/src/main/osd/osd.h b/src/main/osd/osd.h
+--- a/src/main/osd/osd.h
++++ b/src/main/osd/osd.h
+@@ -405,6 +405,9 @@ extern uint16_t osdAuxValue;
+ 
+ void osdInit(displayPort_t *osdDisplayPort, osdDisplayPortDevice_e displayPortDevice);
+ bool osdUpdateCheck(timeUs_t currentTimeUs, timeDelta_t currentDeltaTimeUs);
++// back to the boot logo, as after a power-up (the host calls it after an
++// in-process reboot that it ran forward in time, for example a warm-up)
++void osdRestartStateMachine(void);
+ void osdUpdate(timeUs_t currentTimeUs);
+ 
+ void osdStatSetState(uint8_t statIndex, bool enabled);
